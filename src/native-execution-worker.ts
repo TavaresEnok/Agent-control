@@ -1,4 +1,5 @@
 import {runWithTransientRetry} from './provider-failure.ts';
+import {personalEgressEnabled} from './personal-egress.ts';
 import {runModuleExamWorker} from './module-exam-worker.ts';
 import {constants} from 'node:fs';
 import {waitForNativeLaunch} from './native-worker-gate.ts';
@@ -74,8 +75,8 @@ export function createClaudeWorkerRunner(claudeBin:string,timeoutMs:number):Clau
  * This file alone does not authorize, schedule, approve or integrate anything. */
 async function main(){
  const verifyExam=process.env.AC_VERIFY_EXAM==='1';
- // Read before the environment is reset: the supervisor sets it only when the gateway runs with AC_PERSONAL_EGRESS=1.
- const personalEgress=process.env.AC_PERSONAL_EGRESS==='1';
+ // Read the supervisor's decision before resetting the worker environment.
+ const personalEgress=personalEgressEnabled();
  if(process.argv.length!==2)throw Error('INVALID_WORKER_ARGUMENTS');
  initializeNativeWorkerEnvironment();
  await waitForNativeLaunch();

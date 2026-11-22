@@ -126,7 +126,7 @@ export type PersonalExamRecoveryScope={projectId:string;repository:string;explic
 export type ModuleExamRecoveryScope={projectId:string;repository:string};
 export type NativeExecutionSupervisorConfig={id:string;workerImage:string;toolsImage:string;hostRoot:string;accountRoot:string;repository?:string;
  protectedRepositories:readonly string[];signingKeyPem:string;providerNetworkId:string;provider?:'codex'|'claude'|'grok';socketPath?:string;resourceEnvelope?:NativeResourceEnvelope;accountSubjects:readonly {accountId:string;subjectDigest:string}[];
- workerEnv:readonly string[];toolsEnv:readonly string[];syntheticFixture?:NativeSyntheticFixture;dataDirectory?:string;
+ workerEnv:readonly string[];toolsEnv:readonly string[];syntheticFixture?:NativeSyntheticFixture;dataDirectory?:string;personalEgress?:boolean;
  /** Writable-account renewal used before a Claude exam copy. Tests inject this and never spawn a real CLI. */
  examLoginRenew?:(accountDir:string)=>Promise<void>;
  /** false: kept only to reconcile and retire jobs started under a replaced image pair; it never launches. */

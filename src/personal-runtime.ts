@@ -1,4 +1,5 @@
 import {refreshPersonalTemplates} from './personal-policies.ts';
+import {personalEgressEnabled} from './personal-egress.ts';
 import {nativePlanningExecutorDigest} from './native-planning-contract.ts';
 import {appendFileSync,readFileSync} from 'node:fs';
 import {execFile,execFileSync} from 'node:child_process';
@@ -127,13 +128,14 @@ export async function composePersonalExecutionSupervisors(
  const subjects=(provider:string)=>boot.accounts.filter(account=>rows.some(row=>row.id===account.accountId&&row.provider===provider)).map(account=>({accountId:account.accountId,subjectDigest:account.subjectDigest}));
  const protectedRepositories=[config.project.repo,...config.projects.map(project=>project.repo)];
  const disabledMeasurementProjects=[config.project,...config.projects].filter(project=>project.economy?.measurement===false).map(project=>project.id);
+ const personalEgress=personalEgressEnabled(config);
  const executions:NativeExecutionSupervisor[]=[];
  for(const provider of ['codex','claude','grok'] as const){
   const accountSubjects=subjects(provider);
   if(!accountSubjects.length)continue;
   executions.push(new NativeExecutionSupervisor(ledger,{id:boot.execution.id+'-'+provider,workerImage:boot.execution.workerImage,toolsImage:boot.execution.toolsImage,
    hostRoot:boot.execution.hostRoot,accountRoot:boot.execution.accountRoot,protectedRepositories,signingKeyPem:executionPem,dataDirectory:config.dataDirectory,
-   providerNetworkId:boot.execution.providerNetworkId,provider,workerEnv:boot.execution.workerEnv,toolsEnv:boot.execution.toolsEnv,accountSubjects,disabledMeasurementProjects}));
+   providerNetworkId:boot.execution.providerNetworkId,provider,workerEnv:boot.execution.workerEnv,toolsEnv:boot.execution.toolsEnv,accountSubjects,disabledMeasurementProjects,personalEgress}));
   for(const pair of (boot.execution.retiredImages??[]).filter(x=>x.workerImage!==boot.execution.workerImage||x.toolsImage!==boot.execution.toolsImage))
    executions.push(new NativeExecutionSupervisor(ledger,{id:boot.execution.id+'-'+provider,workerImage:pair.workerImage,toolsImage:pair.toolsImage,active:false,
     hostRoot:boot.execution.hostRoot,accountRoot:boot.execution.accountRoot,protectedRepositories,signingKeyPem:executionPem,
@@ -163,11 +165,12 @@ export async function composePersonalRuntime(config:Installation,ledger:Ledger){
  const subjects=(provider:string)=>boot.accounts.filter(account=>rows.some(row=>row.id===account.accountId&&row.provider===provider)).map(account=>({accountId:account.accountId,subjectDigest:account.subjectDigest}));
  const protectedRepositories=[config.project.repo,...config.projects.map(project=>project.repo)];
  const planning:NativePlanningSupervisor[]=[];
+ const personalEgress=personalEgressEnabled(config);
  for(const provider of ['codex','claude','grok'] as const){
   const accountSubjects=subjects(provider);
   if(!accountSubjects.length)continue;
   planning.push(new NativePlanningSupervisor(ledger,{id:boot.planning.id+'-'+provider,executorDigest:boot.planning.executorDigest,imageId:boot.planning.imageId,
-   hostRoot:boot.planning.hostRoot,accountRoot:boot.planning.accountRoot,protectedRepositories,signingKeyPem:planningPem,providerNetwork:'ac-native-provider',provider,accountSubjects}));
+   hostRoot:boot.planning.hostRoot,accountRoot:boot.planning.accountRoot,protectedRepositories,signingKeyPem:planningPem,providerNetwork:'ac-native-provider',provider,accountSubjects,personalEgress}));
   // A rebuilt image changes the executor identity; a call left uncertain under the old one is reconciled only by it.
   for(const imageId of (boot.planning.retiredImageIds??[]).filter(id=>id!==boot.planning.imageId))
    planning.push(new NativePlanningSupervisor(ledger,{id:boot.planning.id+'-'+provider,executorDigest:nativePlanningExecutorDigest(imageId),imageId,active:false,
@@ -176,7 +179,7 @@ export async function composePersonalRuntime(config:Installation,ledger:Ledger){
  const executions=await composePersonalExecutionSupervisors(config,ledger,rows);
  if(!planning.length||!executions.length)throw new Error('PERSONAL_RUNTIME_ACCOUNT_REQUIRED');
  const semantic=new SemanticPlanning(ledger,planning.map(supervisor=>supervisor.executor));
- const managerChat=new PersonalManagerChat(ledger,{imageId:boot.planning.imageId,accountRoot:boot.planning.accountRoot});
+ const managerChat=new PersonalManagerChat(ledger,{imageId:boot.planning.imageId,accountRoot:boot.planning.accountRoot,personalEgress});
  const byProject=new Map<string,PersonalProjectRuntime>();
  // One shared supervisor pair. Git, QA, implementation and verification stay on each checkout.
  const bind=async(repo:string,projectId:string,owner:string,primary:boolean)=>{

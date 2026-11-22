@@ -26,6 +26,7 @@ import {EXAM_LOGIN_MARGIN_MS} from '../src/exam-login.ts';
 import {runDesignModule} from '../src/design-module.ts';
 import {runDesignCreate} from '../src/design-create.ts';
 import {runSecurityVerification} from '../src/verify-runtime.ts';
+import {personalEgressEnabled} from '../src/personal-egress.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
 type Row = Record<string, unknown>;
@@ -1317,7 +1318,13 @@ rl.once('line', line => {
   }
 });
 
-test('validador e design (examinador, revisor e criar) usam o mesmo mecanismo sem montar .credentials.json', async () => {
+test('validador e design usam o mesmo mecanismo sem montar .credentials.json e recebem o egress da instalação', async t => {
+  const previousEgress = process.env.AC_PERSONAL_EGRESS;
+  delete process.env.AC_PERSONAL_EGRESS;
+  t.after(() => {
+    if (previousEgress === undefined) delete process.env.AC_PERSONAL_EGRESS;
+    else process.env.AC_PERSONAL_EGRESS = previousEgress;
+  });
   const {ledger, memory} = substituteLedger();
   const area = await realpath(await mkdtemp(join(tmpdir(), 'ac-exam-all-paths-')));
   const repo = join(area, 'repo');
@@ -1366,6 +1373,7 @@ test('validador e design (examinador, revisor e criar) usam o mesmo mecanismo se
       signingKeyPem: keys.privateKey.export({format: 'pem', type: 'pkcs8'}).toString(),
       providerNetworkId: 'd'.repeat(64),
       provider: 'claude',
+      personalEgress: personalEgressEnabled({egress: {mode: 'enforce'}}),
       socketPath: '/tmp/ac-no-host-socket.sock',
       accountSubjects: [{accountId: account, subjectDigest: 'a'.repeat(64)}],
       workerEnv: [],
@@ -1433,6 +1441,7 @@ test('validador e design (examinador, revisor e criar) usam o mesmo mecanismo se
       await assert.rejects(() => supervisor.start(principal, authority, req), /STOP_AFTER_CREATE/);
       const w = created.find(c => c.name === `ac-native-worker-${jobId}`);
       assert.ok(w, item.label);
+      assert.ok(w.env.includes('AC_PERSONAL_EGRESS=1'), item.label);
       assert.equal(w.env.includes('AC_VERIFY_EXAM=1'), item.exam, item.label);
       assert.equal(w.binds.some(b => b.includes(':/account')), !item.exam, item.label);
     }

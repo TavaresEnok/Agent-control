@@ -1,9 +1,37 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {EGRESS_CONTAINER, EgressConfig, ensurePersonalEgress, PERSONAL_EGRESS_HOSTS, PROVIDER_NETWORK} from '../src/personal-egress.ts';
+import {EGRESS_CONTAINER, EgressConfig, ensurePersonalEgress, personalEgressEnabled, PERSONAL_EGRESS_HOSTS, PROVIDER_NETWORK} from '../src/personal-egress.ts';
 import {InstallationObject} from '../src/installation.ts';
 
 const root = new URL('..', import.meta.url).pathname;
+
+test('personal egress defaults to the installation mode and honors explicit overrides', t => {
+  const warning = t.mock.method(process, 'emitWarning', () => {});
+  const previous = process.env.AC_PERSONAL_EGRESS;
+  t.after(() => {
+    if (previous === undefined) delete process.env.AC_PERSONAL_EGRESS;
+    else process.env.AC_PERSONAL_EGRESS = previous;
+  });
+
+  const cases: {mode?: EgressConfig['mode']; override?: string; enabled: boolean}[] = [
+    {mode: 'enforce', enabled: true},
+    {mode: 'observe', enabled: true},
+    {mode: 'off', enabled: false},
+    {enabled: false},
+    {mode: 'enforce', override: '0', enabled: false},
+    {mode: 'observe', override: '0', enabled: false},
+    {override: '1', enabled: true},
+    {mode: 'off', override: '1', enabled: true},
+  ];
+  for (const {mode, override, enabled} of cases) {
+    if (override === undefined) delete process.env.AC_PERSONAL_EGRESS;
+    else process.env.AC_PERSONAL_EGRESS = override;
+    assert.equal(personalEgressEnabled(mode === undefined ? {} : {egress: {mode}}), enabled, JSON.stringify({mode, override}));
+  }
+  assert.equal(warning.mock.callCount(), 1);
+  assert.match(String(warning.mock.calls[0]?.arguments[0]), /AC_PERSONAL_EGRESS=0/);
+});
+
 function fakeDocker(state: {internal: boolean | null; attached: string[]; label?: string}) {
   const calls: string[][] = [];
   const run = (command: string, args: string[]) => {

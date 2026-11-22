@@ -264,6 +264,8 @@ O projeto do arquivo de instalação já entra no ledger. Um projeto novo nasce 
 
 A verificação é só leitura: não altera o repositório e não abre caminho de escrita. O Cezar não despacha esse pedido. A conversa não inicia o exame. Quem pede é o dono da instalação, pelo comando ou pelo botão do painel.
 
+A CLI usa o proxy de saída quando a instalação tem `egress.mode` em `observe` ou `enforce`, salvo com `AC_PERSONAL_EGRESS=0`.
+
 ```bash
 npm run personal:verify -- <instalação.json> <projectId>
 npm run personal:verify -- <instalação.json> <projectId> --url http://127.0.0.1:8080

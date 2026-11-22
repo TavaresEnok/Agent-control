@@ -142,6 +142,21 @@ test('watch reads the four native images and ignores a locked installation',asyn
  }finally{await rm(env.root,{recursive:true,force:true});}
 });
 
+test('the watch relays the gateway warning when personal egress is disabled',async()=>{
+ const env=await fixture();
+ const sent:string[]=[];
+ let log='';
+ const run=()=>runPersonalWatch([env.file],{...quiet,probe:async()=>true,recentLog:async()=>log,
+  notify:async(_dir,body)=>{sent.push(body);}});
+ try{
+  assert.equal(await run(),'watch gateway=up failures=0 images=ok');
+  log='(node:123) [PERSONAL_EGRESS_DISABLED] Warning: Proxy de saída pessoal desativado por AC_PERSONAL_EGRESS=0.';
+  assert.equal(await run(),'watch gateway=up failures=0 images=ok notice=egress');
+  assert.equal(await run(),'watch gateway=up failures=0 images=ok');
+  assert.deepEqual(sent,['Proxy de saída pessoal desativado por AC_PERSONAL_EGRESS=0.']);
+ }finally{await rm(env.root,{recursive:true,force:true});}
+});
+
 test('repeated errors, a full disk and an expiring login notify at their own pace',async()=>{
  const env=await fixture();
  const sent:string[]=[];

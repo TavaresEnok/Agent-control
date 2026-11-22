@@ -1,4 +1,5 @@
 import {assertDiskSpaceForLaunch} from './personal-disk.ts';
+import {personalEgressEnabled} from './personal-egress.ts';
 import {assertModelAllowed} from './model-policy.ts';
 import {pinNativeProtocolForNewAttempt} from './native-protocol-compatibility.ts';
 import {proveUncreatedNativeResources,cancelPreparedNativeResources,reconcileNativeResourceAdmissions,admitNativeResources,nativeDockerDaemon,type NativeResourceEnvelope} from './native-resource-envelope.ts';
@@ -24,7 +25,7 @@ const Result=z.object({schemaVersion:z.literal(1),callId:z.uuid(),output:z.strin
  usageWindows:usageWindowsObservationSchema.nullable(),nativeSessionId:z.string().nullable(),failureCode:z.string().nullable(),exitCode:z.number().int()}).strict();
 export type NativeRecovery={state:'uncertain'|'released_unstarted'|'acknowledged';interval:'docker_response_lost'|'before_terminal_evidence'|'network_or_container_remains'|'supervisor_identity'|'proven_not_started'|'terminal_evidence_missing'|'ack_lost';grant:'preserved'|'released';removed:string[];replayed:false;receipt?:unknown};
 function dockerUncertain(error:unknown){return error instanceof Refusal&&error.code.startsWith('DOCKER_')&&error.code!=='DOCKER_CREATE_REFUSED';}
-export type NativePlanningSupervisorConfig={id:string;executorDigest:string;imageId:string;hostRoot:string;accountRoot:string;
+export type NativePlanningSupervisorConfig={id:string;executorDigest:string;imageId:string;hostRoot:string;accountRoot:string;personalEgress?:boolean;
  protectedRepositories:readonly string[];signingKeyPem:string;socketPath?:string;resourceEnvelope?:NativeResourceEnvelope;providerNetwork:string;accountSubjects:readonly {accountId:string;subjectDigest:string}[];provider?:'codex'|'claude'|'grok';syntheticFixture?:NativeSyntheticFixture;
  /** false: registered only to reconcile calls it left uncertain (a replaced image); never launches new work. */
  active?:boolean};
@@ -86,8 +87,9 @@ export class NativePlanningSupervisor{
   if(!manager)throw new Refusal('PLANNING_CALL_FENCED');authority.instanceId=manager.instance_id;
   await new AccountHomes(this.ledger,this.config.accountRoot,this.config.protectedRepositories).inspectGranted(identity.principal,input.grantId,authority);
   await this.privateDirectory(this.config.hostRoot);const paths=this.paths(input.callId);
+  const useProxy=!personal||(this.config.personalEgress??personalEgressEnabled());
   const launch={schemaVersion:1,callId:input.callId,contextId:input.contextId,intentId:input.intentId,grantId:input.grantId,accountId:input.profile.accountId,profileId:input.profile.id,sessionId:input.sessionId,
-   epoch:input.executionEpoch,...(await this.ledger.pool.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'")).rowCount&&process.env.AC_PERSONAL_EGRESS!=='1'?{}:{proxyUrl:'http://provider-egress:8080' as const},providerSubjectDigest:identity.subjectDigest,executorDigest:this.config.executorDigest,inputDigest:input.inputDigest,
+   epoch:input.executionEpoch,...(useProxy?{proxyUrl:'http://provider-egress:8080' as const}:{}),providerSubjectDigest:identity.subjectDigest,executorDigest:this.config.executorDigest,inputDigest:input.inputDigest,
    model:input.profile.model,effort:input.profile.effort,sourceMessageRef:input.sourceMessageRef,text:input.text,constraints:{contextId:input.contextId,...input.constraints},outputSchema:input.outputSchema,expiresAt:Date.now()+60000,...(personal&&!this.config.syntheticFixture?{provider}:provider!=='codex'?{provider}:{})};
   const signed={payload:launch,signature:sign(null,Buffer.from('agent-control:native-planning-launch:v1\n'+canonical(launch)),this.key).toString('hex')};
   const name='ac-native-plan-'+input.callId,launchDigest=digest(launch);

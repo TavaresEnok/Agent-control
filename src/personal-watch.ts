@@ -1,4 +1,5 @@
 import {DISK_BLOCK_PERCENT,diskUsedPercent,installationVolumes} from './personal-disk.ts';
+import {PERSONAL_EGRESS_DISABLED,PERSONAL_EGRESS_DISABLED_MESSAGE} from './personal-egress.ts';
 import {runPersonalMaintenance} from './personal-maintenance.ts';
 import {spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
@@ -222,7 +223,12 @@ export async function runPersonalWatch(argv:string[],deps:PersonalWatchDeps={}){
  }
  // Repeated errors, a full disk and logins about to expire. Each notice repeats at most at its own pace.
  const health:HealthNotice[]=[];
- try{health.push(...repeatedErrorNotices(await (deps.recentLog??defaultRecentLog)(`agent-control-gateway-${personalServiceName(installationFile)}`,ERROR_WINDOW_MINUTES)));}catch{/* no log, no notice */}
+ try{
+  const log=await (deps.recentLog??defaultRecentLog)(`agent-control-gateway-${personalServiceName(installationFile)}`,ERROR_WINDOW_MINUTES);
+  health.push(...repeatedErrorNotices(log));
+  if(log.includes(`[${PERSONAL_EGRESS_DISABLED}] Warning: ${PERSONAL_EGRESS_DISABLED_MESSAGE}`))
+   health.push({key:'egress',text:PERSONAL_EGRESS_DISABLED_MESSAGE,repeatMs:hourMs});
+ }catch{/* no log, no notice */}
  if(usedPercent!==undefined){const disk=diskNotice(usedPercent);if(disk)health.push(disk);}
  try{health.push(...await (deps.logins??defaultLogins)(config,installationFile,now));}catch{/* database or files unavailable */}
  const planned=dueNotices(health,state.sent,now);

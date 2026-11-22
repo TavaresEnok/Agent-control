@@ -1,4 +1,5 @@
 import {setTimeout as delay} from 'node:timers/promises';
+import {personalEgressEnabled} from './personal-egress.ts';
 import {randomUUID} from 'node:crypto';
 import {Capacity} from './capacity.ts';
 import {Refusal, type Authority} from './contracts.ts';
@@ -283,6 +284,7 @@ export async function composePersonalModuleExamRuntime(
   }
   const signingKeyPem = (await readPrivateFile(boot.execution.signingKeyFile)).toString('utf8');
   await renewPersonalQuota(ledger);
+  const personalEgress = personalEgressEnabled(config);
   return moduleExamProviders.flatMap(provider => {
     const accountSubjects = candidateAccounts.filter(account => accounts.some(row => row.id === account.accountId && row.provider === provider));
     if (!accountSubjects.length) return [];
@@ -290,7 +292,7 @@ export async function composePersonalModuleExamRuntime(
       id: boot.execution.id + '-' + provider, workerImage: boot.execution.workerImage, toolsImage: boot.execution.toolsImage,
       hostRoot: boot.execution.hostRoot, accountRoot: boot.execution.accountRoot, providerNetworkId: boot.execution.providerNetworkId,
       protectedRepositories: [config.project, ...config.projects].map(project => project.repo),
-      provider, signingKeyPem, accountSubjects, workerEnv: [], toolsEnv: [],
+      provider, signingKeyPem, accountSubjects, workerEnv: [], toolsEnv: [], personalEgress,
     });
     return [{provider, supervisor, accountIds: new Set(accountSubjects.map(account => account.accountId))}];
   });

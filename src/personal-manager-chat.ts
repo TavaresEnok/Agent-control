@@ -1,4 +1,5 @@
 import {hardenedClaudeArgs} from './claude-hardening.ts';
+import {personalEgressEnabled} from './personal-egress.ts';
 import {execFile} from 'node:child_process';
 import {join} from 'node:path';
 import type {Ledger} from './ledger.ts';
@@ -65,7 +66,7 @@ export function managerChatCommand(provider:string,model:string,effort:string,pr
  */
 export class PersonalManagerChat{
  private readonly status:ManagerMeasurementStatus={attempts:0,recorded:0,degraded:0,failed:0,lastError:null};
- constructor(private readonly ledger:Ledger,private readonly options:{imageId:string;accountRoot:string;network?:string;timeoutMs?:number;docker?:string;
+ constructor(private readonly ledger:Ledger,private readonly options:{imageId:string;accountRoot:string;network?:string;timeoutMs?:number;docker?:string;personalEgress?:boolean;
   /** Called with a short error code (never the prompt or the answer) when a usage row could not be written. Default: one line on stderr. */
   onMeasurementError?:(code:string)=>void}){}
  /** Collection health of the manager measurement: a missing or degraded row is visible here, not silent. */
@@ -78,7 +79,7 @@ export class PersonalManagerChat{
  }
  private run(profile:ManagerProfile,prompt:string){
   const command=managerChatCommand(profile.provider,profile.model,profile.effort,prompt);
-  const proxy=process.env.AC_PERSONAL_EGRESS==='1'?['--env','HTTPS_PROXY=http://provider-egress:8080','--env','HTTP_PROXY=http://provider-egress:8080','--env','NO_PROXY=']:[];
+  const proxy=(this.options.personalEgress??personalEgressEnabled())?['--env','HTTPS_PROXY=http://provider-egress:8080','--env','HTTP_PROXY=http://provider-egress:8080','--env','NO_PROXY=']:[];
   const args=['run','--rm','--network',this.options.network??'ac-native-provider','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges',
    '--pids-limit','256','--memory','1g','--tmpfs','/tmp:rw,nosuid,nodev,size=64m','--workdir','/tmp',
    ...proxy,
