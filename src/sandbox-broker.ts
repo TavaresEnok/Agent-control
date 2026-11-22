@@ -74,14 +74,22 @@ export class DockerDaemon{
  async inspect(name:string):Promise<Inspected|null>{const r=await this.call('GET',`/v1.44/containers/${encodeURIComponent(name)}/json`);
   if(r.status===404)return null;if(r.status!==200)throw new Refusal('DOCKER_UNCERTAIN');return Inspect.parse(JSON.parse(r.body.toString('utf8')));}
  /** Include stopped containers and catch a renamed container even if its ID was never journaled. */
- async hasNativeJobContainer(jobId:string){
-  const filters=encodeURIComponent(JSON.stringify({label:['agent-control.job='+jobId]}));
+ private async nativeContainers(label:string){
+  const filters=encodeURIComponent(JSON.stringify({label:[label]}));
   const r=await this.call('GET',`/v1.44/containers/json?all=1&filters=${filters}`);
   if(r.status!==200)throw new Refusal('DOCKER_UNCERTAIN');
   try{
-   const containers=z.array(z.object({Id:z.string().regex(/^[a-f0-9]{64}$/)})).parse(JSON.parse(r.body.toString('utf8')));
-   return containers.length>0;
+   return z.array(z.object({Id:z.string().regex(/^[a-f0-9]{64}$/),Labels:z.record(z.string(),z.string()).optional()})).parse(JSON.parse(r.body.toString('utf8')));
   }catch{throw new Refusal('DOCKER_UNCERTAIN');}
+ }
+ async nativeJobContainerIds(jobId:string){
+  return (await this.nativeContainers('agent-control.job='+jobId)).map(item=>item.Id);
+ }
+ async nativeContainerJobIds(){
+  return [...new Set((await this.nativeContainers('agent-control.job')).flatMap(item=>{
+   const jobId=item.Labels?.['agent-control.job'];
+   return jobId&&/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(jobId)?[jobId]:[];
+  }))];
  }
  /** Same socket as create. 404 is definitive absence; any other failure stays uncertain. */
  async imagePresent(imageId:string){if(!/^sha256:[a-f0-9]{64}$/.test(imageId))throw new Refusal('DOCKER_IMAGE_INVALID');

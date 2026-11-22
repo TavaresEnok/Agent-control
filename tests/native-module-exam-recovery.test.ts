@@ -40,8 +40,9 @@ async function fakeDocker(socket:string,state:Fake){
    const params=new URL(url,'http://localhost').searchParams;
    const {label:[filter]}=JSON.parse(params.get('filters')!);
    const [name,value]=filter.split('=');
-   const matching=[...state.containers.values()].filter(item=>item.Config.Labels[name]===value&&(params.get('all')==='1'||item.State.Running));
-   res.end(JSON.stringify(matching.map(item=>({Id:item.Id}))));
+   const matching=[...state.containers.values()].filter(item=>Object.hasOwn(item.Config.Labels,name)&&
+    (value===undefined||item.Config.Labels[name]===value)&&(params.get('all')==='1'||item.State.Running));
+   res.end(JSON.stringify(matching.map(item=>({Id:item.Id,Labels:item.Config.Labels}))));
    return;
   }
   if(method==='GET'&&url.startsWith('/v1.44/containers/')&&url.endsWith('/json')){
@@ -622,14 +623,16 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
    }),{mode:0o600});
   const plantStoppedContainers=async(job:Awaited<ReturnType<typeof plant>>,workerId:string)=>{
    await db.pool.query('UPDATE ac_native_execution_jobs SET tools_id=$2 WHERE id=$1',[job.jobId,job.toolsId]);
-   const stopped={Status:'exited',Running:false,ExitCode:1,FinishedAt:new Date().toISOString()};
+   const stopped={Status:'exited',Running:false,Pid:0,ExitCode:1,FinishedAt:new Date().toISOString()};
    const workerName='ac-native-worker-'+job.jobId;
-   docker.containers.set(workerName,{...job.body,Id:workerId,State:stopped});
-   docker.containers.set(job.toolsName,{...job.body,State:{...stopped,ExitCode:0}});
-   return ()=>{
-    docker.containers.delete(workerName);
-    docker.containers.delete(job.toolsName);
+   const worker:Body={...job.body,Id:workerId,Name:'/'+workerName,State:stopped};
+   const tools:Body={...job.body,Name:'/'+job.toolsName,State:{...stopped,Status:'dead',ExitCode:0}};
+   const restore=()=>{
+    docker.containers.set(workerName,worker);
+    docker.containers.set(job.toolsName,tools);
    };
+   restore();
+   return {worker,tools,restore};
   };
 
   await t.test('a CLI reconcilia segurança com resultado, libera a vaga e registra a retirada',async()=>{
@@ -638,13 +641,18 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
    const orphan=await plantOrphan({module:'verify',context:mainContext,tools:'absent',state:'running',grantState:'running',plainRequest:true,
     workerId,launchDigest:hex(),siblings:0});
    await writeResult(orphan);
-   const clearContainers=await plantStoppedContainers(orphan,workerId);
+   const {worker,restore}=await plantStoppedContainers(orphan,workerId);
    const before=await snapshot(orphan.jobId,orphan.grantId,orphan.intentId);
    assert.equal(before.operation.state,'registered');
+   worker.State={...worker.State,Status:'running',Running:true,Pid:123};
    await assert.rejects(recover(orphan,false),{code:'NATIVE_ORPHAN_CONTAINER_PRESENT'});
+   await assert.rejects(recover(orphan),{code:'NATIVE_ORPHAN_CONTAINER_PRESENT'});
    assert.deepEqual(await snapshot(orphan.jobId,orphan.grantId,orphan.intentId),before);
    assert.deepEqual(docker.mutations,[]);
-   clearContainers();
+   worker.State={...worker.State,Status:'exited',Running:false};
+   await assert.rejects(recover(orphan),{code:'NATIVE_ORPHAN_CONTAINER_PRESENT'});
+   assert.deepEqual(docker.mutations,[]);
+   worker.State={...worker.State,Status:'exited',Running:false,Pid:0};
    assert.equal(await recover(orphan,false),'eligible');
    assert.deepEqual(await snapshot(orphan.jobId,orphan.grantId,orphan.intentId),before);
    assert.deepEqual(docker.mutations,[]);
@@ -659,7 +667,12 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
    assert.equal(after.intent.state,'failed');
    assert.deepEqual(after.operation,before.operation);
    assert.equal(after.journal.state,'removed');
-   assert.deepEqual(docker.mutations,['DELETE network '+orphan.networkId]);
+   const {binding,proof}=(await db.pool.query('SELECT binding,proof FROM ac_native_terminal_retirements WHERE job_id=$1',[orphan.jobId])).rows[0];
+   assert.equal(binding.workerId,workerId);
+   assert.equal(binding.toolsId,orphan.toolsId);
+   assert.deepEqual(proof.payload,binding);
+   assert.ok(verify(null,Buffer.from('agent-control:native-terminal-retirement:v1\n'+canonical(binding)),keys.publicKey,Buffer.from(proof.signature,'hex')));
+   assert.deepEqual(docker.mutations,['DELETE container '+workerId,'DELETE container '+orphan.toolsId,'DELETE network '+orphan.networkId]);
    assert.equal(await recover(orphan),'already_recovered');
    const replay=await db.acquire(owner,mainContext,randomUUID(),'verify-replay',60);
    try{
@@ -667,6 +680,18 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
     assert.equal(reconciled.state,'failed');
     assert.ok('failureCode' in reconciled && reconciled.failureCode==='EXECUTION_CANCELED');
    }finally{await db.releaseLease(replay);}
+   reset();
+   restore();
+   const preview=await cli('--retencao-automatica');
+   assert.equal(preview.status,0,preview.stdout+preview.stderr);
+   assert.match(preview.stdout,new RegExp(orphan.jobId+'.*contêineres parados elegíveis'));
+   assert.deepEqual(docker.mutations,[]);
+   const retention=await cli('--retencao-automatica','--aplicar');
+   assert.equal(retention.status,0,retention.stdout+retention.stderr);
+   assert.match(retention.stdout,new RegExp(orphan.jobId+'.*contêineres parados retirados'));
+   assert.deepEqual(docker.mutations.filter((mutation:string)=>mutation.startsWith('DELETE container ')),
+    ['DELETE container '+workerId,'DELETE container '+orphan.toolsId]);
+   assert.deepEqual(await snapshot(orphan.jobId,orphan.grantId,orphan.intentId),after);
   });
 
   await t.test('a CLI recupera um verify antigo de outro projeto da mesma instalação',async()=>{
@@ -675,17 +700,28 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
    const older=await plantOrphan({module:'verify',context:otherVerifyContext,tools:'absent',state:'running',grantState:'running',
     plainRequest:true,workerId,launchDigest:hex(),networkId:null,siblings:0});
    await writeResult(older,1,older.jobId,'PROVIDER_USAGE_LIMIT');
-   const clearContainers=await plantStoppedContainers(older,workerId);
+   const {tools}=await plantStoppedContainers(older,workerId);
    await db.pool.query("UPDATE ac_native_execution_jobs SET created_at=now()-interval '1 day' WHERE id=$1",[older.jobId]);
    await db.pool.query("UPDATE ac_managers SET lease_until=now()-interval '1 day' WHERE context_id=$1",[older.contextId]);
    const before=await snapshot(older.jobId,older.grantId,older.intentId);
    await assert.rejects(recover(older,false),{code:'NATIVE_EXECUTION_SCOPE_MISMATCH'});
+   const expectedImage=tools.Image,expectedConfig=tools.Config;
+   tools.Image='sha256:'+hex();
    const blocked=await cli('--retencao-automatica');
    assert.equal(blocked.status,0,blocked.stdout+blocked.stderr);
    assert.match(blocked.stdout,new RegExp(older.jobId+'.*NATIVE_ORPHAN_CONTAINER_PRESENT'));
    assert.deepEqual(await snapshot(older.jobId,older.grantId,older.intentId),before);
    assert.deepEqual(docker.mutations,[]);
-   clearContainers();
+   await assert.rejects(recover(older,true),{code:'NATIVE_EXECUTION_SCOPE_MISMATCH'});
+   const otherSupervisor=new NativeExecutionSupervisor(db,{...config(),repository:otherRepo});
+   const recoverOlder=()=>otherSupervisor.recoverOrphanedExam(owner,older.jobId,{projectId:otherProject,repository:otherRepo,contextId:older.contextId},true);
+   await assert.rejects(recoverOlder(),{code:'NATIVE_ORPHAN_CONTAINER_PRESENT'});
+   tools.Image=expectedImage;
+   tools.Config={...expectedConfig,Labels:{...expectedConfig.Labels,'agent-control.job':randomUUID()}};
+   await assert.rejects(recoverOlder(),{code:'NATIVE_ORPHAN_CONTAINER_PRESENT'});
+   assert.deepEqual(await snapshot(older.jobId,older.grantId,older.intentId),before);
+   assert.deepEqual(docker.mutations,[]);
+   tools.Config=expectedConfig;
    const preview=await cli('--retencao-automatica');
    assert.equal(preview.status,0,preview.stdout+preview.stderr);
    assert.match(preview.stdout,new RegExp(older.jobId+'.*elegível'));
@@ -699,6 +735,7 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
    assert.equal(after.grant.physical_receipt.failureCode,'PROVIDER_USAGE_LIMIT');
    assert.equal(after.journal.state,'removed');
    assert.deepEqual(after.operation,before.operation);
+   assert.deepEqual(docker.mutations,['DELETE container '+workerId,'DELETE container '+older.toolsId]);
   });
 
   await t.test('verify recusa digest adulterado e operação ativa ou de outro intent',async()=>{

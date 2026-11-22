@@ -15,6 +15,8 @@ import {grantLaunchLockKey,Result} from './native-execution-shared.ts';
 import {Id,PreLaunchExamPhysicalReceipt,ModuleExamNeverStartedReceipt,PassiveExamModules,type ModuleExamRecoveryReason,DockerZeroTime,ModuleExamRemovalDomain,type NativeModuleExamRecovery,readonlyDesignExam,NativeExecutionRequest,type Input,type PersonalExamRecoveryScope,type ModuleExamRecoveryScope,moduleExamCompanion,retireNativePrivateNetwork,readonlySecurityExam,dockerUncertain} from './native-execution-shared.ts';
 import {NativeExecutionSupervisorCore} from './native-execution-core.ts';
 export abstract class NativeExecutionExamRecovery extends NativeExecutionSupervisorCore{
+ protected abstract stoppedNativeContainers(row:Record<string,any>,refusal:string):Promise<string[]>;
+ protected abstract removeStoppedNativeContainers(row:Record<string,any>,ids:string[],refusal:string):Promise<void>;
  protected validPreLaunchExamReceipt(physical:unknown,jobId:string,synthetic:boolean){
   const parsed=PreLaunchExamPhysicalReceipt.safeParse(physical);
   return parsed.success&&parsed.data.jobId===jobId&&parsed.data.synthetic===synthetic;
@@ -262,7 +264,8 @@ export abstract class NativeExecutionExamRecovery extends NativeExecutionSupervi
    }
    const result=await this.orphanedExamResult(jobId);
    if(result&&row.physical_receipt?.executionStarted===false)throw new Refusal('NATIVE_EXECUTION_RECEIPT_MISMATCH');
-   await this.confirmOrphanedExamContainersAbsent(row);
+   const containerRefusal='NATIVE_ORPHAN_CONTAINER_PRESENT';
+   const stopped=await this.stoppedNativeContainers(row,containerRefusal);
    // A recorded worker could have started even if it never wrote a result.
    const executionStarted=Boolean(result||(row.worker_id&&row.physical_receipt?.executionStarted!==false));
    if(!executionStarted){
@@ -274,8 +277,10 @@ export abstract class NativeExecutionExamRecovery extends NativeExecutionSupervi
     const input=this.paths(jobId).input;
     try{await this.directory(input);}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
    }
-   await this.retireOrphanedExamNetwork(row,apply);
+   await this.retireOrphanedExamNetwork(row,false);
    if(!apply)return 'eligible' as const;
+   await this.removeStoppedNativeContainers(row,stopped,containerRefusal);
+   await this.retireOrphanedExamNetwork(row,true);
    const exitCode=result?.exitCode??1;
    const failureCode=!result&&executionStarted?'NATIVE_EXAM_ORPHANED_NO_RESULT':result?.failureCode??'NATIVE_EXAM_ORPHANED';
    const physical={source:'native-orphaned-exam',jobId,containerId:row.worker_id,toolsContainerId:row.tools_id,networkId:row.network_id,
@@ -361,15 +366,6 @@ export abstract class NativeExecutionExamRecovery extends NativeExecutionSupervi
    if((error as NodeJS.ErrnoException).code==='ENOENT')return null;
    throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');
   }
- }
-
- protected async confirmOrphanedExamContainersAbsent(row:Record<string,any>){
-  const names=['ac-native-worker-'+row.id,'ac-native-tools-'+row.id];
-  const inspected=await Promise.all([...names,...[row.worker_id,row.tools_id].filter(Boolean)].map(id=>this.docker.inspect(id))).catch(error=>{
-   if(error instanceof Refusal)throw error;
-   throw new Refusal('DOCKER_UNCERTAIN');
-  });
-  if(inspected.some(Boolean)||await this.docker.hasNativeJobContainer(row.id))throw new Refusal('NATIVE_ORPHAN_CONTAINER_PRESENT');
  }
 
  protected async retireOrphanedExamNetwork(row:Record<string,any>,apply:boolean){
