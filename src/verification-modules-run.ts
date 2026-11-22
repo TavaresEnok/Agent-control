@@ -1,5 +1,4 @@
 import {containFailure} from './failure-log.ts';
-import {isMeasuredModuleRule} from './module-exam-collector-proof.ts';
 import {withInstallationImageLock} from './personal-image-lock.ts';
 import {assertDiskSpaceForLaunch, launchVolumesOf} from './personal-disk.ts';
 import {randomUUID} from 'node:crypto';
@@ -419,8 +418,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
           proof = localizedProof(audited.proof, audited.reason);
           if (status === 'confirmado') title = moduleReviewObservationTitle(audited.observation) ?? title;
         }
-      } else if (input.worker && !(input.module === 'prontidao' && isProtectedLocation(finding.file))
-        && !isMeasuredModuleRule(input.module, finding.tool, finding.rule)) {
+      } else if (input.worker && !(input.module === 'prontidao' && isProtectedLocation(finding.file))) {
         const confirmed = await confirmFindingWithReviewer({...input, repoPath: snapshot}, intentId, finding);
         status = confirmed.status;
         title = confirmed.title ?? title;

@@ -3,10 +3,13 @@ import type {VerificationModule} from './ledger.ts';
 // Path and content rules that route each file to the functional modules 2 to 9.
 // A file outside a module's rule is not sent to that module's examiner; the caller
 // keeps it in the coverage as not judged, with the rule id as the reason.
-const VENDOR = /(?:^|\/)(?:vendor|node_modules|third_party)\//u;
+// Vendor Go conferido já sai no mapa (src/vendored-dirs.ts). Uma pasta vendor/ ou third_party/ sem essa conferência
+// é código do projeto e segue as regras do módulo; só node_modules nunca é do projeto.
+const VENDOR = /(?:^|\/)node_modules\//u;
 const GEN = /(?:\.pb\.go|\.sql\.go|_gen\.go)$|(?:^|\/)dbgen\//u;
-const CODE = /\.(?:go|ts|tsx|js|jsx|mjs|cjs|py|rb|java|kt|rs|php|cs)$/iu;
-const TEST = /(?:_test\.go|\.(?:test|spec)\.[^/]+|_test\.py)$|(?:^|\/)(?:__tests__|tests?|e2e|acceptance|testdata)\//u;
+const CODE = /\.(?:go|ts|tsx|js|jsx|mjs|cjs|py|rb|java|kt|rs|php|cs|vue|svelte)$/iu;
+// Pasta de teste só na raiz ou logo abaixo de uma pasta de topo (web/e2e/): internal/x/test/ funda pode ser código.
+const TEST = /(?:_test\.go|\.(?:test|spec)\.[^/]+|_test\.py)$|(?:^|\/)(?:__tests__|testdata)\/|^(?:[^/]+\/)?(?:tests?|e2e|acceptance)\//u;
 // A docs/ folder makes only its non-code files documentation: internal/docs/handler.go is still code.
 const DOC = /\.(?:md|mdx|rst|adoc)$/iu;
 const DOCS_DIR = /(?:^|\/)docs\//u;
@@ -15,7 +18,7 @@ const DOCKERFILE = /^(?:Dockerfile[^/]*|[^/]*\.dockerfile)$/iu;
 const WORKFLOW = /(?:^|\/)\.github\/workflows\//u;
 const SQL = /\.sql$/iu;
 const DB_PATH = /(?:^|\/)(?:migrations?|queries|schema)\/|(?:^|\/)sqlc\.(?:ya?ml|json)$/iu;
-const DB_CODE = /database\/sql|pgx|\bsqlx\b|\bgorm\b|dbgen\.|\.(?:Query|QueryRow|Exec|QueryContext|ExecContext|SendBatch|CopyFrom|BeginTx|Begin)\(|FOR UPDATE/u;
+const DB_CODE = /database\/sql|pgx|\bsqlx\b|\bgorm\b|dbgen\.|\.(?:Query|QueryRow|Exec|QueryContext|ExecContext|SendBatch|CopyFrom|BeginTx|Begin)\(|FOR UPDATE|\.query\(|\.execute\(|cursor\(|prisma|knex|sequelize|typeorm|drizzle|from ['"](?:pg|postgres|mysql2?|sqlite3?|better-sqlite3)['"]|sqlalchemy|psycopg/u;
 const READY_PATH = /^(?:(?:docker-)?compose[^/]*\.ya?ml|Caddyfile[^/]*|[^/]*\.conf|[^/]*\.(?:service|timer)|\.dockerignore|[^/]*\.(?:sh|ps1))$/iu;
 const READY_DIR = /(?:^|\/)deploy\/|(?:^|\/)cmd\/[^/]+\/[^/]+\.go$/u;
 const READY_CODE = /os\.Getenv|LookupEnv|process\.env|import\.meta\.env|ListenAndServe|http\.Server\{|signal\.Notify|healthz|readyz|Shutdown\(|SetMaxOpenConns|MaxConns|ReadHeaderTimeout|WriteTimeout/u;

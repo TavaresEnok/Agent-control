@@ -18,7 +18,11 @@ const table: [VerificationModule, string, string, boolean][] = [
   ['qa', 'Docs/guia.md', '', false],
   ['qa', 'internal/db/dbgen/models.go', plain, false],
   ['qa', 'api/v1/chat.pb.go', plain, false],
-  ['qa', 'vendor/github.com/x/y.go', plain, false],
+  ['qa', 'node_modules/x/y.js', plain, false],
+  // Uma pasta vendor/ sem a conferência do go.mod é código do projeto: segue as regras do módulo.
+  ['arquitetura', 'backend/internal/vendor/pay.go', plain, true],
+  ['banco', 'web/src/repo/users.ts', 'await pool.query("select 1")\n', true],
+  ['arquitetura', 'internal/x/test/helper.go', plain, true],
   ['arquitetura', 'internal/handler/user.go', plain, true],
   ['arquitetura', 'internal/handler/user_test.go', plain, false],
   ['arquitetura', 'web/src/__tests__/App.tsx', plain, false],
@@ -76,7 +80,7 @@ test('cada módulo de 2 a 9 tem a sua regra de caminho e conteúdo', () => {
   for (const [module, file, code, inside] of table) {
     const rule = moduleExamScope(module, file, code);
     assert.equal(rule === null, inside, `${module} ${file}`);
-    if (!inside) assert.match(rule!, file.startsWith('vendor/') ? /^vendor$/ : new RegExp(`^${module}-`), `${module} ${file}`);
+    if (!inside) assert.match(rule!, file.startsWith('node_modules/') ? /^vendor$/ : new RegExp(`^${module}-`), `${module} ${file}`);
   }
 });
 

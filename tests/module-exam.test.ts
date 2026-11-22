@@ -455,7 +455,7 @@ test('linhas cortadas no limite não chegam à revisão nem viram rotas julgadas
   assert.equal(result.findings.length, 1);
   assert.equal(result.findings[0]?.status, 'provavel');
   assert.match(result.notes.join(' '), /Rotas fora dos limites de envio ao examinador: 1/);
-  assert.match(result.notes.join(' '), /Arquivos com envio limitado a linhas completas: 1/);
+  assert.match(result.notes.join(' '), /Arquivos julgados só em parte \(o modelo viu os primeiros 16000 caracteres\): 1: limited\.test\.ts/);
 });
 
 test('o leitor de rotas ignora texto literal e registra arquivos com sintaxe não reconhecida', async () => {

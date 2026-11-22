@@ -267,7 +267,7 @@ export async function mapModuleSnapshot(snapshot: string, signal?: AbortSignal,
       }
       // Arquivo regular de vendor conferido que não é script: não entra no inventário nem no limite de arquivos textuais.
       const inVendor = scope !== undefined && entry.isFile() ? file.slice(scope.prefix.length + 1) : undefined;
-      if (scope !== undefined && inVendor !== undefined && isVendoredFile(inVendor)) {
+      if (scope !== undefined && inVendor !== undefined && isVendoredFile(inVendor, scope.packages)) {
         scope.bucket.files += 1;
         if (!isListedVendorFile(inVendor, scope.packages)) scope.bucket.unlisted += 1;
         scope.bucket.paths.push(absolute);

@@ -49,9 +49,19 @@ export async function goVendorPackages(dir: string, name: string): Promise<Set<s
  */
 const VENDOR_KEEP_EXAMINED = /\.(?:[cm]?[jt]sx?|py|sh|bash|zsh|ps1|php|rb|pl|lua|html?|vue|svelte)$/iu;
 
-/** O arquivo, relativo à pasta vendor, sai do exame do modelo: qualquer arquivo regular que não seja script. */
-export function isVendoredFile(relative: string): boolean {
-  return relative === 'modules.txt' || !VENDOR_KEEP_EXAMINED.test(relative.slice(relative.lastIndexOf('/') + 1));
+const VENDOR_SOURCE = /\.(?:go|s|c|h|cc|cpp|hpp)$/iu;
+
+/**
+ * O arquivo, relativo à pasta vendor, sai do exame do modelo. Script nunca sai. Fonte (.go, C, assembly) só sai
+ * quando é de um pacote listado no modules.txt: um pacote fora da lista pode ser código do autor posto em vendor/
+ * e compilado com -mod=vendor, e vai ao exame. Documentação e configuração de terceiros saem sempre.
+ */
+export function isVendoredFile(relative: string, packages?: ReadonlySet<string>): boolean {
+  if (relative === 'modules.txt') return true;
+  const name = relative.slice(relative.lastIndexOf('/') + 1);
+  if (VENDOR_KEEP_EXAMINED.test(name)) return false;
+  if (VENDOR_SOURCE.test(name)) return packages !== undefined && isListedVendorFile(relative, packages);
+  return true;
 }
 
 /** O arquivo, relativo à pasta vendor, é de um pacote ou raiz de módulo listado no modules.txt. Só conta para a nota. */

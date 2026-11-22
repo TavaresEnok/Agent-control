@@ -78,6 +78,7 @@ const LOCKFILE = /^(?:package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lo
 const API_SPEC = /^(?:openapi|swagger)\.(?:json|ya?ml)$/iu;
 // Marker in a comment on one of the first lines: Go's exact line "// Code generated ... DO NOT EDIT.", @generated,
 // "This file was auto-generated". The repository writes it, so the note lists the files that left the examiner this way.
+const GENERATED_MIN_BYTES = 8192;
 const GENERATED_HEADER = /^(?:\/\/ Code generated .* DO NOT EDIT\.\r?$|\s*(?:\/\/|#|\/\*+|\*|--|<!--)\s*(?:@generated\b|This file (?:was|is|has been) (?:auto-?generated|automatically generated|generated)\b))/imu;
 
 /** Class of a module 1 file kept out of the model, or null for production code. `head` is the start of the file when readable. */
@@ -88,7 +89,9 @@ export function auxiliaryKind(file: string, head?: Buffer): keyof AuxiliaryFiles
   if (TEST_NAME.test(base) || folders.some(part => TEST_DIRECTORIES.has(part)) || (folders.length > 0 && ROOT_TEST_DIRECTORIES.has(folders[0]!))) return 'testes';
   if (DOC_NAME.test(base) && !NOT_DOC.test(base)) return 'documentacao';
   if (LOCKFILE.test(base) || API_SPEC.test(base)) return 'gerados';
-  if (head && GENERATED_HEADER.test(head.toString('utf8').split('\n', 5).join('\n'))) return 'gerados';
+  // The marker is written by the repository itself: it only counts in a file of at least GENERATED_MIN_BYTES. A small file
+  // that says "generated" is cheap to examine, and a large one is listed by name in the note.
+  if (head && head.length >= GENERATED_MIN_BYTES && GENERATED_HEADER.test(head.toString('utf8').split('\n', 5).join('\n'))) return 'gerados';
   return null;
 }
 
@@ -120,7 +123,7 @@ async function walk(root: string, dir: string, found: string[], vendored: Vendor
     const file = toPosix(relative(root, absolute));
     // Arquivo regular de vendor conferido: fora do modelo, menos script, que vai ao exame.
     const inVendor = scope === undefined ? undefined : toPosix(relative(scope.base, absolute));
-    if (scope !== undefined && inVendor !== undefined && isVendoredFile(inVendor)) {
+    if (scope !== undefined && inVendor !== undefined && isVendoredFile(inVendor, scope.packages)) {
       scope.bucket.files.push(file);
       if (!isListedVendorFile(inVendor, scope.packages)) scope.bucket.unlisted = (scope.bucket.unlisted ?? 0) + 1;
       continue;

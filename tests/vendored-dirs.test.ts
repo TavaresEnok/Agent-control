@@ -22,24 +22,23 @@ async function goRepo(over: {goMod?: string | null; modules?: string} = {}): Pro
   await writeFile(join(backend, 'vendor', 'github.com', 'lib', 'pq', 'conn.go'), 'package pq\n');
   await writeFile(join(backend, 'vendor', 'github.com', 'lib', 'pq', 'oid', 'types.go'), 'package oid\n');
   await writeFile(join(backend, 'vendor', 'golang.org', 'x', 'text', 'unicode', 'norm', 'norm.go'), 'package norm\n');
-  // Fora dos pacotes listados: sai do exame como o resto de vendor, contado à parte na nota.
+  // Fonte Go fora dos pacotes listados: pode ser código do autor compilado com -mod=vendor, vai ao exame.
   await writeFile(join(backend, 'vendor', 'github.com', 'lib', 'pq', 'extra', 'porta.go'), 'package extra\n');
   await writeFile(join(backend, 'internal', 'app.go'), 'package internal\n');
   return root;
 }
 
-test('módulo 1: num vendor conferido com o go.mod todo arquivo regular sai, listado ou não; scripts ficam', async () => {
+test('módulo 1: num vendor conferido saem os pacotes listados; fonte fora da lista e scripts vão ao exame', async () => {
   const root = await goRepo();
   try {
     const vendored: VendoredFiles[] = [];
     const files = await listExamFiles(root, vendored);
-    assert.deepEqual(files, ['backend/go.mod', 'backend/internal/app.go']);
+    assert.deepEqual(files, ['backend/go.mod', 'backend/internal/app.go', 'backend/vendor/github.com/lib/pq/extra/porta.go']);
     assert.equal(vendored.length, 1);
     assert.equal(vendored[0]?.dir, 'backend/vendor');
-    assert.equal(vendored[0]?.unlisted, 1);
+    assert.equal(vendored[0]?.unlisted ?? 0, 0);
     assert.deepEqual(vendored[0]?.files.sort(), [
       'backend/vendor/github.com/lib/pq/conn.go',
-      'backend/vendor/github.com/lib/pq/extra/porta.go',
       'backend/vendor/github.com/lib/pq/oid/types.go',
       'backend/vendor/golang.org/x/text/unicode/norm/norm.go',
       'backend/vendor/modules.txt',
@@ -117,11 +116,11 @@ test('em vendor conferido só scripts vão ao exame; fontes Go, C, assembly, lic
     assert.ok(files.includes('backend/vendor/github.com/x/tool/wrk.lua'));
     assert.equal(files.includes('backend/vendor/github.com/x/tool/testdata.json'), false);
     assert.ok(vendored[0]?.files.includes('backend/vendor/github.com/x/tool/testdata.json'));
-    assert.equal(vendored[0]?.unlisted, 2, 'porta.go e testdata.json estão fora dos pacotes listados');
+    assert.equal(vendored[0]?.unlisted, 1, 'testdata.json sai, fora dos pacotes listados; porta.go vai ao exame');
     const map = await mapModuleSnapshot(root);
     assert.ok(map.files.some(row => row.file === 'backend/vendor/github.com/x/tool/regen.sh' && row.code !== null));
     assert.equal(map.files.some(row => row.file === 'backend/vendor/github.com/x/tool/testdata.json'), false);
-    assert.equal(map.vendored?.[0]?.unlisted, 2);
+    assert.equal(map.vendored?.[0]?.unlisted, 1);
     assert.ok(files.includes('backend/vendor/github.com/lib/pq/handler.ts'));
     assert.ok(files.includes('backend/vendor/github.com/lib/pq/build.sh'));
     assert.ok(files.includes('backend/vendor/github.com/lib/pq/LICENSE.ts'), 'nome de licença com extensão de código vai ao exame');
@@ -142,11 +141,11 @@ test('módulos 2 a 9: a pasta aparece com o motivo e a contagem, e a nota diz o 
       const map = await mapModuleSnapshot(root, undefined, {aggregateOmissions: aggregate});
       assert.equal(map.vendored?.length, 1);
       assert.equal(map.vendored?.[0]?.dir, 'backend/vendor');
-      assert.equal(map.vendored?.[0]?.files, 5);
-      assert.equal(map.vendored?.[0]?.unlisted, 1);
+      assert.equal(map.vendored?.[0]?.files, 4);
+      assert.equal(map.vendored?.[0]?.unlisted ?? 0, 0);
       assert.match(map.vendored?.[0]?.digest ?? '', /^[0-9a-f]{64}$/);
       assert.equal(map.files.some(row => row.file === 'backend/vendor/github.com/lib/pq/conn.go'), false);
-      assert.equal(map.files.some(row => row.file === 'backend/vendor/github.com/lib/pq/extra/porta.go'), false);
+      assert.ok(map.files.some(row => row.file === 'backend/vendor/github.com/lib/pq/extra/porta.go' && row.code !== null), 'fonte fora dos pacotes listados vai ao exame');
       assert.ok(map.files.some(row => row.file === 'backend/internal/app.go' && row.code !== null));
     }
     const first = (await mapModuleSnapshot(root)).vendored?.[0]?.digest;

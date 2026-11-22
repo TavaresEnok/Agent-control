@@ -10,7 +10,7 @@ import {redactUnknownSecrets} from './verify-redact.ts';
 import {VerifyWorkerCall} from './verify-types.ts';
 import type {ModuleRawFinding} from './verification-modules.ts';
 import {findModuleExamRoutes, moduleExamRouteKey, moduleExamRouteMatcher, redactModuleExamText, type ModuleExamMap} from './module-exam-map.ts';
-import {buildCollectorReviewCase, type ModuleExamCollectorContext, isMeasuredModuleRule} from './module-exam-collector-proof.ts';
+import {buildCollectorReviewCase, type ModuleExamCollectorContext} from './module-exam-collector-proof.ts';
 import {moduleCollectorHypothesis, moduleExamQuestions, moduleReviewObservationTitle, moduleReviewProofReason, moduleReviewTask, readModuleReviewVerdict, type ModuleReviewDecision, type ModuleReviewEvidence, type ModuleReviewObservation} from './module-exam-proof.ts';
 import {scanModuleExamSource} from './module-exam-syntax.ts';
 import {isModuleExamTerminalNotice, parseModuleExamJsonObject} from './module-exam-worker.ts';
@@ -369,6 +369,7 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
     let excludedRoutes = 0;
     const prepared: Prepared[] = [];
     let limitedFiles = 0;
+    const limitedNames: string[] = [];
     for (const [index, file] of input.map.files.entries()) {
       checkAbort(input.signal);
       if (file.code === null || outOfScope.has(file.file)) continue;
@@ -377,7 +378,7 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
       // can always be bound to the real inventory entry.
       if (clean(file.file, 400) !== file.file) { row.reason = 'nome protegido'; continue; }
       const {code, limited} = codeForExam(file.code);
-      if (limited) limitedFiles++;
+      if (limited) { limitedFiles++; if (limitedNames.length < 40) limitedNames.push(file.file); }
       const located = new Set(findModuleExamRoutes(file.file, code).map(moduleExamRouteKey));
       const inventoried = routesByFile.get(file.file) ?? [];
       const sent = inventoried.filter(route => located.has(moduleExamRouteKey(route))).slice(0, 20);
@@ -617,7 +618,8 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
       }
     }
     if (excludedRoutes) notes.add(`Rotas fora dos limites de envio ao examinador: ${excludedRoutes}.`);
-    if (limitedFiles) notes.add(`Arquivos com envio limitado a linhas completas: ${limitedFiles}.`);
+    // Julgado em parte: o modelo viu só o começo do arquivo (EXAM_CODE_LIMIT). Os nomes ficam no relatório, para ninguém ler como exame inteiro.
+    if (limitedFiles) notes.add(`Arquivos julgados só em parte (o modelo viu os primeiros ${EXAM_CODE_LIMIT} caracteres): ${limitedFiles}: ${limitedNames.join(', ')}${limitedFiles > limitedNames.length ? '…' : ''}.`);
     if (retries.split || retries.batch || retries.high || retries.invalid) {
       notes.add(`Novas tentativas do exame: ${retries.split} lote(s) repetido(s) em duas metades; arquivos repetidos sozinhos por falha do lote inteiro ${retries.batch}, por achado alto ${retries.high} e por resposta inválida ${retries.invalid}.`);
     }
@@ -847,8 +849,9 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
     for (const s of subjects) {
       const raw = input.findings[s.index];
       if (!triage) { items.push({members: [s], group: false, capped: false}); continue; }
-      // A métrica que a própria ferramenta mede (P2: isMeasuredModuleRule) não vai ao revisor; o modelo não muda o veredito.
-      if (raw && (measuredRules.has(`${raw.tool}:${raw.rule}`) || isMeasuredModuleRule(input.module, raw.tool, raw.rule))) {
+      // Regras medidas (isMeasuredModuleRule) seguem na amostra por regra: a correção pelo produto exige achado confirmado,
+      // e a amostra limita o custo a uma chamada por regra. Só as listadas aqui saem da revisão.
+      if (raw && measuredRules.has(`${raw.tool}:${raw.rule}`)) {
         s.finding.reason = 'Regra medida pela própria ferramenta, sem revisão por modelo.';
         measuredCount++;
         continue;

@@ -623,7 +623,10 @@ async function runJob(input: {
         batch: ready.batch,
         pollBackoff: ready.pollBackoff,
         productionOnly: ready.productionOnly,
-        concurrency: await evaluationSlots(ready.ledger),
+        // One slice at a time: concurrent reservations of the same intent share one attempt in reserveWithCapacityQueue
+        // (pendingWaitsByScope), and the native worker tracks a single active job. The modules run side by side, each in
+        // its own slot, so the wall time still fits; the pool (orderedPool) stays ready for when the queue keys by lane.
+        concurrency: 1,
         startedMs,
         timeLimitMs: ready.timeLimitMs,
         ...(ready.wait ? {wait: ready.wait} : {}),
