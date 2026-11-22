@@ -11,6 +11,7 @@ import {assertSshOutsideMountRoots,pushIntegratedRemote,registerPersonalRemote,r
 import type {Installation} from './installation.ts';
 import type {Ledger} from './ledger.ts';
 import {NativeExecutionSupervisor,openGrantLaunchLockSession,releaseGrantLaunchLock,tryGrantLaunchLock} from './native-execution-supervisor.ts';
+import {orphanedExamIntentSql} from './native-execution-shared.ts';
 import {NativeImplementation} from './native-implementation.ts';
 import {NativePlanningSupervisor} from './native-planning-supervisor.ts';
 import {NativeQa} from './native-qa.ts';
@@ -72,6 +73,10 @@ export async function releaseDeadPersonalGrants(ledger:Ledger,olderThanMinutes=1
      const grant=(await c.query(`SELECT id FROM ac_capacity_grants WHERE id=$1 AND state<>'released' AND resource_kind='model'
       AND created_at<clock_timestamp()-make_interval(mins=>$2) FOR UPDATE`,[id,olderThanMinutes])).rows[0];
      if(!grant)return 0;
+     // Passive exams must close their job and grant together under the
+     // exam-specific lease, Docker and result checks.
+     if((await c.query(`SELECT 1 FROM ac_native_execution_jobs j JOIN ac_intents i ON i.id=j.intent_id
+      WHERE j.grant_id=$1 AND j.state IN ('running','uncertain') AND ${orphanedExamIntentSql}`,[id])).rowCount)return 0;
      const jobs:string[]=[];
      for(const table of JOB_TABLES){
       for(const row of (await c.query(`SELECT id,created_at<clock_timestamp()-make_interval(mins=>$2) settled FROM ${table} WHERE grant_id=$1 FOR UPDATE`,[id,olderThanMinutes])).rows){

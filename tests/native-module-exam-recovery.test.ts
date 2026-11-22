@@ -10,6 +10,7 @@ import {Ledger} from '../src/ledger.ts';
 import {Capacity} from '../src/capacity.ts';
 import {NativeExecutionRequest,NativeExecutionSupervisor,ModuleExamRecoveryPreserved} from '../src/native-execution-supervisor.ts';
 import {runPersonalMaintenance} from '../src/personal-maintenance.ts';
+import {releaseDeadPersonalGrants} from '../src/personal-runtime.ts';
 import {maintenanceCliFailureText} from '../src/personal-maintenance-cli.ts';
 import {nativePlanningExecutorDigest} from '../src/native-planning-contract.ts';
 import {nativeExecutionExecutorDigest} from '../src/native-execution-contract.ts';
@@ -31,6 +32,12 @@ async function fakeDocker(socket:string,state:Fake){
   res.setHeader('content-type','application/json');
   if(state.unavailable){res.statusCode=503;res.end();return;}
   const container=(ref:string)=>state.containers.get(ref)??[...state.containers.values()].find(item=>item.Id===ref);
+  if(method==='GET'&&url.startsWith('/v1.44/containers/json?')){
+   const {label:[filter]}=JSON.parse(new URL(url,'http://localhost').searchParams.get('filters')!);
+   const [name,value]=filter.split('=');
+   res.end(JSON.stringify([...state.containers.values()].filter(item=>item.Config.Labels[name]===value).map(item=>({Id:item.Id}))));
+   return;
+  }
   if(method==='GET'&&url.startsWith('/v1.44/containers/')&&url.endsWith('/json')){
    const found=container(decodeURIComponent(url.slice('/v1.44/containers/'.length,-'/json'.length)));
    res.statusCode=found?200:404;res.end(JSON.stringify(found??{message:'no such container'}));return;
@@ -59,7 +66,7 @@ async function fakeDocker(socket:string,state:Fake){
  return ()=>new Promise<void>(resolve=>server.close(()=>resolve()));
 }
 
-test('passive module-exam recovery retires only a proven never-started attempt, preserves the grant otherwise, and replays safely',{skip:!process.env.AC_TEST_DATABASE_URL},async()=>{
+test('passive module-exam recovery retires only a proven never-started attempt, preserves the grant otherwise, and replays safely',{skip:!process.env.AC_TEST_DATABASE_URL},async t=>{
  const base=process.env.AC_TEST_DATABASE_URL;if(!base)throw Error('ISOLATED_DATABASE_REQUIRED');
  const fixture=await isolatedDatabase(base,'modexamrec');
  const db=new Ledger(fixture.url),area=await mkdtemp(join(tmpdir(),'ac-modexam-rec-'));
@@ -100,13 +107,14 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
   const user=`${process.getuid?.()}:${process.getgid?.()}`;
 
   type Plant={workflow?:string;module?:string;intentState?:string;runStatus?:string;grantState?:string;state?:string;workerId?:string;launchDigest?:string;networkId?:string|null;
+   messageModule?:string;noRun?:boolean;bindManagerEpoch?:boolean;
    tools?:'created'|'running'|'absent';noNetwork?:boolean;noRequest?:boolean;plainRequest?:boolean;context?:string;siblings?:number};
-  const insertIntent=async(contextId:string,workflow:string,module:string,state:string,runStatus:string)=>{
+  const insertIntent=async(contextId:string,workflow:string,module:string,state:string,runStatus:string,messageModule=module,noRun=false,epoch=1)=>{
    const intentId=randomUUID();
-   const command={schemaVersion:1 as const,intentId,deliveryAttemptId:randomUUID(),contextId,policyRevision:0,action:'plan.start' as const,payload:{workflow,messageRef:`${module}:${project}:${commit}`,projectId:project,commit}};
-   await db.pool.query(`INSERT INTO ac_intents (id,context_id,principal_id,digest,command,operation_id,run_id,manager_epoch,plan_revision) VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,1,0)`,
-    [intentId,contextId,owner,digest(command),JSON.stringify(command),randomUUID(),randomUUID()]);
-   await db.pool.query(`INSERT INTO ac_verify_runs (id,project_id,context_id,intent_id,principal_id,commit_id,status,report_dir,module) VALUES ($1,$2,$3,$4,$5,$6,$7,'pending',$8)`,
+   const command={schemaVersion:1 as const,intentId,deliveryAttemptId:randomUUID(),contextId,policyRevision:0,action:'plan.start' as const,payload:{workflow,messageRef:`${messageModule}:${project}:${commit}`,projectId:project,commit}};
+   await db.pool.query(`INSERT INTO ac_intents (id,context_id,principal_id,digest,command,operation_id,run_id,manager_epoch,plan_revision) VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,0)`,
+    [intentId,contextId,owner,digest(command),JSON.stringify(command),randomUUID(),randomUUID(),epoch]);
+   if(!noRun)await db.pool.query(`INSERT INTO ac_verify_runs (id,project_id,context_id,intent_id,principal_id,commit_id,status,report_dir,module) VALUES ($1,$2,$3,$4,$5,$6,$7,'pending',$8)`,
     [randomUUID(),project,contextId,intentId,owner,commit,runStatus,module]);
    await db.pool.query('UPDATE ac_intents SET state=$2 WHERE id=$1',[intentId,state]);
    return intentId;
@@ -129,7 +137,8 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
   /** The aggregated real scenario: the intent is finished, other attempts are terminal, and this one is uncertain with only a Created tools container. */
   const plant=async(o:Plant={})=>{
    const contextId=o.context??examContext,epoch=await epochOf(contextId);
-   const intentId=await insertIntent(contextId,o.workflow??'security-verify-readonly-v1',o.module??'qa',o.intentState??'failed',o.runStatus??'failed');
+   const intentId=await insertIntent(contextId,o.workflow??'security-verify-readonly-v1',o.module??'qa',o.intentState??'failed',o.runStatus??'failed',
+    o.messageModule,o.noRun,o.bindManagerEpoch?epoch:1);
    for(let i=0;i<(o.siblings??3);i++){
     const sibling=randomUUID(),siblingGrant=await insertGrant(intentId,contextId,Number(epoch),'released',{executionStarted:true,jobId:sibling});
     await insertJob({jobId:sibling,intentId,grantId:siblingGrant,contextId,sessionId:randomUUID(),inputDigest:digest({sibling}),state:'failed',epoch:Number(epoch),networkId:hex(),workerId:hex(),receipt:{terminal:true}});
@@ -538,10 +547,11 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
   `);
   const cliEnv={...process.env,NODE_OPTIONS:'--require='+preload};
   // Asynchronous on purpose: the fake Docker lives in this process and must keep answering while the command runs.
-  const cli=(...args:string[])=>new Promise<{status:number;stdout:string;stderr:string}>(resolve=>{
-   execFile(process.execPath,['scripts/personal-maintenance.mjs',installationFile,...args],{encoding:'utf8',env:cliEnv},(error,stdout,stderr)=>
+  const personalCli=(script:string,...args:string[])=>new Promise<{status:number;stdout:string;stderr:string}>(resolve=>{
+   execFile(process.execPath,[script,installationFile,...args],{encoding:'utf8',env:cliEnv},(error,stdout,stderr)=>
     resolve({status:error?Number((error as NodeJS.ErrnoException & {code?:number}).code??1):0,stdout,stderr}));
   });
+  const cli=(...args:string[])=>personalCli('scripts/personal-maintenance.mjs',...args);
 
   reset();
   // The aggregated real case: 47 terminal sibling attempts on the same intent.
@@ -576,6 +586,109 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
   const securityModule=await plant({module:'verify',context:mainContext});
   await refuse(securityModule,/NATIVE_EXECUTION_SCOPE_MISMATCH/,()=>supervisor.recoverNeverStartedModuleExam(owner,verifyAuthority,securityModule.jobId,scope));
   await db.releaseLease(verifyAuthority);
+
+  const plantOrphan=(options:Plant)=>plant({...options,bindManagerEpoch:true});
+  const recover=(job:Awaited<ReturnType<typeof plant>>,apply=true)=>
+   supervisor.recoverOrphanedExam(owner,job.jobId,{...scope,contextId:job.contextId},apply);
+  const writeResult=(job:Awaited<ReturnType<typeof plant>>,exitCode=1,resultJobId=job.jobId)=>
+   writeFile(join(job.root,'output','execution-result.json'),JSON.stringify({
+    schemaVersion:1,jobId:resultJobId,output:'resultado preservado',normalizedTokensUsed:null,
+    usageWindows:null,nativeSessionId:null,failureCode:exitCode?'EXECUTION_CANCELED':null,exitCode,
+   }),{mode:0o600});
+
+  await t.test('a CLI reconcilia segurança com resultado, libera a vaga e registra a retirada',async()=>{
+   reset();
+   const orphan=await plantOrphan({module:'verify',context:mainContext,tools:'absent',state:'running',grantState:'running',plainRequest:true,
+    workerId:hex(),launchDigest:hex(),intentState:'accepted',siblings:0});
+   await writeResult(orphan);
+   const before=await snapshot(orphan.jobId,orphan.grantId,orphan.intentId);
+   assert.equal(await recover(orphan,false),'eligible');
+   assert.deepEqual(await snapshot(orphan.jobId,orphan.grantId,orphan.intentId),before);
+   assert.deepEqual(docker.mutations,[]);
+   const applied=await cli('--recuperar-exame-orfao',orphan.jobId);
+   assert.equal(applied.status,0,applied.stderr);
+   assert.match(applied.stdout,/reconciliado, vaga liberada/);
+   const after=await snapshot(orphan.jobId,orphan.grantId,orphan.intentId);
+   assert.equal(after.job.state,'failed');
+   assert.equal(after.job.receipt.payload.workerExitCode,1);
+   assert.equal(after.grant.state,'released');
+   assert.equal(after.grant.physical_receipt.failureCode,'EXECUTION_CANCELED');
+   assert.equal(after.intent.state,'failed');
+   assert.equal(after.journal.state,'removed');
+   assert.deepEqual(docker.mutations,['DELETE network '+orphan.networkId]);
+   assert.equal(await recover(orphan),'already_recovered');
+   const replay=await db.acquire(owner,mainContext,randomUUID(),'verify-replay',60);
+   try{
+    const reconciled=await supervisor.reconcile(owner,replay,orphan.request);
+    assert.equal(reconciled.state,'failed');
+    assert.ok('failureCode' in reconciled && reconciled.failureCode==='EXECUTION_CANCELED');
+   }finally{await db.releaseLease(replay);}
+  });
+
+  await t.test('a recuperação recusa lease válido, contêiner, resultado errado e falta de prova',async()=>{
+   reset();
+   const live=await lease();
+   const orphan=await plantOrphan({state:'running',grantState:'running',tools:'running',siblings:0});
+   await writeResult(orphan);
+   const before=await snapshot(orphan.jobId,orphan.grantId,orphan.intentId);
+   docker.containers.delete(orphan.toolsName);
+   await assert.rejects(recover(orphan),/NATIVE_ORPHAN_ACTIVE_LEASE/);
+   await db.releaseLease(live);
+   // A renamed container that is not journaled still has the job label.
+   docker.containers.set('renamed-'+orphan.jobId,orphan.body);
+   await assert.rejects(recover(orphan),/NATIVE_ORPHAN_CONTAINER_PRESENT/);
+   docker.containers.delete('renamed-'+orphan.jobId);
+   await writeResult(orphan,1,randomUUID());
+   await assert.rejects(recover(orphan),/NATIVE_EXECUTION_OUTPUT_INVALID/);
+   await rm(join(orphan.root,'output','execution-result.json'));
+   await assert.rejects(recover(orphan),/NATIVE_EXECUTION_OUTPUT_MISSING/);
+   await releaseDeadPersonalGrants(db,-1,{containers:async()=>[]});
+   assert.deepEqual(await snapshot(orphan.jobId,orphan.grantId,orphan.intentId),before);
+   assert.deepEqual(docker.mutations,[]);
+  });
+
+  await t.test('a retenção prova e aplica a recuperação de módulo e de design sem início',async()=>{
+   reset();
+   const module=await plantOrphan({tools:'absent',state:'running',grantState:'running',siblings:0});
+   await writeResult(module,0);
+   const design=await db.createContext(owner,project,randomUUID());
+   await db.pool.query("INSERT INTO ac_exam_contexts(project_id,module,context_id) VALUES($1,'design',$2)",[project,design]);
+   await db.releaseLease(await db.acquire(owner,design,randomUUID(),'personal-design',60));
+   const unstarted=await plantOrphan({context:design,workflow:'design-readonly-v1',messageModule:'design-exam',noRun:true,
+    plainRequest:true,tools:'absent',networkId:null,siblings:0});
+   const preview=await cli('--retencao-automatica');
+   assert.equal(preview.status,0,preview.stdout+preview.stderr);
+   assert.match(preview.stdout,new RegExp(module.jobId+'.*elegível'));
+   assert.match(preview.stdout,new RegExp(unstarted.jobId+'.*elegível'));
+   assert.equal((await snapshot(module.jobId,module.grantId,module.intentId)).job.state,'running');
+   assert.equal((await snapshot(unstarted.jobId,unstarted.grantId,unstarted.intentId)).grant.state,'uncertain');
+   const applied=await cli('--retencao-automatica','--aplicar');
+   assert.equal(applied.status,0,applied.stdout+applied.stderr);
+   assert.match(applied.stdout,new RegExp(module.jobId+'.*reconciliado'));
+   assert.match(applied.stdout,new RegExp(unstarted.jobId+'.*reconciliado'));
+   const done=await snapshot(module.jobId,module.grantId,module.intentId);
+   assert.equal(done.grant.state,'released');
+   assert.equal(done.job.receipt.payload.exitCode,1);
+   assert.equal(done.job.receipt.payload.workerExitCode,0);
+   const beforeLaunch=await snapshot(unstarted.jobId,unstarted.grantId,unstarted.intentId);
+   assert.equal(beforeLaunch.job.receipt.payload.executionStarted,false);
+   assert.equal(beforeLaunch.grant.state,'released');
+   assert.equal(beforeLaunch.journal.state,'removed');
+   assert.deepEqual(docker.forbidden,[]);
+  });
+
+  await t.test('a CLI de módulo recupera apenas os jobs do próprio contexto ao abrir',async()=>{
+   await db.createContext(owner,project,randomUUID());
+   const own=await plantOrphan({state:'running',grantState:'running',tools:'absent',siblings:0});
+   const foreign=await plantOrphan({module:'verify',context:mainContext,state:'running',grantState:'running',tools:'absent',plainRequest:true,siblings:0});
+   await writeResult(own);
+   await writeResult(foreign);
+   // The missing report rejects this command after startup, without starting an exam.
+   const command=await personalCli('scripts/personal-qa.mjs',project,'--corrigir',randomUUID(),'ACH-001');
+   assert.equal(command.status,1);
+   assert.equal((await snapshot(own.jobId,own.grantId,own.intentId)).grant.state,'released',command.stderr);
+   assert.equal((await snapshot(foreign.jobId,foreign.grantId,foreign.intentId)).grant.state,'running');
+  });
  }finally{
   for(const close of closers)await close().catch(()=>undefined);
   await db.close().catch(()=>undefined);

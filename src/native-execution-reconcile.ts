@@ -118,6 +118,14 @@ export abstract class NativeExecutionReconciler extends NativeExecutionExamRecov
     this.verifyModuleExamNeverStartedReceipt(job,grant,receipt,authority.contextId);
     return {state:'failed',receipt,output:'',artifact:null,failureCode:grant.physical_receipt.reason};
    }
+   if(payload.orphanedExam===true){
+    const saved=(await this.ledger.pool.query('SELECT * FROM ac_native_terminal_retirements WHERE job_id=$1',[input.jobId])).rows[0];
+    if(!saved)throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
+    this.verifyUnstartedRetirement(saved,this.orphanedExamBinding(job,receipt));
+    const result=payload.executionStarted===false?null:await this.orphanedExamResult(input.jobId);
+    if((result?digest(result):null)!==payload.resultDigest)throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');
+    return {state:'failed',receipt,output:result?.output??'',artifact:null,failureCode:payload.failureCode};
+   }
    const result=await this.readResult(input,payload.exitCode);
    if(payload.outputDigest!==digest(result.output)||result.exitCode!==payload.workerExitCode||result.jobId!==input.jobId||
     (input.moduleExam&&grant.physical_receipt.failureCode!==result.failureCode))throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');

@@ -139,7 +139,7 @@ export const workerEntrypoint=['node','/opt/agent-control/dist/src/native-execut
 /** Remove only the private network identified by the signed terminal receipt.
  * Caller must hold the fenced job lock and have confirmed both containers absent. */
 export async function retireNativePrivateNetwork(docker:Pick<DockerDaemon,'inspectPrivateNetwork'|'removePrivateNetwork'>,
- identity:{networkId:string;providerNetworkId:string;jobId:string;inputDigest:string}){
+ identity:{networkId:string;providerNetworkId:string;jobId:string;inputDigest:string},apply=true){
  const {networkId,providerNetworkId,jobId,inputDigest}=identity;
  if(!/^[a-f0-9]{64}$/.test(networkId)||networkId===providerNetworkId||!Id.safeParse(jobId).success||!Hash.safeParse(inputDigest).success)
   throw new Refusal('NATIVE_RETIREMENT_NETWORK_UNCONFIRMED');
@@ -150,10 +150,15 @@ export async function retireNativePrivateNetwork(docker:Pick<DockerDaemon,'inspe
    !labels||labels['agent-control.contract']!=='native-execution-v1'||labels['agent-control.job']!==jobId||labels['agent-control.launch']!==inputDigest||
    !containers||typeof containers!=='object'||Array.isArray(containers)||Object.keys(containers).length!==0)
    throw new Refusal('NATIVE_RETIREMENT_NETWORK_UNCONFIRMED');
-  await docker.removePrivateNetwork(networkId);
+  if(apply)await docker.removePrivateNetwork(networkId);
  }
- if(await docker.inspectPrivateNetwork(networkId))throw new Refusal('NATIVE_RETIREMENT_NETWORK_UNCONFIRMED');
+ if(apply&&await docker.inspectPrivateNetwork(networkId))throw new Refusal('NATIVE_RETIREMENT_NETWORK_UNCONFIRMED');
 }
+
+/** Candidate filter shared by maintenance and the generic grant sweep. Full scope is checked under lock. */
+export const orphanedExamIntentSql=`(j.role IN ('specialist','reviewer') AND
+ (i.command->'payload'->>'workflow'='security-verify-readonly-v1' OR
+  (i.command->'payload'->>'workflow'='design-readonly-v1' AND i.command->'payload'->>'messageRef' LIKE 'design-exam:%')))`;
 /** Specialist or reviewer of the readonly security exam. Programmer, qa and judge never match. */
 export function readonlySecurityExam(workflow:unknown,role:unknown):boolean{
  return workflow==='security-verify-readonly-v1'&&(role==='specialist'||role==='reviewer');

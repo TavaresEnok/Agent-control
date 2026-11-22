@@ -18,6 +18,7 @@ import {Ledger} from './ledger.ts';
 import {composePersonalRuntime} from './personal-runtime.ts';
 import type {DesignWorker} from './design-types.ts';
 import {containFailure} from './failure-log.ts';
+import {recoverPersonalOrphanedExams} from './personal-orphaned-exams.ts';
 
 const MAX_DESIGN_FILES = 400;
 const MAX_DESIGN_FILE_BYTES = 200_000;
@@ -392,6 +393,7 @@ export async function resolvePersonalDesign(
     const commit = await readHead(project.repo);
     const principal = project.owner;
     const exam = await ledger.ensureExamContext(principal, project.id, 'design');
+    await recoverPersonalOrphanedExams(config,ledger,{contextId:exam.contextId},true);
     authority = await acquirePersonalDesign(ledger, principal, exam.contextId);
     if (exam.mainCapacityPolicyRevision !== null && exam.capacityPolicyRevision !== exam.mainCapacityPolicyRevision) {
       await new Capacity(ledger).assignPolicy(principal, exam.contextId, exam.mainCapacityPolicyRevision);
