@@ -38,6 +38,15 @@ JS_UNAVAILABLE = "parser JavaScript/TypeScript indisponível ou interrompido"
 JS_WORKER = Path(__file__).resolve().with_name("lgpd_javascript.mjs")
 PRESIDIO_LOG = logging.getLogger("presidio-analyzer")
 PRESIDIO_TIMEOUT = "Regex pattern '%s' timed out after %s seconds, skipping."
+# Nome e telefone em código raramente são dado pessoal real: um achado informativo por arquivo.
+AGGREGATED_ENTITIES = {"PERSON", "PHONE_NUMBER"}
+PERSON_MIN_SCORE = 0.85
+PERSON_IGNORED_PATH = re.compile(
+    r"(?:^|/)(?:i18n|locales?|translations?|fixtures?|__fixtures__|tests?|__tests__|spec|testdata)/"
+    r"|\.(?:test|spec)\.[^/]+$",
+    re.IGNORECASE,
+)
+ENTITY_FINDINGS_PER_FILE = 10
 
 
 def valid_cpf(value):
@@ -223,15 +232,37 @@ def inspect_entities(analyzer, text, file, version, report, diagnostics):
     diagnostics.timed_out = False
     for language, requested in (("pt", ["BR_CPF", "PERSON"]), ("en", ["EMAIL_ADDRESS", "PHONE_NUMBER", "PERSON"])):
         for entity in analyzer.analyze(text=text, language=language, entities=requested):
+            if entity.entity_type == "PERSON" and (entity.score < PERSON_MIN_SCORE or PERSON_IGNORED_PATH.search(file)):
+                continue
             line = bisect_right(starts, entity.start)
             entities.setdefault((line, entity.entity_type), set()).add((entity.start, entity.end))
+    grouped = {}
+    reported = Counter()
     for (line, kind), matches in sorted(entities.items()):
+        if kind in AGGREGATED_ENTITIES:
+            grouped.setdefault(kind, []).append((line, len(matches)))
+            continue
+        reported[kind] += 1
+        if reported[kind] > ENTITY_FINDINGS_PER_FILE:
+            continue
         report.find(
             "presidio-analyzer", "PII_" + kind, file, line, "media" if kind == "BR_CPF" else "baixa",
             "Possível dado pessoal presente no texto.",
             f"Entidade {kind}; ocorrências distintas na linha: {len(matches)}. Valor suprimido.",
         )
+    for kind, rows in sorted(grouped.items()):
+        lines = [line for line, _ in rows]
+        report.find(
+            "presidio-analyzer", "PII_" + kind, file, lines[0], "informativa",
+            "Possíveis dados pessoais presentes no texto, agregados por arquivo.",
+            f"Entidade {kind}; ocorrências distintas={sum(count for _, count in rows)} em {len(lines)} linhas; "
+            f"primeiras linhas: {', '.join(map(str, lines[:3]))}. Valores suprimidos.",
+        )
+    omitted = sum(count - ENTITY_FINDINGS_PER_FILE for count in reported.values() if count > ENTITY_FINDINGS_PER_FILE)
     status = "failed" if diagnostics.timed_out else "ok"
     detail = "tempo limite de padrão atingido. Resultados parciais" if diagnostics.timed_out else "português e inglês"
-    report.cover("presidio-analyzer:file", version, status, f"{file} | {detail}. Tipos por linha={len(entities)}")
+    detail += f". Tipos por linha={len(entities)}"
+    if omitted:
+        detail += f". Linhas além de {ENTITY_FINDINGS_PER_FILE} por entidade fora dos achados={omitted}"
+    report.cover("presidio-analyzer:file", version, status, f"{file} | {detail}")
     return not diagnostics.timed_out
