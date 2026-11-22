@@ -175,3 +175,13 @@ test('o contêiner do exame ganha nome conferido, para ser removido pelo host', 
   assert.throws(() => designRunArguments({...base, name: 'ac-nexo-retratos'}), refusal('DESIGN_PATH_FORBIDDEN'));
   assert.throws(() => designRunArguments({...base, name: `${name};rm`}), refusal('DESIGN_PATH_FORBIDDEN'));
 });
+
+test('o prazo da imagem cresce com o plano, entre 20 min e 2 h', async () => {
+  const {designImageTimeoutMs} = await import('../src/design-image-run.ts');
+  assert.equal(designImageTimeoutMs({routes: []}), 1_200_000);
+  assert.equal(designImageTimeoutMs(undefined), 1_200_000);
+  const route = {route: '/painel', themes: ['claro', 'escuro'], states: [{name: 'padrao'}, {name: 'logado'}]};
+  const chatisp = designImageTimeoutMs({routes: Array.from({length: 11}, () => route), viewports: [375, 768, 1440]});
+  assert.ok(chatisp > 1_200_000 && chatisp <= 7_200_000, String(chatisp));
+  assert.equal(designImageTimeoutMs({routes: Array.from({length: 40}, () => route), viewports: [375, 768, 1440]}), 7_200_000);
+});

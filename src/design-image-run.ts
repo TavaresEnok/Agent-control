@@ -314,6 +314,26 @@ async function defaultSpawn(argv: readonly string[], timeoutMs: number, name?: s
 }
 
 /**
+ * Prazo da imagem proporcional ao plano. Cada rota custa o Lighthouse em celular e desktop
+ * (até 2 min cada), axe e pa11y nas larguras, e a sonda de render e teclado em cada tema e
+ * estado. Fica entre 20 min, o prazo antigo, e 2 h.
+ */
+export function designImageTimeoutMs(plan: unknown): number {
+  const routes = (plan as {routes?: unknown} | null)?.routes;
+  if (!Array.isArray(routes)) return 1_200_000;
+  const viewports = (plan as {viewports?: unknown}).viewports;
+  const widths = Array.isArray(viewports) && viewports.length > 0 ? viewports.length : 3;
+  let cells = 0;
+  for (const route of routes) {
+    const themes = Array.isArray((route as {themes?: unknown})?.themes) ? (route as {themes: unknown[]}).themes.length : 1;
+    const states = Array.isArray((route as {states?: unknown})?.states) ? (route as {states: unknown[]}).states.length : 1;
+    cells += Math.max(1, themes) * Math.max(1, states);
+  }
+  const estimate = 300_000 + routes.length * 240_000 + cells * widths * 15_000;
+  return Math.min(7_200_000, Math.max(1_200_000, estimate));
+}
+
+/**
  * Sobe a imagem com designRunArguments. O plano vai em pedido.json, fora do argv,
  * para os testes do contrato do contêiner continuarem iguais.
  * O diretório fica 0o1777 (sticky) só durante a escrita do contêiner: o processo
@@ -358,7 +378,7 @@ export async function executeDesignImage(input: {
       const code = error instanceof Refusal ? error.code : 'DESIGN_IMAGE_FAILED';
       return {ok: false, code, ...emptyExecution(code), shots: []};
     }
-    const timeoutMs = input.timeoutMs ?? 1_200_000;
+    const timeoutMs = input.timeoutMs ?? designImageTimeoutMs(input.plan);
     let spawned: {code: number | null; stderr: string};
     try {
       spawned = input.run ? await input.run(argv, output) : await defaultSpawn(argv, timeoutMs, containerName);
