@@ -732,3 +732,51 @@ test('a retenção das bases recusa quando não consegue ler current.json', asyn
     await rm(data, {recursive: true, force: true});
   }
 });
+
+test('a poda seguinte apaga a pasta de descarte órfã, ou devolve a base se uma rodada viva a reivindicou', async () => {
+  const data = await privateDirectory();
+  try {
+    const parent = join(data, 'verify-db');
+    await mkdir(parent, {recursive: true, mode: 0o700});
+    const current = join(parent, '20261122-040008');
+    await mkdir(current, {mode: 0o777});
+    await writeFile(join(parent, 'current.json'), JSON.stringify({
+      directory: current, fetchedAt: new Date().toISOString(), manifestSha256: 'abc',
+    }) + '\n', {mode: 0o600});
+    const orphan = join(parent, '.descarte-20261120-052924-0a1b2c3d-0000-4000-8000-000000000001');
+    await mkdir(orphan, {mode: 0o777});
+    await writeFile(join(orphan, 'marker'), 'x');
+    const held = join(parent, '.descarte-20261121-040000-0a1b2c3d-0000-4000-8000-000000000002');
+    await mkdir(held, {mode: 0o777});
+    await writeFile(join(held, 'manifest.json'), '{}');
+    await claimVerifyDatabaseStamp(data, join(parent, '20261121-040000'), runLive);
+    assert.deepEqual(await pruneVerifyDatabaseStamps(data, image, undefined, {keepRecent: 0}), []);
+    const names = (await readdir(parent)).sort();
+    assert.deepEqual(names, ['20261121-040000', '20261122-040008', 'current.json', 'in-use']);
+    assert.equal(await verifyDatabaseStampPresent(join(parent, '20261121-040000')), true);
+    await releaseVerifyDatabaseStamp(data, join(parent, '20261121-040000'), runLive);
+  } finally {
+    await rm(data, {recursive: true, force: true});
+  }
+});
+
+test('uma poda espera a outra: com a trava de um processo vivo nada é apagado', async () => {
+  const data = await privateDirectory();
+  try {
+    const parent = join(data, 'verify-db');
+    await mkdir(parent, {recursive: true, mode: 0o700});
+    for (const name of ['20261120-052924', '20261122-040008']) await mkdir(join(parent, name), {mode: 0o777});
+    await writeFile(join(parent, 'current.json'), JSON.stringify({
+      directory: join(parent, '20261122-040008'), fetchedAt: new Date().toISOString(), manifestSha256: 'abc',
+    }) + '\n', {mode: 0o600});
+    await writeFile(join(parent, '.poda.lock'), JSON.stringify({pid: process.ppid}) + '\n', {mode: 0o600});
+    assert.deepEqual(await pruneVerifyDatabaseStamps(data, image, undefined, {keepRecent: 0}), []);
+    assert.ok((await stat(join(parent, '20261120-052924'))).isDirectory());
+    // Trava de um processo morto é trocada, e a poda segue.
+    await writeFile(join(parent, '.poda.lock'), JSON.stringify({pid: 2 ** 22 + 12345}) + '\n', {mode: 0o600});
+    assert.deepEqual(await pruneVerifyDatabaseStamps(data, image, undefined, {keepRecent: 0}), ['20261120-052924']);
+    await assert.rejects(stat(join(parent, '.poda.lock')));
+  } finally {
+    await rm(data, {recursive: true, force: true});
+  }
+});

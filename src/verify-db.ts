@@ -35,6 +35,8 @@ const RUN_CLAIM_FILE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 const IN_USE_DIR = 'in-use';
 /** Stamps being discarded are renamed to this prefix first; it does not match a stamp name. */
 const DISCARD_PREFIX = '.descarte-';
+const DISCARD_NAME = /^\.descarte-(\d{8}-\d{6}(?:-\d+)?)-[0-9a-f-]{36}$/;
+const PRUNE_LOCK = '.poda.lock';
 const CLAIM_MAX_BYTES = 8192;
 
 type StampClaim = {stamp: string; pid: number; claimedAt: string};
@@ -267,8 +269,11 @@ export async function refreshVerifyDatabases(input: RefreshVerifyDatabasesInput)
   const downloadClaim = randomUUID();
   try {
     await claimVerifyDatabaseStamp(root, stamp, downloadClaim);
+    // A pressured prune may have taken the empty folder between its creation and this claim.
+    if (await stampPresence(stamp) !== 'yes') throw new Error('VERIFY_DB_FETCH_FAILED');
   } catch {
-    await discardStamp(stamp, parent, image);
+    await releaseVerifyDatabaseStamp(root, stamp, downloadClaim).catch(() => undefined);
+    await discardStamp(stamp, parent, image).catch(() => undefined);
     throw new Error('VERIFY_DB_FETCH_FAILED');
   }
   try {
@@ -435,6 +440,15 @@ async function readClaimFile(path: string): Promise<StampClaim | null> {
   }
 }
 
+async function claimFileGone(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT';
+  }
+}
+
 async function unlinkClaimFile(path: string): Promise<void> {
   let info;
   try {
@@ -477,6 +491,8 @@ async function liveClaimStamps(parent: string, mutate = true, strict = false): P
       continue;
     }
     if (!claim) {
+      // A claim released between the listing and the read protects nothing any more.
+      if (await claimFileGone(path)) continue;
       if (strict) throw new Error('VERIFY_DB_CLAIM_UNREADABLE');
       console.error(JSON.stringify({event: 'VERIFY_DB_PRUNE_FAILED', reason: 'in-use'}));
       continue;
@@ -620,8 +636,92 @@ export async function pruneVerifyDatabaseStamps(
 ): Promise<string[] | null> {
   const root = assertDataDirectory(dataDirectory);
   const parent = join(root, 'verify-db');
-  const discard = await verifyDatabaseStampsToDiscard(root, options.keepRecent ?? 2);
+  const lock = await takePruneLock(parent);
+  if (lock === 'busy') return [];
+  try {
+    return await pruneHoldingLock(root, parent, image, spawn, options.keepRecent ?? 2);
+  } finally {
+    if (lock) await unlinkClaimFile(lock).catch(() => undefined);
+  }
+}
+
+/**
+ * One prune at a time. The lock is a 0600 file with the pid; a dead holder's lock is replaced. Returns the lock path,
+ * 'busy' when a live process holds it, or null when there is no verify-db directory yet.
+ */
+async function takePruneLock(parent: string): Promise<string | 'busy' | null> {
+  try {
+    const info = await lstat(parent);
+    if (!info.isDirectory() || info.isSymbolicLink()) return null;
+  } catch {
+    return null;
+  }
+  const path = join(parent, PRUNE_LOCK);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await writeFile(path, JSON.stringify({pid: process.pid}) + '\n', {mode: 0o600, flag: 'wx'});
+      return path;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
+    let holder: number | undefined;
+    try {
+      const parsed = JSON.parse(await readFile(path, 'utf8')) as {pid?: unknown};
+      holder = typeof parsed.pid === 'number' && Number.isInteger(parsed.pid) ? parsed.pid : undefined;
+    } catch {
+      holder = undefined;
+    }
+    if (holder !== undefined && claimHolderAlive(holder)) return 'busy';
+    await unlinkClaimFile(path);
+  }
+  return 'busy';
+}
+
+/** Folders a dead prune left under the discard prefix: put back when a live run claims the stamp, deleted otherwise. */
+async function settleDiscardOrphans(parent: string, image: string | (() => Promise<string>), spawn?: CommandRunner): Promise<void> {
+  let entries;
+  try {
+    entries = await readdir(parent, {withFileTypes: true});
+  } catch {
+    return;
+  }
+  const orphans = entries.filter(entry => entry.isDirectory() && !entry.isSymbolicLink() && entry.name.startsWith(DISCARD_PREFIX));
+  if (orphans.length === 0) return;
+  let claimed: Set<string>;
+  try {
+    claimed = new Set((await liveClaimStamps(parent, false, true)).map(stamp => directStampName(parent, stamp)).filter((name): name is string => !!name));
+  } catch {
+    return;
+  }
+  for (const entry of orphans) {
+    const match = DISCARD_NAME.exec(entry.name);
+    const name = match?.[1];
+    const aside = join(parent, entry.name);
+    if (name && claimed.has(name)) {
+      if (await stampPresence(join(parent, name)) === 'no') {
+        await rename(aside, join(parent, name)).catch(() => {
+          console.error(JSON.stringify({event: 'VERIFY_DB_PRUNE_FAILED', stamp: name, reason: 'restore'}));
+        });
+      }
+      continue;
+    }
+    await discardStamp(aside, parent, image, spawn).catch(() => {
+      console.error(JSON.stringify({event: 'VERIFY_DB_PRUNE_FAILED', stamp: entry.name, reason: 'orphan'}));
+    });
+  }
+}
+
+async function pruneHoldingLock(
+  root: string,
+  parent: string,
+  image: string | (() => Promise<string>),
+  spawn: CommandRunner | undefined,
+  keepRecent: 0 | 2,
+): Promise<string[] | null> {
+  await settleDiscardOrphans(parent, image, spawn);
+  const discard = await verifyDatabaseStampsToDiscard(root, keepRecent);
   if (!discard) return null;
+  const options = {keepRecent};
   const removed: string[] = [];
   for (const name of discard) {
     const original = join(parent, name);
