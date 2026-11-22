@@ -5,6 +5,7 @@ import {chmod, lstat, mkdir, open, readdir, readFile, rename, rm, unlink, writeF
 import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {Refusal} from './contracts.ts';
 import {VERIFY_RUNTIME_BIN, verifyDatabaseArguments} from './verify-image.ts';
+import {diskUsedPercent} from './personal-disk.ts';
 
 export type VerifyDatabaseSnapshot = {
   directory: string;
@@ -17,6 +18,8 @@ export type RefreshVerifyDatabasesInput = {
   image?: string;
   spawn?: (args: readonly string[]) => Promise<number>;
   now?: Date;
+  /** Disk use of the data directory; tests replace it. Undefined keeps the normal retention of two recent stamps. */
+  usedDiskPercent?: () => Promise<number | undefined>;
 };
 
 type ManifestFile = {path: string; sha256: string; bytes: number};
@@ -30,6 +33,10 @@ const STAMP_DIRECTORY = /^\d{8}-\d{6}(?:-\d+)?$/;
 const RUN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const RUN_CLAIM_FILE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$/;
 const IN_USE_DIR = 'in-use';
+/** Stamps being discarded are renamed to this prefix first; it does not match a stamp name. */
+const DISCARD_PREFIX = '.descarte-';
+const DISCARD_NAME = /^\.descarte-(\d{8}-\d{6}(?:-\d+)?)-[0-9a-f-]{36}$/;
+const PRUNE_LOCK = '.poda.lock';
 const CLAIM_MAX_BYTES = 8192;
 
 type StampClaim = {stamp: string; pid: number; claimedAt: string};
@@ -134,7 +141,7 @@ export function discardStampArguments(stamp: string, parent: string, image: stri
   ];
 }
 
-async function discardStamp(stamp: string, parent: string, image: string, spawn?: CommandRunner): Promise<void> {
+async function discardStamp(stamp: string, parent: string, image: string | (() => Promise<string>), spawn?: CommandRunner): Promise<void> {
   const resolvedStamp = assertStampInside(stamp, parent);
   try {
     await rm(resolvedStamp, {recursive: true, force: true});
@@ -145,7 +152,12 @@ async function discardStamp(stamp: string, parent: string, image: string, spawn?
   }
   // The downloader runs as uid 65532 and may leave a mode-0700 directory the host user cannot read.
   // Root keeps only the caps needed to chmod that tree; the rootfs stays read-only.
-  const args = discardStampArguments(stamp, parent, image);
+  let args: readonly string[];
+  try {
+    args = discardStampArguments(stamp, parent, typeof image === 'string' ? image : await image());
+  } catch {
+    throw new Error('VERIFY_DB_FETCH_FAILED');
+  }
   let opened = 1;
   try {
     opened = spawn ? await spawn(args) : await runCommand(args, 'ignore', DISCARD_TIMEOUT_MS);
@@ -253,6 +265,34 @@ export async function refreshVerifyDatabases(input: RefreshVerifyDatabasesInput)
   verifyDatabaseArguments({image, output: join(parent, formatStamp(now))});
   await ensureDatabaseRoot(parent);
   const stamp = await createStamp(parent, now, image);
+  // A concurrent prune must not take the stamp this process is still downloading.
+  const downloadClaim = randomUUID();
+  try {
+    await claimVerifyDatabaseStamp(root, stamp, downloadClaim);
+    // A pressured prune may have taken the empty folder between its creation and this claim.
+    if (await stampPresence(stamp) !== 'yes') throw new Error('VERIFY_DB_FETCH_FAILED');
+  } catch {
+    await releaseVerifyDatabaseStamp(root, stamp, downloadClaim).catch(() => undefined);
+    await discardStamp(stamp, parent, image).catch(() => undefined);
+    throw new Error('VERIFY_DB_FETCH_FAILED');
+  }
+  try {
+    return await publishStamp(input, root, parent, stamp, image, fetchedAt);
+  } finally {
+    await releaseVerifyDatabaseStamp(root, stamp, downloadClaim).catch(() => {
+      console.error(JSON.stringify({event: 'VERIFY_DB_PRUNE_FAILED', reason: 'download-claim'}));
+    });
+  }
+}
+
+async function publishStamp(
+  input: RefreshVerifyDatabasesInput,
+  root: string,
+  parent: string,
+  stamp: string,
+  image: string,
+  fetchedAt: string,
+): Promise<VerifyDatabaseSnapshot> {
   const args = verifyDatabaseArguments({image, output: stamp});
   const run = input.spawn ?? ((command) => runCommand(command, 'inherit', FETCH_TIMEOUT_MS));
   let code = 1;
@@ -286,7 +326,7 @@ export async function refreshVerifyDatabases(input: RefreshVerifyDatabasesInput)
   }
   // current.json is already published. A stubborn old stamp must not undo it or fail the refresh.
   try {
-    await pruneVerifyDatabaseStamps(root, image);
+    await pruneVerifyDatabaseStamps(root, image, undefined, {keepRecent: verifyDatabaseKeepRecent(await (input.usedDiskPercent ?? (() => measuredDiskPercent(root)))())});
   } catch {
     console.error(JSON.stringify({event: 'VERIFY_DB_PRUNE_FAILED'}));
   }
@@ -400,6 +440,15 @@ async function readClaimFile(path: string): Promise<StampClaim | null> {
   }
 }
 
+async function claimFileGone(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT';
+  }
+}
+
 async function unlinkClaimFile(path: string): Promise<void> {
   let info;
   try {
@@ -412,8 +461,12 @@ async function unlinkClaimFile(path: string): Promise<void> {
   await unlink(path);
 }
 
-/** Live claims only. A dead pid does not keep its stamp, and that claim file may be removed. */
-async function liveClaimStamps(parent: string): Promise<string[]> {
+/**
+ * Live claims only. A dead pid does not keep its stamp, and with `mutate` its claim file is removed.
+ * A claim file that cannot be read is logged and skipped; with `strict` it throws, because the stamp it protects is
+ * unknown. Strict is used under disk pressure, when no recent stamp is kept as a margin.
+ */
+async function liveClaimStamps(parent: string, mutate = true, strict = false): Promise<string[]> {
   const directory = join(parent, IN_USE_DIR);
   let info;
   try {
@@ -433,14 +486,19 @@ async function liveClaimStamps(parent: string): Promise<string[]> {
     try {
       claim = await readClaimFile(path);
     } catch {
+      if (strict) throw new Error('VERIFY_DB_CLAIM_UNREADABLE');
       console.error(JSON.stringify({event: 'VERIFY_DB_PRUNE_FAILED', reason: 'in-use'}));
       continue;
     }
     if (!claim) {
+      // A claim released between the listing and the read protects nothing any more.
+      if (await claimFileGone(path)) continue;
+      if (strict) throw new Error('VERIFY_DB_CLAIM_UNREADABLE');
       console.error(JSON.stringify({event: 'VERIFY_DB_PRUNE_FAILED', reason: 'in-use'}));
       continue;
     }
     if (!claimHolderAlive(claim.pid)) {
+      if (!mutate) continue;
       try {
         await unlinkClaimFile(path);
       } catch {
@@ -509,33 +567,48 @@ export async function releaseVerifyDatabaseStamp(dataDirectory: string, stamp: s
   await unlink(path);
 }
 
+/** From this disk use on, only the current stamp and the stamps held by a live run are kept. Each stamp has several GB. */
+export const VERIFY_DB_PRESSURE_PERCENT = 90;
+
 /**
- * Delete stamp directories except the two newest names, the one current.json
- * points at, and any stamp claimed by a live pid. Names sort chronologically.
- * A claim expires when process.kill(pid, 0) fails with ESRCH; prune may remove that file.
- * A failure to delete one stamp is logged and does not stop the others.
+ * Recent stamps kept besides the current one and the claimed ones (a run's claim, or the claim of a download in progress):
+ * two normally, none under disk pressure.
  */
-export async function pruneVerifyDatabaseStamps(dataDirectory: string, image: string, spawn?: CommandRunner): Promise<void> {
+export function verifyDatabaseKeepRecent(usedPercent: number | undefined): 0 | 2 {
+  return usedPercent !== undefined && Number.isFinite(usedPercent) && usedPercent >= VERIFY_DB_PRESSURE_PERCENT ? 0 : 2;
+}
+
+/** Disk use of the data directory, or undefined when it cannot be measured (then the normal retention applies). */
+async function measuredDiskPercent(root: string): Promise<number | undefined> {
+  try {
+    return await diskUsedPercent(root);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Stamps that a prune with `keepRecent` would discard. Null when current.json or the claims cannot be read: nothing is discarded. */
+export async function verifyDatabaseStampsToDiscard(dataDirectory: string, keepRecent: 0 | 2 = 2, mutate = true): Promise<string[] | null> {
   const root = assertDataDirectory(dataDirectory);
   const parent = join(root, 'verify-db');
   const names = await listStampNames(parent);
-  if (names.length === 0) return;
+  if (names.length === 0) return [];
   let currentName: string | null = null;
   try {
     const current = await readCurrentVerifyDatabase(root);
     currentName = current ? directStampName(parent, current.directory) : null;
   } catch {
     console.error(JSON.stringify({event: 'VERIFY_DB_PRUNE_FAILED', reason: 'current'}));
-    return;
+    return null;
   }
   let inUse: string[];
   try {
-    inUse = await liveClaimStamps(parent);
+    inUse = await liveClaimStamps(parent, mutate, keepRecent === 0);
   } catch {
     console.error(JSON.stringify({event: 'VERIFY_DB_PRUNE_FAILED', reason: 'in-use'}));
-    return;
+    return null;
   }
-  const keep = new Set(names.slice(-2));
+  const keep = new Set(keepRecent > 0 ? names.slice(-keepRecent) : []);
   if (currentName) keep.add(currentName);
   for (const used of inUse) {
     const name = directStampName(parent, used);
@@ -544,12 +617,175 @@ export async function pruneVerifyDatabaseStamps(dataDirectory: string, image: st
     if (presence === 'no') continue;
     keep.add(name);
   }
-  for (const name of names) {
-    if (keep.has(name)) continue;
+  return names.filter(name => !keep.has(name));
+}
+
+/**
+ * Delete stamp directories except the `keepRecent` newest names (two by default), the one current.json points at, and
+ * any stamp claimed by a live pid. Names sort chronologically. A claim expires when process.kill(pid, 0) fails with
+ * ESRCH; prune may remove that file. A failure to delete one stamp is logged and does not stop the others.
+ * Null when current.json or a claim cannot be read: nothing was discarded. Each stamp is first renamed aside, so a
+ * run that claims it from then on finds it missing (see verifyDatabaseStampPresent); the claims are read again after
+ * the rename and a stamp claimed meanwhile is put back.
+ */
+export async function pruneVerifyDatabaseStamps(
+  dataDirectory: string,
+  image: string | (() => Promise<string>),
+  spawn?: CommandRunner,
+  options: {keepRecent?: 0 | 2} = {},
+): Promise<string[] | null> {
+  const root = assertDataDirectory(dataDirectory);
+  const parent = join(root, 'verify-db');
+  const lock = await takePruneLock(parent);
+  if (lock === 'busy') return [];
+  try {
+    return await pruneHoldingLock(root, parent, image, spawn, options.keepRecent ?? 2);
+  } finally {
+    if (lock) await unlinkClaimFile(lock).catch(() => undefined);
+  }
+}
+
+/**
+ * One prune at a time. The lock is a 0600 file with the pid; a dead holder's lock is replaced. Returns the lock path,
+ * 'busy' when a live process holds it, or null when there is no verify-db directory yet.
+ */
+async function takePruneLock(parent: string): Promise<string | 'busy' | null> {
+  try {
+    const info = await lstat(parent);
+    if (!info.isDirectory() || info.isSymbolicLink()) return null;
+  } catch {
+    return null;
+  }
+  const path = join(parent, PRUNE_LOCK);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      await discardStamp(join(parent, name), parent, image, spawn);
+      await writeFile(path, JSON.stringify({pid: process.pid}) + '\n', {mode: 0o600, flag: 'wx'});
+      return path;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
+    let holder: number | undefined;
+    try {
+      const parsed = JSON.parse(await readFile(path, 'utf8')) as {pid?: unknown};
+      holder = typeof parsed.pid === 'number' && Number.isInteger(parsed.pid) ? parsed.pid : undefined;
+    } catch {
+      holder = undefined;
+    }
+    if (holder !== undefined && claimHolderAlive(holder)) return 'busy';
+    await unlinkClaimFile(path);
+  }
+  return 'busy';
+}
+
+/** Folders a dead prune left under the discard prefix: put back when a live run claims the stamp, deleted otherwise. */
+async function settleDiscardOrphans(parent: string, image: string | (() => Promise<string>), spawn?: CommandRunner): Promise<void> {
+  let entries;
+  try {
+    entries = await readdir(parent, {withFileTypes: true});
+  } catch {
+    return;
+  }
+  const orphans = entries.filter(entry => entry.isDirectory() && !entry.isSymbolicLink() && entry.name.startsWith(DISCARD_PREFIX));
+  if (orphans.length === 0) return;
+  let claimed: Set<string>;
+  try {
+    claimed = new Set((await liveClaimStamps(parent, false, true)).map(stamp => directStampName(parent, stamp)).filter((name): name is string => !!name));
+  } catch {
+    return;
+  }
+  for (const entry of orphans) {
+    const match = DISCARD_NAME.exec(entry.name);
+    const name = match?.[1];
+    const aside = join(parent, entry.name);
+    if (name && claimed.has(name)) {
+      if (await stampPresence(join(parent, name)) === 'no') {
+        await rename(aside, join(parent, name)).catch(() => {
+          console.error(JSON.stringify({event: 'VERIFY_DB_PRUNE_FAILED', stamp: name, reason: 'restore'}));
+        });
+      }
+      continue;
+    }
+    await discardStamp(aside, parent, image, spawn).catch(() => {
+      console.error(JSON.stringify({event: 'VERIFY_DB_PRUNE_FAILED', stamp: entry.name, reason: 'orphan'}));
+    });
+  }
+}
+
+async function pruneHoldingLock(
+  root: string,
+  parent: string,
+  image: string | (() => Promise<string>),
+  spawn: CommandRunner | undefined,
+  keepRecent: 0 | 2,
+): Promise<string[] | null> {
+  await settleDiscardOrphans(parent, image, spawn);
+  const discard = await verifyDatabaseStampsToDiscard(root, keepRecent);
+  if (!discard) return null;
+  const options = {keepRecent};
+  const removed: string[] = [];
+  for (const name of discard) {
+    const original = join(parent, name);
+    const aside = join(parent, `${DISCARD_PREFIX}${name}-${randomUUID()}`);
+    try {
+      await rename(original, aside);
     } catch {
       console.error(JSON.stringify({event: 'VERIFY_DB_PRUNE_FAILED', stamp: name}));
+      continue;
+    }
+    let claimed: boolean;
+    try {
+      claimed = (await liveClaimStamps(parent, false, (options.keepRecent ?? 2) === 0)).some(stamp => directStampName(parent, stamp) === name);
+    } catch {
+      claimed = true;
+    }
+    if (claimed) {
+      try {
+        await rename(aside, original);
+      } catch {
+        console.error(JSON.stringify({event: 'VERIFY_DB_PRUNE_FAILED', stamp: name, reason: 'restore'}));
+      }
+      continue;
+    }
+    try {
+      await discardStamp(aside, parent, image, spawn);
+      removed.push(name);
+    } catch {
+      console.error(JSON.stringify({event: 'VERIFY_DB_PRUNE_FAILED', stamp: name}));
+      // A stamp that resists keeps its name: the next prune finds it, and nothing is left under the discard prefix.
+      await rename(aside, original).catch(() => {
+        console.error(JSON.stringify({event: 'VERIFY_DB_PRUNE_FAILED', stamp: name, reason: 'restore'}));
+      });
     }
   }
+  return removed;
+}
+
+/** After claiming, a run confirms the stamp is still published there: a prune may have just taken it. */
+export async function verifyDatabaseStampPresent(stamp: string): Promise<boolean> {
+  try {
+    const info = await lstat(join(stamp, 'manifest.json'));
+    return info.isFile() && !info.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/** Retention stage of `personal:maintenance`: discards the stamps that a refresh would discard now, with the disk-pressure rule. */
+export async function runVerifyDatabaseRetention(
+  dataDirectory: string,
+  apply: boolean,
+  deps: {usedPercent?: number; image?: string; spawn?: CommandRunner} = {},
+): Promise<string[]> {
+  const root = assertDataDirectory(dataDirectory);
+  const used = deps.usedPercent ?? await measuredDiskPercent(root);
+  const keepRecent = verifyDatabaseKeepRecent(used);
+  const rule = keepRecent === 0 ? `disco em ${VERIFY_DB_PRESSURE_PERCENT}% ou mais: fica só a base atual e as em uso` : 'fica a base atual, as em uso e as 2 mais recentes';
+  const discard = await verifyDatabaseStampsToDiscard(root, keepRecent, apply);
+  if (discard === null) throw new Refusal('VERIFY_DB_PRUNE_FAILED');
+  if (!apply) return [`Bases de vulnerabilidades (${rule}): ${discard.length} elegível(is)${discard.length ? ': ' + discard.join(', ') : ''}.`];
+  if (discard.length === 0) return [`Bases de vulnerabilidades (${rule}): nada a remover.`];
+  // The pinned image is needed only to chmod a stamp the host user cannot delete.
+  const removed = await pruneVerifyDatabaseStamps(root, deps.image ?? (() => readInstalledImage(root)), deps.spawn, {keepRecent});
+  if (removed === null) throw new Refusal('VERIFY_DB_PRUNE_FAILED');
+  return [`Bases de vulnerabilidades (${rule}): removida(s) ${removed.length} de ${discard.length}${removed.length ? ': ' + removed.join(', ') : ''}.`];
 }
