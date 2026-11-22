@@ -233,7 +233,9 @@ async function examine(
   const vendored: VendoredFiles[] = [];
   const files = await listExamFiles(root, vendored);
   if (vendored.length) {
-    const entries = await Promise.all(vendored.map(async entry => ({dir: entry.dir, files: entry.files.length, digest: await vendoredDigest(root, entry.files)})));
+    // Mesma base dos módulos 2 a 9: caminhos relativos à pasta vendor.
+    const entries = await Promise.all(vendored.map(async entry => ({dir: entry.dir, files: entry.files.length,
+      digest: await vendoredDigest(join(root, entry.dir), entry.files.map(file => file.slice(entry.dir.length + 1)))})));
     notes.push(vendoredNote(entries));
   }
   // Os arquivos vendorizados não vão ao examinador, mas continuam legíveis na confirmação dos achados das ferramentas.

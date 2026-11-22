@@ -44,7 +44,7 @@ export async function goVendorPackages(dir: string, name: string): Promise<Set<s
 
 /** O que o `go mod vendor` copia: fontes Go, assembly e C, e os avisos de licença. */
 const VENDOR_SOURCE = /\.(?:go|s|c|h)$/u;
-const VENDOR_NOTICE = /^(?:LICEN[CS]E|COPYING|NOTICE|PATENTS|AUTHORS|CONTRIBUTORS)(?:[._-][A-Za-z0-9._-]*)?$/u;
+const VENDOR_NOTICE = /^(?:LICEN[CS]E|COPYING|NOTICE|PATENTS|AUTHORS|CONTRIBUTORS)(?:[-_][A-Za-z0-9]+)?(?:\.(?:txt|md|rst))?$/u;
 
 /** O arquivo, relativo à pasta vendor, é fonte ou aviso de um pacote ou raiz de módulo listado. */
 export function isListedVendorFile(relative: string, packages: ReadonlySet<string>): boolean {
@@ -84,20 +84,26 @@ export const VENDORED_REASON = 'pacotes Go de terceiros copiados em vendor e con
 
 /** Nota honesta para o relatório: o que saiu, a impressão digital e o que isso não cobre. */
 export function vendoredNote(entries: readonly {dir: string; files: number; digest?: string}[]): string {
-  const list = entries.slice(0, 10).map(entry => `${entry.dir} (${entry.files} arquivos${entry.digest ? `, sha256 ${entry.digest.slice(0, 16)}` : ''})`).join(', ');
-  return `Pacotes Go de terceiros em vendor, declarados no go.mod e no modules.txt, ficaram fora do exame do modelo: ${list}. `
+  const shown = entries.slice(0, 10).map(entry => `${entry.dir} (${entry.files} arquivos${entry.digest ? `, sha256 ${entry.digest}` : ''})`).join(', ');
+  const more = entries.length > 10 ? ` e mais ${entries.length - 10} pastas` : '';
+  return `Fontes de pacotes Go de terceiros em vendor, declarados no go.mod e no modules.txt, ficaram fora do exame do modelo: ${shown}${more}. `
     + 'Isso não prova que o código seja de terceiros: uma alteração local no código copiado não é detectada pelo modelo. '
-    + 'Gitleaks, OSV e Grype leem a pasta e apontam segredos e vulnerabilidades conhecidas. A impressão digital mostra num reexame se a pasta mudou. '
-    + 'Arquivos em vendor fora dos pacotes listados, ou com outra extensão, foram examinados.';
+    + 'As ferramentas do módulo que leem o repositório continuam lendo a pasta. A impressão digital mostra num reexame se esses arquivos mudaram. '
+    + 'Os demais arquivos em vendor seguem as regras normais do exame.';
 }
 
-/** Impressão digital estável de uma lista de arquivos: caminho e conteúdo, em ordem. */
-export async function vendoredDigest(root: string, files: readonly string[]): Promise<string> {
+/**
+ * Impressão digital estável dos arquivos que saíram: caminho relativo à pasta vendor e conteúdo, em ordem.
+ * Um arquivo ilegível entra marcado como ilegível, nunca como vazio.
+ */
+export async function vendoredDigest(vendorDir: string, relativeFiles: readonly string[]): Promise<string> {
   const {createHash} = await import('node:crypto');
   const hash = createHash('sha256');
-  for (const file of [...files].sort()) {
-    const body = await readFile(join(root, file)).catch(() => Buffer.alloc(0));
-    hash.update(file).update('\0').update(String(body.length)).update('\0').update(body);
+  for (const file of [...relativeFiles].sort()) {
+    const body = await readFile(join(vendorDir, file)).catch(() => undefined);
+    hash.update(file).update('\0');
+    if (body === undefined) hash.update('ilegivel\0');
+    else hash.update(String(body.length)).update('\0').update(body);
   }
   return hash.digest('hex');
 }

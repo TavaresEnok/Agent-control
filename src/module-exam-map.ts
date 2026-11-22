@@ -2,7 +2,7 @@ import {Refusal} from './contracts.ts';
 import {goVendorPackages, isListedVendorFile, VENDORED_REASON, vendoredDigest} from './vendored-dirs.ts';
 import {constants} from 'node:fs';
 import {lstat, open, readdir} from 'node:fs/promises';
-import {join} from 'node:path';
+import {join, sep} from 'node:path';
 import {assertModuleRepoRelativePath} from './verification-modules.ts';
 import {hasKnownSecret, isSecretClassBasename, redactUnknownSecrets} from './verify-redact.ts';
 import {isDirectIdentifier, isModuleExamScript, moduleExamCall, moduleExamDepths, scanModuleExamSource} from './module-exam-syntax.ts';
@@ -18,7 +18,7 @@ type RouteInventory = {routes: LocatedRoute[]; omissions: RouteOmission[];
 export type ModuleExamMap = {files: ModuleExamFile[]; routes: ModuleExamRoute[]; fileOmissions?: number; routeOmissions?: number;
   routeOmissionDetails?: {file: string; reason: RouteOmission}[];
   /** Pastas vendor do Go conferidas com o go.mod e quantos arquivos de pacotes listados ficaram fora do exame. */
-  vendored?: {dir: string; files: number; digest?: string}[]};
+  vendored?: {dir: string; files: number; digest?: string; paths?: string[]}[]};
 const MAX_FILE_BYTES = 16000;
 const MAX_TEXT_FILES = 10000;
 const SKIP = new Set(['.git', 'node_modules', 'dist', '.ai', 'verificacoes', '.claude', '.codex', '.grok', '.aws', '.ssh', '.config']);
@@ -226,7 +226,7 @@ export async function mapModuleSnapshot(snapshot: string, signal?: AbortSignal,
     if (options?.aggregateOmissions && row.code === null) fileOmissions++;
     else files.push(row);
   }
-  const vendored: {dir: string; files: number; digest?: string}[] = [];
+  const vendored: {dir: string; files: number; digest?: string; paths?: string[]}[] = [];
   type VendorScope = {prefix: string; packages: ReadonlySet<string>; bucket: {dir: string; files: number; paths: string[]}};
   async function walk(dir: string, prefix: string, scope?: VendorScope): Promise<void> {
     const entries = await readdir(dir, {withFileTypes: true});
@@ -255,7 +255,8 @@ export async function mapModuleSnapshot(snapshot: string, signal?: AbortSignal,
           addFile({file, code: null, reason: `${VENDORED_REASON} (${bucket.files} arquivos)`});
           if (bucket.files) {
             const relativePaths = bucket.paths.map(path => path.slice(absolute.length + 1));
-            vendored.push({dir: bucket.dir, files: bucket.files, digest: await vendoredDigest(absolute, relativePaths)});
+            vendored.push({dir: bucket.dir, files: bucket.files, digest: await vendoredDigest(absolute, relativePaths),
+              paths: relativePaths.map(path => `${bucket.dir}/${path.split(sep).join('/')}`)});
           }
           continue;
         }

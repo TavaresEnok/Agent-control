@@ -100,13 +100,19 @@ test('num pacote listado só saem fontes Go, C e assembly e avisos de licença',
     await writeFile(join(pq, 'build.sh'), 'echo\n');
     await writeFile(join(pq, 'LICENSE'), 'MIT\n');
     await writeFile(join(pq, 'asm_amd64.s'), '// asm\n');
+    await writeFile(join(pq, 'LICENSE.ts'), 'export {};\n');
+    await writeFile(join(pq, 'NOTICE.js'), 'module.exports = 1;\n');
+    await writeFile(join(pq, 'LICENSE.md'), '# MIT\n');
     const vendored: VendoredFiles[] = [];
     const files = await listExamFiles(root, vendored);
     assert.ok(files.includes('backend/vendor/github.com/lib/pq/handler.ts'));
     assert.ok(files.includes('backend/vendor/github.com/lib/pq/build.sh'));
+    assert.ok(files.includes('backend/vendor/github.com/lib/pq/LICENSE.ts'), 'nome de licença com extensão de código vai ao exame');
+    assert.ok(files.includes('backend/vendor/github.com/lib/pq/NOTICE.js'));
     const out = vendored[0]?.files ?? [];
     assert.ok(out.includes('backend/vendor/github.com/lib/pq/LICENSE'));
     assert.ok(out.includes('backend/vendor/github.com/lib/pq/asm_amd64.s'));
+    assert.ok(out.includes('backend/vendor/github.com/lib/pq/LICENSE.md'));
   } finally {
     await rm(root, {recursive: true, force: true});
   }
@@ -129,7 +135,7 @@ test('módulos 2 a 9: a pasta aparece com o motivo e a contagem, e a nota diz o 
     await writeFile(join(root, 'backend', 'vendor', 'github.com', 'lib', 'pq', 'conn.go'), 'package pq\n// porta\n');
     assert.notEqual((await mapModuleSnapshot(root)).vendored?.[0]?.digest, first, 'a impressão digital muda com o código copiado');
     const note = vendoredNote([{dir: 'backend/vendor', files: 4, digest: 'a'.repeat(64)}]);
-    assert.match(note, /backend\/vendor \(4 arquivos, sha256 a{16}\)/);
+    assert.match(note, /backend\/vendor \(4 arquivos, sha256 a{64}\)/);
     assert.match(note, /não prova que o código seja de terceiros/);
   } finally {
     await rm(root, {recursive: true, force: true});
@@ -146,6 +152,22 @@ test('um achado de ferramenta dentro de vendor continua legível na confirmaçã
     const read = await readRepoText(root, 'backend/vendor/github.com/lib/pq/conn.go', 1, allowed);
     assert.equal(read.missing, false);
     assert.match(read.text, /package pq/);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('a impressão digital é a mesma no módulo 1 e nos módulos 2 a 9', async () => {
+  const {vendoredDigest} = await import('../src/vendored-dirs.ts');
+  const root = await goRepo();
+  try {
+    const vendored: VendoredFiles[] = [];
+    await listExamFiles(root, vendored);
+    const entry = vendored[0]!;
+    const fromVerify = await vendoredDigest(join(root, entry.dir), entry.files.map(file => file.slice(entry.dir.length + 1)));
+    const map = await mapModuleSnapshot(root);
+    assert.equal(map.vendored?.[0]?.digest, fromVerify);
+    assert.deepEqual([...(map.vendored?.[0]?.paths ?? [])].sort(), [...entry.files].sort());
   } finally {
     await rm(root, {recursive: true, force: true});
   }
