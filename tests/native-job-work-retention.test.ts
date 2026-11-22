@@ -144,7 +144,7 @@ test('the classification of read-only and programmer work is explicit',()=>{
   assert.equal(terminalWorkClass(workflow,role),undefined,String(workflow)+' '+String(role));
 });
 
-test('automatic job retention frees only proven categories, with the gateway running, concurrently and repeatably',{skip:!process.env.AC_TEST_DATABASE_URL},async()=>{
+test('automatic job retention frees only proven categories, with the gateway running, concurrently and repeatably',{skip:!process.env.AC_TEST_DATABASE_URL},async t=>{
  const base=process.env.AC_TEST_DATABASE_URL;if(!base)throw Error('ISOLATED_DATABASE_REQUIRED');
  const fixture=await isolatedDatabase(base,'jobret');
  const db=new Ledger(fixture.url),area=await mkdtemp(join(tmpdir(),'ac-jobret-'));
@@ -532,6 +532,40 @@ test('automatic job retention frees only proven categories, with the gateway run
   // Without an active runtime the run reports and changes nothing.
   assert.deepEqual(await runPersonalJobRetention({...(config as object),nativeBootstrap:undefined} as never,true),['Sem runtime nativo ativo: nenhuma cópia de job a retirar.']);
   assert.ok((await readdir(outside)).includes('precious.txt'));
+
+  await t.test('retira review-artifact do revisor quando a retirada de work já foi auditada',async()=>{
+   const reviewer=await plant({role:'reviewer',checkout:'good'});
+   const reviewArtifact=join(reviewer.root,'review-artifact');
+   const savedArtifact=join(area,reviewer.jobId);
+   // Reproduz uma retirada anterior que alcançou apenas work.
+   await rename(reviewArtifact,savedArtifact);
+   const workResult=await retire(reviewer,true);
+   assert.equal(workResult.state,'released');
+   assert.equal(workResult.state==='released'&&workResult.category,'readonly-evaluator');
+   assert.equal(await exists(reviewer.work),false);
+   assert.equal(await audits(reviewer.jobId),1);
+   await rename(savedArtifact,reviewArtifact);
+   const preview=await retire(reviewer,false);
+   assert.equal(preview.state,'eligible');
+   await intact(reviewer,true);
+   const result=await retire(reviewer,true);
+   assert.equal(result.state,'released');
+   assert.equal(result.state==='released'&&result.category,'readonly-evaluator');
+   await intact(reviewer);
+   assert.equal(await audits(reviewer.jobId),2);
+   assert.deepEqual(await retire(reviewer,true),{jobId:reviewer.jobId,state:'absent'});
+  });
+
+  await t.test('preserva review-artifact do revisor quando work sumiu sem auditoria',async()=>{
+   const reviewer=await plant({role:'reviewer',checkout:'good'});
+   await rm(reviewer.work,{recursive:true});
+   const refusal={jobId:reviewer.jobId,state:'refused',reason:'unregistered_change'};
+   assert.deepEqual(await retire(reviewer,false),refusal);
+   assert.deepEqual(await retire(reviewer,true),refusal);
+   await intact(reviewer,true);
+   assert.equal(await audits(reviewer.jobId,'native.exam_work_release_planned'),0);
+   assert.equal(await audits(reviewer.jobId),0);
+  });
  }finally{
   await db.pool.end().catch(()=>{});
   await fixture.close().catch(()=>{});

@@ -4,16 +4,17 @@ import {randomUUID,generateKeyPairSync,createHash} from 'node:crypto';
 import {mkdtemp,mkdir,readFile,rm,writeFile,chmod} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {spawnSync} from 'node:child_process';
+import {execFileSync,spawnSync} from 'node:child_process';
 import {Ledger} from '../src/ledger.ts';
 import {CezarRuntime} from '../src/cezar.ts';
 import {Capacity} from '../src/capacity.ts';
 import {NativeExecutionSupervisor,NativeExecutionRequest} from '../src/native-execution-supervisor.ts';
 import {nativeContainerNeverStarted} from '../src/native-execution-isolation.ts';
-import {Authority,Refusal,digest} from '../src/contracts.ts';
+import {Authority,Refusal,digest,type Command} from '../src/contracts.ts';
 import {ProviderEligibility} from '../src/provider-eligibility.ts';
 import {AccountHomes} from '../src/account-homes.ts';
 import {GitArtifacts} from '../src/git.ts';
+import {reserveDesignModel} from '../src/design-model-reservation.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
 test('native execution retains uncertain capacity, fences takeover and replays only physical receipts',{skip:!process.env.AC_TEST_DATABASE_URL},async()=>{
@@ -78,6 +79,99 @@ test('native execution retains uncertain capacity, fences takeover and replays o
   const other=new NativeExecutionSupervisor(db,{...config,signingKeyPem:generateKeyPairSync('ed25519').privateKey.export({format:'pem',type:'pkcs8'}).toString()});
   await assert.rejects(other.reconcile(principal,successor,input),/NATIVE_EXECUTION_REPLAY_MISMATCH/);
  }finally{await runtime?.close();await db.close();await fixture.close();await rm(area,{recursive:true,force:true});}
+});
+
+test('a partida do design revalida a prioridade com a lista de contas gravada na reserva',{skip:!process.env.AC_TEST_DATABASE_URL},async t=>{
+ const fixture=await isolatedDatabase(process.env.AC_TEST_DATABASE_URL!,'designlaunch');
+ const db=new Ledger(fixture.url),area=await mkdtemp(join(tmpdir(),'ac-design-launch-'));
+ try{
+  await db.migrate();
+  await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
+  const capacity=new Capacity(db),project=randomUUID(),owner='design-launch-'+randomUUID();
+  const repo=join(area,'repo'),spool=join(area,'spool'),accounts=join(area,'accounts');
+  for(const path of [repo,spool,accounts]){await mkdir(path,{mode:0o700});await chmod(path,0o700);}
+  const git=(...args:string[])=>execFileSync('git',['-C',repo,'-c','user.name=Fixture','-c','user.email=fixture@invalid',...args],{encoding:'utf8'}).trim();
+  git('init','-q');
+  git('commit','-q','--allow-empty','-m','base');
+  const base=git('rev-parse','HEAD');
+  await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,'Design launch fixture']);
+  await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project,owner]);
+  await db.pool.query('INSERT INTO ac_project_repositories(project_id,repo) VALUES($1,$2)',[project,repo]);
+  await db.pool.query('INSERT INTO ac_control_admins VALUES($1)',[owner]);
+  await capacity.configure(owner,{programmingLimit:2,evaluationLimit:2});
+  const model='claude-opus-5-5',effort='high';
+  await capacity.registerModel(owner,{provider:'claude',model,efforts:[effort],roles:['specialist'],source:'synthetic://design-launch'});
+  const [a,b,c]=await Promise.all(['A','B','C'].map(async label=>{
+   const accountId=randomUUID(),profileId=randomUUID(),subjectDigest=digest({provider:'claude',subject:label});
+   await capacity.addAccount(owner,project,{id:accountId,provider:'claude',label,resourceIdentity:'claude:'+subjectDigest,
+    mode:'subscription_cli',eligibility:'documented_supported',eligibilitySource:'synthetic://design-launch',maxConcurrent:1});
+   await capacity.observeQuota(owner,accountId,{status:'available',ttlSeconds:3600,source:'synthetic://design-launch'});
+   await capacity.addProfile(owner,project,{id:profileId,accountId,model,effort,role:'specialist'});
+   return {accountId,profileId,subjectDigest};
+  }));
+  await new AccountHomes(db,accounts,[repo]).initialize(owner,project,a.accountId);
+  await writeFile(join(accounts,a.accountId,'.credentials.json'),JSON.stringify({
+   claudeAiOauth:{accessToken:'fixture-access',refreshToken:'fixture-refresh',expiresAt:Date.now()+3*3600_000,scopes:['user:inference']},
+  }),{mode:0o600});
+  const publish=(revision:number,regular:string[])=>capacity.publish(owner,project,revision,{
+   schemaVersion:1,maxProgrammersPerContext:2,maxEvaluatorsPerContext:2,roles:{specialist:{regular,emergency:[]}},
+  });
+  const aFirst=await publish(0,[a.profileId,b.profileId,c.profileId]);
+  const bFirst=await publish(aFirst,[b.profileId,a.profileId,c.profileId]);
+  const cFirst=await publish(bFirst,[c.profileId,a.profileId,b.profileId]);
+  const image='sha256:'+'c'.repeat(64);
+  const supervisor=new NativeExecutionSupervisor(db,{
+   id:'design-launch-fixture',provider:'claude',workerImage:image,toolsImage:image,hostRoot:spool,accountRoot:accounts,
+   repository:repo,protectedRepositories:[repo],providerNetworkId:'d'.repeat(64),socketPath:join(area,'fake-docker.sock'),
+   signingKeyPem:generateKeyPairSync('ed25519').privateKey.export({format:'pem',type:'pkcs8'}).toString(),
+   accountSubjects:[a,b,c].map(({accountId,subjectDigest})=>({accountId,subjectDigest})),workerEnv:[],toolsEnv:[],
+  },{assertAdmission:async()=>{}});
+  // Interrompe na primeira mutação do Docker, depois da admissão e do registro do job no banco.
+  const launchBoundary=new Error('fixture reached Docker network creation');
+  const createNetwork=t.mock.fn(async(_name:string)=>{throw launchBoundary;});
+  Object.defineProperty(supervisor,'docker',{value:{imagePresent:async()=>true,createPrivateNetwork:createNetwork}});
+  const allowed=[a.accountId,b.accountId];
+  for(const item of [
+   {name:'sem restrição, B passa à frente de A e a partida é recusada',next:bFirst},
+   {name:'com A e B permitidas, B passa à frente de A e a partida é recusada',next:bFirst,allowed},
+   {name:'com A e B permitidas, C passa à frente e a partida aceita A',next:cFirst,allowed},
+  ]){
+   await t.test(item.name,async()=>{
+    createNetwork.mock.resetCalls();
+    const contextId=await db.createContext(owner,project,randomUUID());
+    await capacity.assignPolicy(owner,contextId,aFirst);
+    const authority=await db.acquire(owner,contextId,randomUUID(),'personal-design',60);
+    const intentId=randomUUID(),jobId=randomUUID();
+    const command:Command={schemaVersion:1,intentId,deliveryAttemptId:randomUUID(),contextId,policyRevision:0,action:'plan.start',
+     payload:{workflow:'design-readonly-v1',messageRef:`design:${project}:${base}`,projectId:project,commit:base}};
+    await db.pool.query(`INSERT INTO ac_intents(id,context_id,principal_id,digest,command,operation_id,run_id,manager_epoch,plan_revision)
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8,0)`,[intentId,contextId,owner,digest(command),command,randomUUID(),randomUUID(),authority.epoch]);
+    const seat=await reserveDesignModel(db,capacity,owner,authority,intentId,'create',item.allowed);
+    assert.equal(seat.accountId,a.accountId);
+    assert.equal(seat.profileId,a.profileId);
+    await capacity.assignPolicy(owner,contextId,item.next);
+    const input=NativeExecutionRequest.parse({
+     jobId,intentId,grantId:seat.grantId,sessionId:randomUUID(),base,role:'specialist',designPurpose:'create',
+     task:'Pedido de criação. Tela sintética.',model,effort,writePaths:[],artifactId:randomUUID(),outputSchema:{type:'object'},
+    });
+    const start=()=>supervisor.start(owner,authority,input);
+    const job=async()=>(await db.pool.query('SELECT account_id,profile_id,state FROM ac_native_execution_jobs WHERE id=$1',[jobId])).rows;
+    if(item.next===cFirst){
+     await assert.rejects(start,error=>error===launchBoundary);
+     assert.equal(createNetwork.mock.callCount(),1);
+     assert.equal(createNetwork.mock.calls[0].arguments[0],'ac-native-exec-'+jobId);
+     assert.deepEqual(await job(),[{account_id:a.accountId,profile_id:a.profileId,state:'uncertain'}]);
+    }else{
+     await assert.rejects(start,{code:'DESIGN_CREATE_MODEL_UNAVAILABLE'});
+     assert.equal(createNetwork.mock.callCount(),0);
+     assert.deepEqual(await job(),[]);
+     const grant=(await db.pool.query('SELECT state,physical_receipt FROM ac_capacity_grants WHERE id=$1',[seat.grantId])).rows[0];
+     assert.equal(grant.state,'released');
+     assert.equal(grant.physical_receipt.reason,'design_create_model_unavailable');
+    }
+   });
+  }
+ }finally{await db.close();await fixture.close();await rm(area,{recursive:true,force:true});}
 });
 
 type MemoryRow=Record<string,unknown>;

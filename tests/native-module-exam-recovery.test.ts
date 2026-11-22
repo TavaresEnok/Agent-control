@@ -635,7 +635,7 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
    return {worker,tools,restore};
   };
 
-  await t.test('a CLI reconcilia segurança com resultado, libera a vaga e registra a retirada',async()=>{
+  await t.test('a CLI reconcilia segurança com resultado, libera a vaga e registra a retirada',async t=>{
    reset();
    const workerId=hex();
    const orphan=await plantOrphan({module:'verify',context:mainContext,tools:'absent',state:'running',grantState:'running',plainRequest:true,
@@ -682,6 +682,27 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
    }finally{await db.releaseLease(replay);}
    reset();
    restore();
+   await t.test('reclaimRetiredContainers recusa contêiner em execução ou com imagem divergente',async()=>{
+    const reclaim=(apply:boolean)=>supervisor.reclaimRetiredContainers(owner,orphan.jobId,apply,{projectId:project,contextId:orphan.contextId});
+    const expectedState=worker.State,expectedImage=worker.Image;
+    assert.equal(await reclaim(false),'eligible');
+    for(const invalid of [
+     {State:{...expectedState,Status:'running',Running:true,Pid:123}},
+     {Image:'sha256:'+hex()},
+    ]){
+     Object.assign(worker,invalid);
+     try{
+      await assert.rejects(reclaim(false),{code:'NATIVE_RETIREMENT_UNCONFIRMED'});
+      await assert.rejects(reclaim(true),{code:'NATIVE_RETIREMENT_UNCONFIRMED'});
+      assert.deepEqual(docker.mutations,[]);
+      assert.deepEqual(docker.forbidden,[]);
+      assert.deepEqual(await snapshot(orphan.jobId,orphan.grantId,orphan.intentId),after);
+     }finally{
+      worker.State=expectedState;
+      worker.Image=expectedImage;
+     }
+    }
+   });
    const preview=await cli('--retencao-automatica');
    assert.equal(preview.status,0,preview.stdout+preview.stderr);
    assert.match(preview.stdout,new RegExp(orphan.jobId+'.*contêineres parados elegíveis'));
@@ -932,6 +953,46 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
    }finally{
     await db.pool.query('DROP TRIGGER fixture_fail_orphan ON ac_native_execution_jobs; DROP FUNCTION fixture_fail_orphan()');
    }
+  });
+
+  await t.test('a recuperação recusa um inventário extra ou um nome pertencente a outro job',async t=>{
+   reset();
+   const workerId=hex();
+   const orphan=await plantOrphan({module:'verify',context:mainContext,tools:'absent',state:'running',grantState:'running',plainRequest:true,
+    workerId,launchDigest:hex(),siblings:0});
+   await writeResult(orphan);
+   const {worker,restore}=await plantStoppedContainers(orphan,workerId);
+   const workerName='ac-native-worker-'+orphan.jobId;
+   const extraName='extra-'+orphan.jobId,foreignName='ac-native-worker-'+randomUUID();
+   const before=await snapshot(orphan.jobId,orphan.grantId,orphan.intentId);
+   assert.equal(await recover(orphan,false),'eligible');
+   for(const [description,change] of [
+    ['contêiner extra no inventário com o rótulo do job',()=>{
+     docker.containers.set(extraName,{...worker,Id:hex(),Name:'/'+extraName});
+     return extraName;
+    }],
+    ['worker com o nome de outro job',()=>{
+     docker.containers.delete(workerName);
+     docker.containers.set(foreignName,{...worker,Name:'/'+foreignName});
+     return foreignName;
+    }],
+   ] as const){
+    await t.test(description,async()=>{
+     const changedName=change();
+     try{
+      await assert.rejects(recover(orphan,false),{code:'NATIVE_ORPHAN_CONTAINER_PRESENT'});
+      await assert.rejects(recover(orphan),{code:'NATIVE_ORPHAN_CONTAINER_PRESENT'});
+      assert.deepEqual(docker.mutations,[]);
+      assert.deepEqual(docker.forbidden,[]);
+      assert.deepEqual(await snapshot(orphan.jobId,orphan.grantId,orphan.intentId),before);
+     }finally{
+      docker.containers.delete(changedName);
+      restore();
+     }
+    });
+   }
+   assert.equal(await recover(orphan,false),'eligible');
+   assert.deepEqual(docker.mutations,[]);
   });
  }finally{
   for(const close of closers)await close().catch(()=>undefined);
