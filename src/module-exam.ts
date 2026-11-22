@@ -1,4 +1,5 @@
 import {randomUUID} from 'node:crypto';
+import {vendoredNote} from './vendored-dirs.ts';
 import {detectLanguage, extractTSSignatures, extractGoSignatures, extractPySignatures, formatRepoMap} from './repo-map.ts';
 import {z} from 'zod';
 import {digest, Id, Refusal} from './contracts.ts';
@@ -229,6 +230,7 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
   if (input.mapEnabled !== false && input.repoMap && !input.repoMap.map) notes.add(`Mapa do repositório indisponível: ${safeFailureCode(input.repoMap.reason ?? '', 'REPO_MAP_FAILED')}.`);
   notes.add('O mapa inventaria chamadas diretas no nível do módulo em JS/TS, com caminho literal e argumento de handler. O receptor precisa ser uma constante local inicializada por uma importação HTTP reconhecida de Express, Hono ou Fastify. O subconjunto exige ponto e vírgula entre instruções e omite outras linguagens, JSX/TSX, sintaxe não reconhecida, declarações indexadas, dinâmicas, indiretas ou aninhadas e métodos com sobrescrita detectada no arquivo. Cada rota julgada exige atestado da declaração enviada. Limite de 20 rotas por arquivo.');
   if (input.map.fileOmissions) notes.add(`Entradas omitidas do inventário de arquivos: ${input.map.fileOmissions}.`);
+  if (input.map.vendored?.length) notes.add(vendoredNote(input.map.vendored));
   if (input.map.routeOmissions) notes.add(`Arquivos com inventário de rotas parcial ou omitido: ${input.map.routeOmissions}.`);
   const omissions = input.map.routeOmissionDetails ?? [];
   for (const {file, reason} of omissions.slice(0, 20)) {

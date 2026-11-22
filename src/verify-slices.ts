@@ -2,7 +2,7 @@ import {lstat, readdir, readFile, realpath} from 'node:fs/promises';
 import {groupByBudget, sha256Text} from './exam-batch-proof.ts';
 import {basename, extname, isAbsolute, join, relative, sep} from 'node:path';
 import type {ChecklistItem} from './verify-types.ts';
-import {isVendoredDependencyDir} from './vendored-dirs.ts';
+import {goVendorPackages, isListedVendorFile} from './vendored-dirs.ts';
 
 /** Input-token budget and file count per examiner call. `false` means one file per call. Absent keeps the historical slice of 15. */
 export type SecurityBatch = {tokens: number; files: number} | false;
@@ -14,29 +14,40 @@ const SKIP_DIRECTORIES = new Set(['.git', 'node_modules', 'dist', '.ai', 'verifi
 const SLICE_SIZE = 15;
 const CODE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py']);
 
-/** `vendored` recebe as pastas vendor de terceiros que ficaram fora da lista. */
-export async function listExamFiles(repo: string, vendored?: string[]): Promise<string[]> {
+export type VendoredFiles = {dir: string; files: string[]};
+
+/**
+ * Lista do exame do modelo. `vendored` recebe, por pasta vendor do Go conferida com o go.mod,
+ * os arquivos de pacotes de terceiros que ficaram fora da lista. Eles continuam legíveis
+ * para confirmar achados das ferramentas.
+ */
+export async function listExamFiles(repo: string, vendored?: VendoredFiles[]): Promise<string[]> {
   const root = await realpath(repo);
   const info = await lstat(root);
   if (!info.isDirectory()) throw new Error('REPOSITORIO_INVALIDO');
   const found: string[] = [];
-  await walk(root, root, found, vendored);
+  await walk(root, root, found, vendored, undefined);
   found.sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
   return found;
 }
 
-async function walk(root: string, dir: string, found: string[], vendored?: string[]): Promise<void> {
+type VendorScope = {base: string; packages: ReadonlySet<string>; bucket: VendoredFiles};
+
+async function walk(root: string, dir: string, found: string[], vendored: VendoredFiles[] | undefined, scope: VendorScope | undefined): Promise<void> {
   const entries = await readdir(dir, {withFileTypes: true});
   entries.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
   for (const entry of entries) {
     const absolute = join(dir, entry.name);
     if (entry.isDirectory()) {
       if (SKIP_DIRECTORIES.has(entry.name)) continue;
-      if (await isVendoredDependencyDir(absolute, entry.name)) {
-        vendored?.push(toPosix(relative(root, absolute)));
+      const packages = scope === undefined ? await goVendorPackages(absolute, entry.name) : undefined;
+      if (packages !== undefined) {
+        const bucket: VendoredFiles = {dir: toPosix(relative(root, absolute)), files: []};
+        await walk(root, absolute, found, vendored, {base: absolute, packages, bucket});
+        if (bucket.files.length) vendored?.push(bucket);
         continue;
       }
-      await walk(root, absolute, found, vendored);
+      await walk(root, absolute, found, vendored, scope);
       continue;
     }
     if (entry.isSymbolicLink()) {
@@ -44,7 +55,14 @@ async function walk(root: string, dir: string, found: string[], vendored?: strin
       if (listed) found.push(listed);
       continue;
     }
-    if (entry.isFile()) found.push(toPosix(relative(root, absolute)));
+    if (!entry.isFile()) continue;
+    const file = toPosix(relative(root, absolute));
+    // Arquivo de pacote listado no modules.txt: fora do modelo. Qualquer outro arquivo em vendor vai ao exame.
+    if (scope !== undefined && isListedVendorFile(toPosix(relative(scope.base, absolute)), scope.packages)) {
+      scope.bucket.files.push(file);
+      continue;
+    }
+    found.push(file);
   }
 }
 

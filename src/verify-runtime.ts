@@ -16,7 +16,8 @@ import {readNativeExamSession, readNativeWorkerCapacityPoll} from './verify-nati
 import {isSecretClassBasename, redactText, redactUnknownSecrets, secretFileStub} from './verify-redact.ts';
 import {reserveSecurityReportDirectory, writeSecurityReport} from './verify-report.ts';
 import {takeExamStripNote} from './exam-strip-note.ts';
-import {examFileSha256, examFileTokens, listExamFiles, planSecuritySlices, singleFileSlice, type SecurityBatch} from './verify-slices.ts';
+import {examFileSha256, examFileTokens, listExamFiles, planSecuritySlices, singleFileSlice, type SecurityBatch, type VendoredFiles} from './verify-slices.ts';
+import {vendoredNote} from './vendored-dirs.ts';
 import {batchCallReceipt, type BatchCallReceipt} from './exam-batch-proof.ts';
 import {generateRepoMapSafe} from './repo-map.ts';
 import {
@@ -229,10 +230,11 @@ async function examine(
   const rawFindings = (input.rawFindings ?? []).map(item => replaceRefusedRaw(RawFinding.parse(item), notes));
   const checklist = input.checklist ?? loadSecurityChecklist();
   const root = input.examRoot ?? input.repoPath;
-  const vendored: string[] = [];
+  const vendored: VendoredFiles[] = [];
   const files = await listExamFiles(root, vendored);
-  if (vendored.length) notes.push(`Dependências de terceiros copiadas no repositório ficaram fora do exame do modelo e seguem cobertas pelas ferramentas: ${vendored.slice(0, 10).join(', ')}.`);
-  const allowedFiles = new Set(files);
+  if (vendored.length) notes.push(vendoredNote(vendored.map(entry => ({dir: entry.dir, files: entry.files.length}))));
+  // Os arquivos vendorizados não vão ao examinador, mas continuam legíveis na confirmação dos achados das ferramentas.
+  const allowedFiles = new Set([...files, ...vendored.flatMap(entry => entry.files)]);
   const slices = planSecuritySlices(files, checklist, input.batch === undefined ? new Map() : await examFileTokens(root, files), input.batch);
   const receipts: BatchCallReceipt[] = [];
   const pending = new Set<string>();

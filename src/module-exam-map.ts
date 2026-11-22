@@ -1,5 +1,5 @@
 import {Refusal} from './contracts.ts';
-import {isVendoredDependencyDir, VENDORED_REASON} from './vendored-dirs.ts';
+import {goVendorPackages, isListedVendorFile, VENDORED_REASON} from './vendored-dirs.ts';
 import {constants} from 'node:fs';
 import {lstat, open, readdir} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -16,7 +16,9 @@ type RouteOmission = 'linguagem não inventariada' | 'sintaxe não reconhecida' 
 type RouteInventory = {routes: LocatedRoute[]; omissions: RouteOmission[];
   ambiguousLegacyKeys?: Set<string>; ambiguousLegacyLines?: Set<number>};
 export type ModuleExamMap = {files: ModuleExamFile[]; routes: ModuleExamRoute[]; fileOmissions?: number; routeOmissions?: number;
-  routeOmissionDetails?: {file: string; reason: RouteOmission}[]};
+  routeOmissionDetails?: {file: string; reason: RouteOmission}[];
+  /** Pastas vendor do Go conferidas com o go.mod e quantos arquivos de pacotes listados ficaram fora do exame. */
+  vendored?: {dir: string; files: number}[]};
 const MAX_FILE_BYTES = 16000;
 const MAX_TEXT_FILES = 10000;
 const SKIP = new Set(['.git', 'node_modules', 'dist', '.ai', 'verificacoes', '.claude', '.codex', '.grok', '.aws', '.ssh', '.config']);
@@ -224,7 +226,9 @@ export async function mapModuleSnapshot(snapshot: string, signal?: AbortSignal,
     if (options?.aggregateOmissions && row.code === null) fileOmissions++;
     else files.push(row);
   }
-  async function walk(dir: string, prefix: string): Promise<void> {
+  const vendored: {dir: string; files: number}[] = [];
+  type VendorScope = {prefix: string; packages: ReadonlySet<string>; bucket: {dir: string; files: number}};
+  async function walk(dir: string, prefix: string, scope?: VendorScope): Promise<void> {
     const entries = await readdir(dir, {withFileTypes: true});
     entries.sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
@@ -243,11 +247,23 @@ export async function mapModuleSnapshot(snapshot: string, signal?: AbortSignal,
         addFile({file, code: null, reason: 'arquivo de credenciais omitido'});
         continue;
       }
-      if (entry.isDirectory() && await isVendoredDependencyDir(absolute, entry.name)) {
-        addFile({file, code: null, reason: VENDORED_REASON});
+      if (entry.isDirectory()) {
+        const packages = scope === undefined ? await goVendorPackages(absolute, entry.name) : undefined;
+        if (packages !== undefined) {
+          const bucket = {dir: file, files: 0};
+          await walk(absolute, file, {prefix: file, packages, bucket});
+          addFile({file, code: null, reason: `${VENDORED_REASON} (${bucket.files} arquivos)`});
+          if (bucket.files) vendored.push(bucket);
+          continue;
+        }
+        await walk(absolute, file, scope);
         continue;
       }
-      if (entry.isDirectory()) { await walk(absolute, file); continue; }
+      // Arquivo de pacote listado no modules.txt: não entra no inventário nem no limite de arquivos textuais.
+      if (scope !== undefined && entry.isFile() && isListedVendorFile(file.slice(scope.prefix.length + 1), scope.packages)) {
+        scope.bucket.files += 1;
+        continue;
+      }
       if (!entry.isFile()) { addFile({file, code: null, reason: 'tipo não examinado'}); continue; }
       if (textFiles >= MAX_TEXT_FILES) { addFile({file, code: null, reason: 'limite de arquivos textuais atingido'}); continue; }
       const {routeInventory, ...mapped} = await readModuleExamFile(absolute, file, true);
@@ -262,5 +278,5 @@ export async function mapModuleSnapshot(snapshot: string, signal?: AbortSignal,
   const root = await lstat(snapshot);
   if (!root.isDirectory() || root.isSymbolicLink()) throw new Error('MODULE_EXAM_SNAPSHOT_INVALID');
   await walk(snapshot, '');
-  return {files, routes, ...(fileOmissions ? {fileOmissions} : {}), routeOmissions, routeOmissionDetails};
+  return {files, routes, ...(fileOmissions ? {fileOmissions} : {}), routeOmissions, routeOmissionDetails, ...(vendored.length ? {vendored} : {})};
 }
