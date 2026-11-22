@@ -221,10 +221,12 @@ test('régua e teclado contam como rodados pela linha de cobertura; análises se
     {tool: 'régua', version: '1.0', executed: '12 células', findings: '0', failure: 'nenhuma'},
     {tool: 'teclado', version: '1.0', executed: '3 rotas', findings: '0', failure: 'nenhuma'},
     {tool: 'axe-core', version: '4', executed: '0', findings: '0', failure: 'nenhuma'},
+    {tool: 'lighthouse', version: '13', executed: '0 rotas', findings: '0', failure: 'nenhuma'},
   ];
   const ran = toolsThatRan([], undefined, rows, false, [], [CONSISTENCY_TOOL, BRAND_TOOL]);
   for (const tool of ['régua', 'teclado', CONSISTENCY_TOOL, BRAND_TOOL]) assert.equal(ran.includes(tool), true, tool);
   assert.equal(ran.includes('axe'), false);
+  assert.equal(ran.includes('lighthouse'), false);
 });
 
 test('a lista do delta usa os nomes reais das ferramentas novas', () => {

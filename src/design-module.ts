@@ -658,7 +658,7 @@ export function toolsThatRan(
   if (tokens) ran.add('tokens');
   if (image?.ok) ran.add('navegacao');
   for (const row of rows) {
-    if (row.failure === 'nenhuma' && row.executed !== '0') ran.add(COVERAGE_TOOL[row.tool] ?? row.tool);
+    if (row.failure === 'nenhuma' && !/^0(?:\D|$)/.test(row.executed.trim())) ran.add(COVERAGE_TOOL[row.tool] ?? row.tool);
   }
   return [...ran].map(tool => tool.slice(0, 40)).sort((a, b) => a.localeCompare(b)).slice(0, 100);
 }
