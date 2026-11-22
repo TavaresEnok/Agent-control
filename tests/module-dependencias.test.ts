@@ -1036,8 +1036,11 @@ test('ncu comprova avanço semver por seção e preserva as análises de lock da
       ['NCU-OUTDATED-MINOR', 'dependencies: "range": "^1.0.0" -> "range": "^1.2.0"; package-lock.json#node_modules/range="1.0.0"; registro="1.2.0"'],
       ['NCU-OUTDATED-MINOR', 'dependencies: "actualRisk": ">=1.0.0" -> "actualRisk": "^2.5.0"; package-lock.json#node_modules/actualRisk="2.4.0"; registro="2.5.0"'],
     ]);
+    // O lockfile desatualizado também sai num achado por arquivo, uma evidência por linha.
     const lock = result.findings.filter(f => f.rule === 'LOCKFILE-OUTDATED-RESOLVED');
-    assert.deepEqual(lock.map(f => /#node_modules\/([^:]+):/.exec(f.evidence)?.[1]), ['reducedFloor', 'union', 'shared', 'lowerBranch', 'shared']);
+    assert.equal(lock.length, 1);
+    assert.deepEqual(lock[0]!.evidence.split('\n').map(line => /#node_modules\/([^:]+):/.exec(line)?.[1]).sort(),
+      ['lowerBranch', 'reducedFloor', 'shared', 'shared', 'union']);
     assert.ok(result.coverage.some(row => row.status === 'skipped' &&
       row.detail.includes('pacote=backward; secao=dependencies; motivo=direcao_de_atualizacao_nao_comprovada')));
     for (const [pkg, reason] of [
@@ -1613,4 +1616,18 @@ test('atualizações saem num achado por regra e manifesto e o resto passa intac
   assert.equal(result[2]!.message, outdated('NCU-OUTDATED-MINOR', 'package.json', 'pg', 8).message);
   assert.ok(result[3]!.evidence.length <= 2000);
   assert.match(result[3]!.evidence, /\ne mais \d+ dependência\(s\)$/);
+});
+
+test('lockfile e SBOM desatualizados saem num achado por arquivo com a maior gravidade', () => {
+  const locked = (pkg: string, line: number, severity: 'baixa' | 'informativa') => ({tool: 'sbom-lockfile',
+    rule: 'LOCKFILE-OUTDATED-RESOLVED', file: 'package-lock.json', line, severity,
+    message: `Versão travada em package-lock.json para "${pkg}" (1.0.0) está atrás da mais recente (2.0.0; risco alto (mudança major)).`,
+    evidence: `package-lock.json#node_modules/${pkg}: "${pkg}"@1.0.0 -> 2.0.0`});
+  const missing = {tool: 'sbom-lockfile', rule: 'LOCKFILE-MISSING', file: 'package.json', line: 1, severity: 'media' as const,
+    message: 'Sem lockfile.', evidence: 'package.json'};
+  const result = aggregateOutdatedFindings([locked('a', 30, 'informativa'), missing, locked('b', 12, 'baixa'), locked('c', 40, 'informativa')]);
+  assert.deepEqual(result.map(f => [f.rule, f.line, f.severity]),
+    [['LOCKFILE-OUTDATED-RESOLVED', 12, 'baixa'], ['LOCKFILE-MISSING', 1, 'media']]);
+  assert.equal(result[0]!.message, '3 dependências desatualizadas (LOCKFILE-OUTDATED-RESOLVED) em package-lock.json: b, a, c');
+  assert.equal(result[1], missing);
 });

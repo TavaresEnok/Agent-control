@@ -1850,20 +1850,23 @@ export function validateModuleOutput(doc) {
 }
 
 const MAX_AGGREGATE_EVIDENCE = 2000;
+const OUTDATED_RULES = new Set(['LOCKFILE-OUTDATED-RESOLVED', 'SBOM-OUTDATED-COMPONENT']);
+const SEVERITY_RANK = ['alta', 'media', 'baixa', 'informativa'];
 
 /**
- * Junta as atualizações do npm-check-updates num achado por regra e manifesto, com os
- * pacotes na mensagem e a evidência de cada um numa linha (até o limite do contrato).
+ * Junta as versões desatualizadas (npm-check-updates, lockfile e SBOM) num achado por regra
+ * e arquivo, com os pacotes na mensagem, a maior gravidade do grupo e a evidência de cada um
+ * numa linha (até o limite do contrato).
  */
 export function aggregateOutdatedFindings(findings) {
   const groups = new Map();
   const kept = [];
   for (const finding of findings) {
-    if (finding.tool !== 'npm-check-updates' || !finding.rule.startsWith('NCU-OUTDATED-')) {
+    if (!finding.rule.startsWith('NCU-OUTDATED-') && !OUTDATED_RULES.has(finding.rule)) {
       kept.push(finding);
       continue;
     }
-    const key = `${finding.rule}\0${finding.file}`;
+    const key = `${finding.tool}\0${finding.rule}\0${finding.file}`;
     if (!groups.has(key)) {
       groups.set(key, []);
       kept.push(groups.get(key));
@@ -1874,7 +1877,8 @@ export function aggregateOutdatedFindings(findings) {
     if (!Array.isArray(entry)) return entry;
     if (entry.length === 1) return entry[0];
     const items = [...entry].sort((a, b) => a.line - b.line);
-    const names = items.map(item => /^Dependência "([^"]+)"/.exec(item.message)?.[1] ?? '?');
+    const names = items.map(item => /"([^"]+)"/.exec(item.message)?.[1] ?? '?');
+    const severity = SEVERITY_RANK[Math.min(...items.map(item => SEVERITY_RANK.indexOf(item.severity)))];
     let evidence = '';
     let listed = 0;
     for (const item of items) {
@@ -1885,7 +1889,8 @@ export function aggregateOutdatedFindings(findings) {
     }
     if (listed < items.length) evidence += `\ne mais ${items.length - listed} dependência(s)`;
     const message = `${items.length} dependências desatualizadas (${items[0].rule}) em ${items[0].file}: ${names.join(', ')}`;
-    return {...items[0], message: message.length > MAX_AGGREGATE_EVIDENCE ? `${message.slice(0, MAX_AGGREGATE_EVIDENCE - 1)}…` : message, evidence};
+    return {...items[0], severity,
+      message: message.length > MAX_AGGREGATE_EVIDENCE ? `${message.slice(0, MAX_AGGREGATE_EVIDENCE - 1)}…` : message, evidence};
   });
 }
 
@@ -2028,7 +2033,7 @@ export async function runCollection(options = {}) {
         ...aggregateOutdatedFindings(ncuRes.findings),
         ...astGrepRes.findings,
         ...jscodeshiftRes.findings,
-        ...sbomLockRes.findings,
+        ...aggregateOutdatedFindings(sbomLockRes.findings),
         ...javaRes.findings,
       ],
     };

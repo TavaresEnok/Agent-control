@@ -61,7 +61,8 @@ const TYPEDOC_DOCUMENTATION_KINDS = new Map([
 const TYPEDOC_LINK_TAGS = new Set(['@link', '@linkcode', '@linkplain']);
 const UNDOCUMENTED_RULE = 'DOC-TYPEDOC-SIMBOLO-SEM-DOC';
 const UNDOCUMENTED_SAMPLE = 20;
-const GENERATED_HEADER = /@generated\b|auto-?generated|do not (?:make direct changes|edit)/i;
+// Só marcas de gerador: um "do not edit" solto também aparece em comentário escrito à mão.
+const GENERATED_HEADER = /@generated\b|auto-?generated|automatically generated|code generated .*do not edit|do not make direct changes/i;
 const TYPEDOC_DIRECT_LINK_BLOCKS = new Set(['', '@see', '@returns', '@throws']);
 
 const SKIP_DIRS = new Set([
@@ -78,10 +79,21 @@ const SKIP_DIRS = new Set([
   '.venv',
   'venv',
   'target',
-  // Código de terceiros copiado: a documentação dele não é a do projeto.
-  'vendor',
-  'third_party',
 ]);
+
+/**
+ * Pasta vendor do Go: ao lado de um go.mod e com vendor/modules.txt. A documentação dela é
+ * de terceiros. Qualquer outra pasta chamada vendor ou third_party é examinada como do projeto.
+ */
+function isGoVendorDir(srcPath, name) {
+  if (name !== 'vendor') return false;
+  try {
+    return lstatSync(join(dirname(srcPath), 'go.mod')).isFile() && lstatSync(join(srcPath, 'modules.txt')).isFile();
+  } catch {
+    // Manifest missing: the folder is the project's own code.
+    return false;
+  }
+}
 
 const UNTRUSTED_CONFIG_FILES = new Set([
   'typedoc.json',
@@ -346,7 +358,7 @@ export function copyRepoSafely(sourceRoot, destRoot, opts = {}, manifestScripts 
         continue;
       }
       if (st.isDirectory()) {
-        if (SKIP_DIRS.has(entry.name) || entry.name.startsWith('.')) {
+        if (SKIP_DIRS.has(entry.name) || entry.name.startsWith('.') || isGoVendorDir(srcPath, entry.name)) {
           skipped.push(relPath);
           continue;
         }
@@ -1287,6 +1299,16 @@ export function aggregateUndocumentedSymbols(findings, symbols, readFileFn = () 
 }
 
 /**
+ * O Markdown da raiz ou de docs/ fala do projeto todo. Os demais falam do pacote
+ * (o primeiro diretório) em que estão.
+ */
+function samePackage(mdFile, codeFile) {
+  const [top, ...rest] = mdFile.split('/');
+  if (!rest.length || top === 'docs' || top === 'doc') return true;
+  return codeFile.startsWith(`${top}/`);
+}
+
+/**
  * Cruza afirmações e assinaturas documentadas em arquivos Markdown com o catálogo
  * de símbolos reais extraído pelo TypeDoc.
  */
@@ -1314,7 +1336,7 @@ export function crossCheckMarkdownAgainstTypedoc(mdFiles, symbols, readFileFn = 
 
       for (const match of lineText.matchAll(/(?<!`)`([A-Za-z_$][\w$]*)\(([^()`]*)\)`(?!`)/g)) {
         const [, name, args] = match;
-        const matches = functions.get(name);
+        const matches = functions.get(name)?.filter(symbol => samePackage(file, symbol.file));
         if (matches?.length !== 1) continue;
         const [symbol] = matches;
         const signatures = symbol.parameterLists ?? [symbol.parameters];
