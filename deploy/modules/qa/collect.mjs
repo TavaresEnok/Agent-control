@@ -1168,8 +1168,9 @@ export function summarizeNodePasses(passes, sourceAnalyses, version) {
   for (const test of tests) {
     const oscillates = new Set(test.statuses).size > 1;
     if (!oscillates && test.statuses.every(status => status === 'skipped' || status === 'todo')) {
+      // Pulado e sem execução são contagens do runner e do V8; alta fica para falha e oscilação.
       findings.push({tool: suiteTool, rule: 'QA-TESTE-PULADO-EXECUCAO', file: test.file, line: test.line,
-        severity: 'alta', message: `Teste '${test.name}' marcado como pulado ou pendente pelo node:test`,
+        severity: 'media', message: `Teste '${test.name}' marcado como pulado ou pendente pelo node:test`,
         evidence: `node:test nas passadas 1, 2 e 3: ${test.statuses.join(', ')}`});
     }
     if (!oscillates && !test.statuses.includes('failed')) continue;
@@ -1188,7 +1189,7 @@ export function summarizeNodePasses(passes, sourceAnalyses, version) {
       const measurements = coverage.map(c => c?.functions.find(f => f.name === fn.name && f.line === fn.startLine));
       if (!measurements.every(f => f?.count === 0)) continue;
       findings.push({tool: suiteTool, rule: 'QA-COBERTURA-FUNCAO-SEM-TESTE', file: src.file, line: fn.startLine,
-        severity: 'alta', message: `Função exportada '${fn.exportNames.join(', ')}' sem execução medida pelo V8`,
+        severity: 'media', message: `Função exportada '${fn.exportNames.join(', ')}' sem execução medida pelo V8`,
         evidence: 'contagem V8 da função nas passadas 1, 2 e 3: 0, 0, 0'});
     }
   }
