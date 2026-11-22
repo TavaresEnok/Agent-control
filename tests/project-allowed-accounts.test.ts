@@ -9,7 +9,7 @@ import {AccountHomes} from '../src/account-homes.ts';
 import {Capacity} from '../src/capacity.ts';
 import {type Command, digest, Refusal} from '../src/contracts.ts';
 import {resolvePersonalDesign} from '../src/design-command.ts';
-import {requiredDesignProfile, reserveDesignModel} from '../src/design-model-reservation.ts';
+import {designGrantProjectAccounts, requiredDesignProfile, reserveDesignModel} from '../src/design-model-reservation.ts';
 import {prepareDesignSpecialist} from '../src/design-prepare.ts';
 import {loadSpecialistExamPlan, reserveSpecialistExamSeat} from '../src/exam-provider.ts';
 import {Ledger} from '../src/ledger.ts';
@@ -327,8 +327,20 @@ test(' caminhos de reserva (verify, exam-provider, design e módulos 2 a 9 com e
       const seat = await reserveDesignModel(ledger, capacity, owner, authority, intentId, role, [accountB]);
       assert.equal(seat.accountId, accountB);
       assert.equal(seat.profileId, expectedProfile);
+      // The grant records the project's restriction, so the launch check applies the same list again.
+      const recorded = (await ledger.pool.query<{selection: unknown}>('SELECT selection FROM ac_capacity_grants WHERE id=$1', [seat.grantId])).rows[0]?.selection;
+      assert.deepEqual(designGrantProjectAccounts(recorded), [accountB]);
       await release(seat.grantId);
     }
+    // Without a project restriction the grant records none, and the launch check resolves the priority account as before.
+    {
+      const seat = await reserveDesignModel(ledger, capacity, owner, authority, intentId, 'examiner');
+      const recorded = (await ledger.pool.query<{selection: unknown}>('SELECT selection FROM ac_capacity_grants WHERE id=$1', [seat.grantId])).rows[0]?.selection;
+      assert.equal(designGrantProjectAccounts(recorded), undefined);
+      await release(seat.grantId);
+    }
+    assert.equal(designGrantProjectAccounts({allowedAccounts: [accountB]}), undefined, 'the seat-level allowedAccounts is not the project restriction');
+    assert.equal(designGrantProjectAccounts(null), undefined);
 
     // Design com Conta B ocupada -> CAPACITY_BUSY (nunca usa Conta A).
     const holdDesignB = await reserveDesignModel(ledger, capacity, owner, authority, intentId, 'examiner', [accountB]);

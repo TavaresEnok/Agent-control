@@ -114,11 +114,17 @@ export async function setPersonalProjectAccounts(
  }
  const parsed=Installation.safeParse(raw);
  if(!parsed.success)throw new Refusal('INVALID_INSTALLATION',400);
- const backupPath=join(dirname(resolvedPath),`installation.json.before-contas-${stampOf(options?.now??new Date())}`);
- try{
-  await writeFile(backupPath,originalBytes,{mode:0o600,flag:'wx'});
- }catch(error){
-  if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error;
+ // Each write keeps its own copy: a second run in the same second gets a numbered name instead of losing the copy.
+ const stamp=stampOf(options?.now??new Date());
+ let backupPath='';
+ for(let index=1;;index++){
+  backupPath=join(dirname(resolvedPath),`installation.json.before-contas-${stamp}${index===1?'':'-'+index}`);
+  try{
+   await writeFile(backupPath,originalBytes,{mode:0o600,flag:'wx'});
+   break;
+  }catch(error){
+   if((error as NodeJS.ErrnoException).code!=='EEXIST'||index>=100)throw error;
+  }
  }
  await chmod(backupPath,0o600);
  await writePrivate(resolvedPath,JSON.stringify(raw,null,2)+'\n');

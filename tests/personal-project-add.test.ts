@@ -133,6 +133,13 @@ test('adding a repository registers it once, shares accounts and publishes polic
   const backups=(await readdir(data)).filter(n=>n.startsWith('installation.json.before-contas-'));
   assert.ok(backups.length>=1);
   assert.equal((await stat(join(data,backups[0]!))).mode&0o077,0);
+  // Two writes in the same second keep two copies.
+  const fixed=new Date('2026-11-22T05:00:00.000Z');
+  await setPersonalProjectAccounts(file,'Segundo',[managerAccount],{now:fixed});
+  await setPersonalProjectAccounts(file,'Segundo',[programmerAccount],{now:fixed});
+  const sameSecond=(await readdir(data)).filter(n=>n.startsWith('installation.json.before-contas-')).length;
+  assert.equal(sameSecond,backups.length+2);
+  await setPersonalProjectAccounts(file,'Segundo',[managerAccount,programmerAccount]);
 
   await runPersonalProjectContasCli(['--contas',file,result.projectId,'--todas']);
   const cleared=JSON.parse(await readFile(file,'utf8')) as {projects:{id:string;allowedAccountIds?:string[]}[]};

@@ -7,6 +7,16 @@ import type {PoolClient} from 'pg';
 
 type DesignPurpose = NonNullable<DesignReserveOptions['purpose']>;
 
+/**
+ * The project restriction recorded in a design grant, or undefined when the project has none. Without it the launch
+ * check resolves the priority account exactly as before, so a priority change between reservation and launch refuses.
+ */
+export function designGrantProjectAccounts(selection: unknown): string[] | undefined {
+  const value = (selection as {projectAllowedAccounts?: unknown} | null | undefined)?.projectAllowedAccounts;
+  if (!Array.isArray(value)) return undefined;
+  return value.filter((id: unknown): id is string => typeof id === 'string');
+}
+
 /** A preparação coloca a conta Claude prioritária no início da cadeia regular. */
 export async function requiredDesignProfile(
   db: Pick<PoolClient, 'query'>,
@@ -60,6 +70,7 @@ export async function reserveDesignModel(
   const seat = await capacity.reserveWithSeat(principal, {
     attemptId: randomUUID(), intentId, contextId: authority.contextId, role: 'specialist',
     provider: 'claude', requiredProfileId: profile.id, designPurpose: purpose, allowedAccounts: [profile.account],
+    ...(allowedAccountIds ? {projectAllowedAccounts: [...allowedAccountIds]} : {}),
   }, authority);
   if (
     seat.grant.profile_id !== profile.id
