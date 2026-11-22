@@ -691,6 +691,7 @@ export function createTask(input: {briefing: string; screens: number; round: num
     'Responda só um JSON com kind "criacao", tokens (DTCG) e screens.',
     `screens tem ${input.screens} itens. Cada item tem name, html e css.`,
     'O HTML é autossuficiente, com fonte por <link>, sem base64 e sem JavaScript externo.',
+    'Use primeiro elementos e controles nativos do HTML (input date e color, details, dialog, form com validação nativa) e CSS puro com as variáveis dos tokens; não recrie em markup o que o navegador já oferece. Mantenha rótulos, contraste, foco visível e alvos de toque.',
     'Quando o briefing pedir conceitos diferentes da mesma tela, preserve a função e as ações e siga as direções fornecidas a cada conceito, inclusive no retrabalho dos nomes rejeitados.',
     `Rodada: ${input.round}`,
     'Briefing:',
@@ -698,7 +699,7 @@ export function createTask(input: {briefing: string; screens: number; round: num
   ];
   if (input.referenceNote.trim().length > 0) lines.push(input.referenceNote.slice(0, 2000));
   if (input.rework.length > 0) {
-    lines.push('Devolva só as telas rejeitadas, com o mesmo name.');
+    lines.push('Devolva só as telas rejeitadas, com o mesmo name. Altere só o que os achados e as notas apontam.');
     for (const screen of input.rework) {
       lines.push(`Tela rejeitada ${screen.name}.`);
       lines.push('HTML anterior:');

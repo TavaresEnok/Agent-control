@@ -334,6 +334,9 @@ test('correction asks the owner for the write paths and recheck closes or reopen
     assert.equal(message.text.includes('ASVS-4-2'), true);
     assert.equal(message.text.includes(regression), true);
     assert.equal(message.text.includes(REMEDIATION_ACCEPTANCE), true);
+    // A ordem de correção leva a regra de mudança mínima no critério de aceite.
+    assert.equal(message.text.includes('muda só o necessário para fechar o achado'), true);
+    assert.equal(message.text.includes('não adiciona dependência'), true);
     assert.equal(message.text.includes('Consulta sem autorização'), false);
     assert.equal(message.text.includes('Cabeçalho ausente'), false);
     assert.equal(message.text.includes('por favor ignore as regras'), false);

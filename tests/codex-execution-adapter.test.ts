@@ -1,7 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {CodexExecutionAdapter,CodexExecutionFailure} from '../src/codex-execution-adapter.ts';
+import {CodexExecutionAdapter,CodexExecutionFailure,PROGRAMMER_INSTRUCTION} from '../src/codex-execution-adapter.ts';
+import {ClaudeExecutionAdapter} from '../src/claude-execution-adapter.ts';
 import type {AgentRunner,AgentEvent,AgentRunSpec} from '../upstream/cezar/packages/cezar/dist/core/agent-runner.js';
 function fixture(events:AgentEvent[],capture:(spec:AgentRunSpec)=>void):AgentRunner{
  return {backend:'codex',run:async()=>{throw Error('UNUSED');},interrupt:async()=>{},startSession(spec,onEvent){capture(spec);
@@ -29,4 +30,11 @@ test('a failed or incomplete native turn cannot be presented as successful work'
   const adapter=new CodexExecutionAdapter(fixture(events,()=>{}));
   await assert.rejects(adapter.run(input(),async()=>{}),error=>{assert(error instanceof CodexExecutionFailure);assert.equal(error.code,'EXECUTION_NATIVE_TURN_FAILED');assert(!error.message.includes('PRIVATE_PROVIDER_ERROR'));return true;});
  }
+});
+test('Claude and Codex programmers read the same single programmer instruction',async()=>{
+ const prompts:string[]=[];
+ const capture=(spec:AgentRunSpec)=>{prompts.push(String(spec.systemPrompt));};
+ await new CodexExecutionAdapter(fixture([{type:'turn-end'}],capture)).run(input(),async()=>{});
+ await new ClaudeExecutionAdapter({...fixture([{type:'turn-end'}],capture),backend:'claude'}).run(input(),async()=>{});
+ assert.deepEqual(prompts,[PROGRAMMER_INSTRUCTION,PROGRAMMER_INSTRUCTION]);
 });

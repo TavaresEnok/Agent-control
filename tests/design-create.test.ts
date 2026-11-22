@@ -279,7 +279,9 @@ test('retrabalho pede só os nomes rejeitados, preserva os aprovados e mantém a
     assert.equal(tasks.length, 2);
     const reworkTask = tasks[1]!;
     assert.match(reworkTask, /screens tem 1 itens\./);
-    assert.match(reworkTask, /Devolva só as telas rejeitadas, com o mesmo name\./);
+    assert.match(reworkTask, /Devolva só as telas rejeitadas, com o mesmo name\. Altere só o que os achados e as notas apontam\./);
+    assert.match(reworkTask, /controles nativos do HTML/);
+    assert.match(reworkTask, /foco visível/);
     assert.match(reworkTask, /Tela rejeitada conceito-editorial\./);
     assert.equal(reworkTask.includes('Tela rejeitada conceito-compacto'), false);
     assert.equal(reworkTask.includes(briefing), true);

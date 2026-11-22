@@ -97,6 +97,7 @@ Cada trabalhador recebe uma ordem escrita e autocontida, com:
 - os arquivos permitidos;
 - o critério de pronto;
 - os testes a rodar;
+- a regra de mudança mínima: antes de escrever, procure no projeto, na biblioteca padrão, nos recursos nativos e nas dependências já instaladas e use o que existir; não crie dependência, arquivo ou abstração que a tarefa não peça; não retire validação, tratamento de erro, segurança, acessibilidade nem testes; diga no relatório qual degrau resolveu e quantas linhas mudou;
 - o trailer e a regra de commit, sem push.
 
 Comandos de acionamento:
