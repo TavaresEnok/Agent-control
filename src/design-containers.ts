@@ -17,7 +17,18 @@ export function claimDesignContainer(): string {
   return name;
 }
 
+let remover: (name: string) => Promise<void> = name => removeByDocker(name);
+
+/** Só para testes: troca o docker rm -f por um registro. */
+export function setDesignContainerRemoverForTest(fn: (name: string) => Promise<void>): void {
+  remover = fn;
+}
+
 function remove(name: string): Promise<void> {
+  return remover(name);
+}
+
+function removeByDocker(name: string): Promise<void> {
   if (!DESIGN_EXAM_CONTAINER.test(name)) return Promise.resolve();
   return new Promise(resolve => {
     const child = spawn(DESIGN_RUNTIME_BIN, ['rm', '-f', name], {stdio: 'ignore'});
@@ -29,7 +40,8 @@ function remove(name: string): Promise<void> {
 
 /** O contêiner terminou (ou o prazo venceu): remove pelo nome. Com --rm e saída normal, não acha nada. */
 export async function releaseDesignContainer(name: string): Promise<void> {
-  if (active.delete(name)) await remove(name);
+  // Depois do fechamento, remove sempre: o contêiner pode ter sido criado depois do rm -f da limpeza.
+  if (active.delete(name) || closed) await remove(name);
 }
 
 /** Fim da sessão, também na interrupção: remove o que está de pé e impede novos contêineres. */
@@ -44,4 +56,5 @@ export async function closeDesignContainers(): Promise<void> {
 export function resetDesignContainersForTest(): void {
   closed = false;
   active.clear();
+  remover = name => removeByDocker(name);
 }

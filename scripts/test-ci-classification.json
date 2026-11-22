@@ -75,6 +75,7 @@
   "design-states.test.ts",
   "design-stylelint.test.ts",
   "design-tokens-round2.test.ts",
+  "design-login-decision.test.ts",
   "design-trust.test.ts",
   "design-wallace.test.ts",
   "diagnostics.test.ts",

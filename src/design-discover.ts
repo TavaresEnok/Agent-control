@@ -17,6 +17,8 @@ export type DesignLogin = {
   usernameSelector: string;
   passwordSelector: string;
   submitSelector: string;
+  /** Opcional: elemento que só aparece com a sessão aberta. Torna a decisão do login exata. */
+  successSelector?: string;
 };
 
 /** Username e seletores. A senha não entra neste objeto. */

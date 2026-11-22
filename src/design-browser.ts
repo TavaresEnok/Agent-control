@@ -305,6 +305,7 @@ async function writeLoginStateInImage(targetUrl: string, login: DesignLogin, pin
       usernameSelector: login.usernameSelector,
       passwordSelector: login.passwordSelector,
       submitSelector: login.submitSelector,
+      ...(login.successSelector === undefined ? {} : {successSelector: login.successSelector}),
     }), {mode: 0o600});
     await chmod(cred, 0o600);
     await mkdir(out, {mode: 0o1777});

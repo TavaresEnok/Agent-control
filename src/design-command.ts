@@ -185,7 +185,10 @@ function loginFromJson(value: unknown): DesignLogin {
     if (typeof item !== 'string' || item.length < 1 || item.length > 500) throw new Refusal('DESIGN_LOGIN_INVALID', 400);
     picked[field] = item;
   }
-  return picked;
+  const success = row.successSelector;
+  if (success === undefined) return picked;
+  if (typeof success !== 'string' || success.length < 1 || success.length > 500) throw new Refusal('DESIGN_LOGIN_INVALID', 400);
+  return {...picked, successSelector: success};
 }
 
 /**

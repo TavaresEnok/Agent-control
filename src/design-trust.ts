@@ -1,3 +1,4 @@
+import {execFile} from 'node:child_process';
 import {X509Certificate} from 'node:crypto';
 import {constants} from 'node:fs';
 import {chmod, mkdtemp, open, rm, writeFile} from 'node:fs/promises';
@@ -66,4 +67,22 @@ export async function stageDesignTrustCa(pem: string): Promise<{path: string; di
     await rm(directory, {recursive: true, force: true});
     throw error;
   }
+}
+
+/**
+ * A CA de --ca vale para qualquer nome que ela assine. O que a limita à homologação é a rede:
+ * design-homologation tem que ser interna, sem saída. Rede ausente ou com saída recusa.
+ */
+export function assertInternalDesignNetwork(
+  inspect: () => Promise<string> = () => new Promise((resolve, reject) => {
+    execFile('docker', ['network', 'inspect', 'design-homologation', '--format', '{{.Internal}}'], {timeout: 15_000}, (error, stdout) => {
+      if (error) reject(error);
+      else resolve(String(stdout));
+    });
+  }),
+): Promise<void> {
+  return inspect().then(
+    out => { if (out.trim() !== 'true') throw new Refusal('DESIGN_TRUST_CA_NETWORK', 400); },
+    () => { throw new Refusal('DESIGN_TRUST_CA_NETWORK', 400); },
+  );
 }

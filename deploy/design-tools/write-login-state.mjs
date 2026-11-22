@@ -2,6 +2,7 @@
 import {chmodSync, readdirSync, readFileSync, statSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {prepareTrust} from './trust.mjs';
+import {bodyLeaksPassword, cookieChanged, cookieMap, loginOpened, samePage} from './login-decision.mjs';
 
 function findChrome() {
   let entries;
@@ -24,25 +25,6 @@ function findChrome() {
   return null;
 }
 
-function cookieMap(cookies) {
-  return new Map(cookies.map(cookie => [`${cookie.domain} ${cookie.path} ${cookie.name}`, cookie.value]));
-}
-
-function cookieChanged(before, cookies) {
-  return cookies.some(cookie => before.get(`${cookie.domain} ${cookie.path} ${cookie.name}`) !== cookie.value);
-}
-
-/** 'oculto' só quando o campo de senha comprovadamente não está na tela. Erro de leitura não conta. */
-async function passwordState(page) {
-  try {
-    const field = page.locator(login.passwordSelector);
-    if (await field.count() === 0) return 'oculto';
-    return await field.first().isVisible() ? 'visivel' : 'oculto';
-  } catch {
-    return 'desconhecido';
-  }
-}
-
 /** localStorage e sessionStorage da página, para reconhecer SPA que guarda o token fora de cookie. */
 async function storageSnapshot(page) {
   try {
@@ -53,6 +35,14 @@ async function storageSnapshot(page) {
 }
 
 /** Segundo fator ou outra senha na tela: o login não terminou. */
+async function selectorVisible(page, selector) {
+  try {
+    return await page.locator(selector).first().isVisible();
+  } catch {
+    return false;
+  }
+}
+
 async function secondStepVisible(page) {
   try {
     const step = page.locator('input[type=password], input[autocomplete="one-time-code"]');
@@ -64,18 +54,6 @@ async function secondStepVisible(page) {
   } catch {
     return true;
   }
-}
-
-function samePage(a, b) {
-  return a.origin === b.origin && a.pathname.replace(/\/+$/u, '') === b.pathname.replace(/\/+$/u, '');
-}
-
-/** Formas em que a senha costuma aparecer gravada num cookie ou no localStorage. */
-function passwordForms(username, password) {
-  const forms = new Set([password, encodeURIComponent(password), Buffer.from(password).toString('base64')]);
-  if (typeof username === 'string') forms.add(Buffer.from(`${username}:${password}`).toString('base64'));
-  // A senha crua sempre entra, mesmo curta. As formas derivadas só quando têm tamanho para não casar por acaso.
-  return [...forms].filter(form => form === password || form.length >= 4);
 }
 
 const login = JSON.parse(readFileSync('/login/login.json', 'utf8'));
@@ -109,13 +87,7 @@ try {
   while (Date.now() < deadline) {
     await page.waitForTimeout(500);
     const cookies = await context.cookies();
-    // O cookie do laboratório continua valendo sozinho.
-    if (cookies.some(cookie => cookie.name === 'ac_lab_session' && cookie.value === 'aberta')) {
-      open = true;
-      break;
-    }
-    // Num sistema real: a página saiu do login, o campo de senha sumiu em duas leituras
-    // seguidas e o servidor gravou ou trocou um cookie. Senha errada fica na página de login.
+    const labOpen = cookies.some(cookie => cookie.name === 'ac_lab_session' && cookie.value === 'aberta');
     const state = await passwordState(page);
     hiddenReads = state === 'oculto' ? hiddenReads + 1 : 0;
     let left = false;
@@ -124,17 +96,24 @@ try {
     } catch {
       left = false;
     }
-    // Uma SPA que abre a sessão na mesma URL precisa do campo oculto por mais tempo.
     const storageNow = hiddenReads >= 2 ? await storageSnapshot(page) : null;
-    const changed = cookieChanged(before, cookies) || (storageNow !== null && storageBefore !== null && storageNow !== storageBefore);
-    if (changed && hiddenReads >= 2 && (left || hiddenReads >= 4) && !(await secondStepVisible(page))) {
+    const successRequired = typeof login.successSelector === 'string';
+    if (loginOpened({
+      labOpen,
+      hiddenReads,
+      left,
+      changed: cookieChanged(before, cookies) || (storageNow !== null && storageBefore !== null && storageNow !== storageBefore),
+      secondStep: labOpen ? false : await secondStepVisible(page),
+      successRequired,
+      successVisible: successRequired ? await selectorVisible(page, login.successSelector) : false,
+    })) {
       open = true;
       break;
     }
   }
   if (!open) process.exit(1);
   const body = JSON.stringify(await context.storageState());
-  if (passwordForms(login.username, login.password).some(form => body.includes(form))) process.exit(2);
+  if (bodyLeaksPassword(body, login.username, login.password)) process.exit(2);
   writeFileSync('/output/state.json', body, {mode: 0o600});
   chmodSync('/output/state.json', 0o600);
 } finally {

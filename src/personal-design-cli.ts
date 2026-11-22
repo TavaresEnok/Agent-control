@@ -22,11 +22,12 @@ import {readDesignCaptureFiles} from './design-report.ts';
 import {loadInstallation} from './installation.ts';
 import {Ledger} from './ledger.ts';
 import {containFailure} from './failure-log.ts';
-import {readDesignTrustCa, stageDesignTrustCa} from './design-trust.ts';
+import {assertInternalDesignNetwork, readDesignTrustCa, stageDesignTrustCa} from './design-trust.ts';
 
 const messages: Record<string, string> = {
   DESIGN_USAGE: 'Uso: npm run personal:design -- <instalação.json> <projectId> --url <url> [--login-file <arquivo>] [--ca <arquivo.pem>] [--esperar-cota]',
   DESIGN_TRUST_CA_INVALID: 'O --ca tem que ser um arquivo PEM só com certificados de CA, e a URL tem que ser https num host .local.',
+  DESIGN_TRUST_CA_NETWORK: 'O --ca só é aceito com a rede design-homologation interna (sem saída para a internet).',
   DESIGN_TRUST_CA_FAILED: 'O certificado da homologação não fecha na CA informada em --ca, ou o host não respondeu em HTTPS.',
   PERSONAL_ACTIVATION_REQUIRED: 'O exame de design só roda numa instalação pessoal.',
   NOT_FOUND: 'Projeto não encontrado.',
@@ -390,6 +391,7 @@ async function main() {
   const opened = parsed.loginFile === undefined ? undefined : await readDesignLoginFile(parsed.loginFile);
   let trust: Awaited<ReturnType<typeof stageDesignTrustCa>> | undefined;
   try {
+    if (parsed.caFile !== undefined) await assertInternalDesignNetwork();
     trust = parsed.caFile === undefined ? undefined : await stageDesignTrustCa(await readDesignTrustCa(parsed.caFile));
   } catch (error) {
     opened?.wipe();

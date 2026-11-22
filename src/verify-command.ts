@@ -546,6 +546,7 @@ async function runJob(input: {
   snapshot: string;
 }): Promise<void> {
   const {ready, id, output, progressPath, state, modelCalls, startedMs, snapshot} = input;
+  let progressWrites: Promise<void> = Promise.resolve();
   const onPhase = async (phase: 'mapa' | 'exame' | 'confirmacao' | 'relatorio') => {
     state.phase = phase;
     await writePrivateFile(progressPath, renderProgress(state));
@@ -580,12 +581,16 @@ async function runJob(input: {
         toolResults: collected.tools,
         runId: id,
         onPhase,
-        onProgress: async progress => {
-          if (state.status !== 'running') return;
-          state.judged = progress.judged;
-          state.total = progress.total;
-          state.modelCalls = progress.modelCalls;
-          await writePrivateFile(progressPath, renderProgress(state));
+        onProgress: progress => {
+          // Em fila: a gravação final espera esta, e uma contagem atrasada nunca volta o arquivo para running.
+          progressWrites = progressWrites.then(async () => {
+            if (state.status !== 'running') return;
+            state.judged = progress.judged;
+            state.total = progress.total;
+            state.modelCalls = progress.modelCalls;
+            await writePrivateFile(progressPath, renderProgress(state));
+          }).catch(() => undefined /* progress is informational */);
+          return progressWrites;
         },
         modelCalls,
         mapEnabled: ready.mapEnabled,
@@ -605,6 +610,7 @@ async function runJob(input: {
       if (result.partial) state.note = `Relatório parcial: parou ${result.partial.point} por falta de orçamento de chamadas do modelo.${state.note ? ` ${state.note}` : ''}`;
       const unavailable = collected.tools.filter(tool => tool.state === 'indisponivel' || tool.state === 'truncada');
       if (unavailable.length) state.note = `${state.note ? `${state.note} ` : ''}Ferramentas sem resultado completo: ${unavailable.map(tool => tool.name).join(', ')}.`;
+      await progressWrites;
       state.status = 'done';
       state.phase = 'done';
       state.modelCalls = modelCalls.count;
@@ -612,6 +618,7 @@ async function runJob(input: {
       await writePrivateFile(progressPath, renderProgress(state));
     } catch (error) {
       try {
+        await progressWrites;
         state.status = 'failed';
         state.phase = 'failed';
         state.modelCalls = modelCalls.count;
