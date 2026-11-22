@@ -256,7 +256,7 @@ export class NativeExecutionSupervisor extends NativeExecutionTerminalWork{
    const baseAccountMount=examAccountMount(join(this.config.accountRoot,g.account_id),isolateExam);
    workerEnv=examWorkerEnv(this.config.workerEnv,isolateExam);
    if(synthetic)workerEnv=workerEnv.filter(entry=>!entry.startsWith('AC_VERIFY_EXAM='));
-   if(personal&&!input.moduleExam){
+   if(personal&&!synthetic&&!input.moduleExam){
     workerEnv=workerEnv.filter(entry=>!entry.startsWith('AC_PERSONAL_EGRESS='));
     if(this.config.personalEgress??personalEgressEnabled())workerEnv.push('AC_PERSONAL_EGRESS=1');
    }

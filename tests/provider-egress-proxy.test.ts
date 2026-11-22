@@ -49,7 +49,7 @@ test('native workers and the planner apply the personal proxy decision', async (
   assert.ok(decision >= 0 && decision < worker.indexOf('initializeNativeWorkerEnvironment();'));
   assert.ok(worker.includes('initializeNativeWorkerEnvironment(personalCli&&!personalEgress?undefined:input.proxyUrl);'));
   const supervisor = await readFile(new URL('../src/native-execution-supervisor.ts', import.meta.url), 'utf8');
-  assert.match(supervisor, /if\(personal&&!input\.moduleExam\)\s*\{[^}]*if\(this\.config\.personalEgress\?\?personalEgressEnabled\(\)\)workerEnv\.push\('AC_PERSONAL_EGRESS=1'\);/);
+  assert.match(supervisor, /if\(personal&&!synthetic&&!input\.moduleExam\)\s*\{[^}]*if\(this\.config\.personalEgress\?\?personalEgressEnabled\(\)\)workerEnv\.push\('AC_PERSONAL_EGRESS=1'\);/);
   const planner = await readFile(new URL('../src/native-planning-supervisor.ts', import.meta.url), 'utf8');
   assert.ok(planner.includes('const useProxy=!personal||(this.config.personalEgress??personalEgressEnabled());'));
   assert.ok(planner.includes("...(useProxy?{proxyUrl:'http://provider-egress:8080' as const}:{})"));
