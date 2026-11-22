@@ -5,6 +5,7 @@ import {chmod, lstat, mkdir, open, readdir, readFile, rename, rm, unlink, writeF
 import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {Refusal} from './contracts.ts';
 import {VERIFY_RUNTIME_BIN, verifyDatabaseArguments} from './verify-image.ts';
+import {diskUsedPercent} from './personal-disk.ts';
 
 export type VerifyDatabaseSnapshot = {
   directory: string;
@@ -17,6 +18,8 @@ export type RefreshVerifyDatabasesInput = {
   image?: string;
   spawn?: (args: readonly string[]) => Promise<number>;
   now?: Date;
+  /** Disk use of the data directory; tests replace it. Undefined keeps the normal retention of two recent stamps. */
+  usedDiskPercent?: () => Promise<number | undefined>;
 };
 
 type ManifestFile = {path: string; sha256: string; bytes: number};
@@ -286,7 +289,7 @@ export async function refreshVerifyDatabases(input: RefreshVerifyDatabasesInput)
   }
   // current.json is already published. A stubborn old stamp must not undo it or fail the refresh.
   try {
-    await pruneVerifyDatabaseStamps(root, image);
+    await pruneVerifyDatabaseStamps(root, image, undefined, {keepRecent: verifyDatabaseKeepRecent(await (input.usedDiskPercent ?? (() => measuredDiskPercent(root)))())});
   } catch {
     console.error(JSON.stringify({event: 'VERIFY_DB_PRUNE_FAILED'}));
   }
@@ -515,27 +518,45 @@ export async function releaseVerifyDatabaseStamp(dataDirectory: string, stamp: s
  * A claim expires when process.kill(pid, 0) fails with ESRCH; prune may remove that file.
  * A failure to delete one stamp is logged and does not stop the others.
  */
-export async function pruneVerifyDatabaseStamps(dataDirectory: string, image: string, spawn?: CommandRunner): Promise<void> {
+/** From this disk use on, only the current stamp and the stamps held by a live run are kept. Each stamp has several GB. */
+export const VERIFY_DB_PRESSURE_PERCENT = 90;
+
+/** Recent stamps kept besides the current and the held ones: two normally, one under disk pressure. */
+export function verifyDatabaseKeepRecent(usedPercent: number | undefined): 1 | 2 {
+  return usedPercent !== undefined && Number.isFinite(usedPercent) && usedPercent >= VERIFY_DB_PRESSURE_PERCENT ? 1 : 2;
+}
+
+/** Disk use of the data directory, or undefined when it cannot be measured (then the normal retention applies). */
+async function measuredDiskPercent(root: string): Promise<number | undefined> {
+  try {
+    return await diskUsedPercent(root);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Stamps that a prune with `keepRecent` would discard. Null when current.json or the claims cannot be read: nothing is discarded. */
+export async function verifyDatabaseStampsToDiscard(dataDirectory: string, keepRecent: 1 | 2 = 2): Promise<string[] | null> {
   const root = assertDataDirectory(dataDirectory);
   const parent = join(root, 'verify-db');
   const names = await listStampNames(parent);
-  if (names.length === 0) return;
+  if (names.length === 0) return [];
   let currentName: string | null = null;
   try {
     const current = await readCurrentVerifyDatabase(root);
     currentName = current ? directStampName(parent, current.directory) : null;
   } catch {
     console.error(JSON.stringify({event: 'VERIFY_DB_PRUNE_FAILED', reason: 'current'}));
-    return;
+    return null;
   }
   let inUse: string[];
   try {
     inUse = await liveClaimStamps(parent);
   } catch {
     console.error(JSON.stringify({event: 'VERIFY_DB_PRUNE_FAILED', reason: 'in-use'}));
-    return;
+    return null;
   }
-  const keep = new Set(names.slice(-2));
+  const keep = new Set(names.slice(-keepRecent));
   if (currentName) keep.add(currentName);
   for (const used of inUse) {
     const name = directStampName(parent, used);
@@ -544,12 +565,46 @@ export async function pruneVerifyDatabaseStamps(dataDirectory: string, image: st
     if (presence === 'no') continue;
     keep.add(name);
   }
-  for (const name of names) {
-    if (keep.has(name)) continue;
+  return names.filter(name => !keep.has(name));
+}
+
+export async function pruneVerifyDatabaseStamps(
+  dataDirectory: string,
+  image: string,
+  spawn?: CommandRunner,
+  options: {keepRecent?: 1 | 2} = {},
+): Promise<string[]> {
+  const root = assertDataDirectory(dataDirectory);
+  const parent = join(root, 'verify-db');
+  const discard = await verifyDatabaseStampsToDiscard(root, options.keepRecent ?? 2);
+  if (!discard) return [];
+  const removed: string[] = [];
+  for (const name of discard) {
     try {
       await discardStamp(join(parent, name), parent, image, spawn);
+      removed.push(name);
     } catch {
       console.error(JSON.stringify({event: 'VERIFY_DB_PRUNE_FAILED', stamp: name}));
     }
   }
+  return removed;
+}
+
+/** Retention stage of `personal:maintenance`: discards the stamps that a refresh would discard now, with the disk-pressure rule. */
+export async function runVerifyDatabaseRetention(
+  dataDirectory: string,
+  apply: boolean,
+  deps: {usedPercent?: number; image?: string; spawn?: CommandRunner} = {},
+): Promise<string[]> {
+  const root = assertDataDirectory(dataDirectory);
+  const used = deps.usedPercent ?? await measuredDiskPercent(root);
+  const keepRecent = verifyDatabaseKeepRecent(used);
+  const rule = keepRecent === 1 ? `disco em ${VERIFY_DB_PRESSURE_PERCENT}% ou mais: fica só a base atual e as em uso` : 'fica a base atual, as em uso e as 2 mais recentes';
+  const discard = await verifyDatabaseStampsToDiscard(root, keepRecent);
+  if (discard === null) throw new Refusal('VERIFY_DB_PRUNE_FAILED');
+  if (!apply) return [`Bases de vulnerabilidades (${rule}): ${discard.length} elegível(is)${discard.length ? ': ' + discard.join(', ') : ''}.`];
+  if (discard.length === 0) return [`Bases de vulnerabilidades (${rule}): nada a remover.`];
+  const image = deps.image ?? await readInstalledImage(root);
+  const removed = await pruneVerifyDatabaseStamps(root, image, deps.spawn, {keepRecent});
+  return [`Bases de vulnerabilidades (${rule}): removida(s) ${removed.length} de ${discard.length}${removed.length ? ': ' + removed.join(', ') : ''}.`];
 }

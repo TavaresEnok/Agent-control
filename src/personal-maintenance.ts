@@ -11,7 +11,7 @@ import {nativeExecutionExecutorDigest} from './native-execution-contract.ts';
 import {readonlyDesignExam,type NativeModuleExamRecovery,type ModuleExamWorkRelease,ModuleExamRecoveryPreserved} from './native-execution-supervisor.ts';
 import {inventoryJobWork,readRetentionCursor,rotateAfter,writeRetentionCursor} from './native-work-retention.ts';
 import {composePersonalExecutionSupervisors} from './personal-runtime.ts';
-import {readCurrentVerifyDatabase,refreshVerifyDatabases} from './verify-db.ts';
+import {readCurrentVerifyDatabase,refreshVerifyDatabases,runVerifyDatabaseRetention} from './verify-db.ts';
 
 const imageId=/^sha256:[a-f0-9]{64}$/;
 type Pair={workerImage:string;toolsImage:string};
@@ -29,6 +29,8 @@ export type MaintenanceDeps={
  refreshDatabases?:(dataDirectory:string)=>Promise<void>;
  /** Retention of `work/` of terminal jobs. Tests replace it. */
  jobRetention?:(config:Installation,apply:boolean)=>Promise<string[]>;
+ /** Retention of old vulnerability database stamps. Tests replace it. */
+ verifyDatabaseRetention?:(config:Installation,apply:boolean)=>Promise<string[]>;
  /** Retention of worker worktrees, candidate images and round temporaries. Tests replace it. */
  artifactRetention?:(config:Installation,apply:boolean)=>Promise<string[]>;
  /** The published vulnerability database, or null when none. Used only to show its age. */
@@ -44,12 +46,13 @@ export class RetentionIncomplete extends Error {
 /** A scheduled maintenance stage failed. Every stage still ran; `lines` holds what each one reported. */
 export class MaintenanceIncomplete extends RetentionIncomplete{}
 
-/** The AGENTS.md order: `work/` of terminal jobs first (the largest and most urgent under disk pressure), then worktrees,
- * images and temporaries. The stages are independent: a damaged artifact registry, a database outage or any other failure
+/** The AGENTS.md order: `work/` of terminal jobs first (the largest and most urgent under disk pressure), then old
+ * vulnerability database stamps (several GB each), then worktrees, images and temporaries. The stages are independent: a damaged artifact registry, a database outage or any other failure
  * of one stage never keeps the next one from running. A failure is reported after every stage has had its turn. */
-export async function runRetentionStages(config:Installation,apply:boolean,deps:Pick<MaintenanceDeps,'jobRetention'|'artifactRetention'>={}):Promise<string[]>{
+export async function runRetentionStages(config:Installation,apply:boolean,deps:Pick<MaintenanceDeps,'jobRetention'|'artifactRetention'|'verifyDatabaseRetention'>={}):Promise<string[]>{
  const stages:[string,string,(config:Installation,apply:boolean)=>Promise<string[]>][]=[
   ['jobs','work/ de jobs',deps.jobRetention??runPersonalJobRetention],
+   ['verify-db','bases de vulnerabilidades',deps.verifyDatabaseRetention??((config,apply)=>runVerifyDatabaseRetention(config.dataDirectory,apply))],
   ['artifacts','artefatos (worktrees, imagens e temporários)',deps.artifactRetention??runPersonalArtifactRetention],
  ];
  const lines:string[]=[],failed:string[]=[];

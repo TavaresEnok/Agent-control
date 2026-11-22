@@ -14,6 +14,9 @@ import {
   readCurrentVerifyDatabase,
   refreshVerifyDatabases,
   releaseVerifyDatabaseStamp,
+  runVerifyDatabaseRetention,
+  verifyDatabaseKeepRecent,
+  verifyDatabaseStampsToDiscard,
 } from '../src/verify-db.ts';
 
 const execFileAsync = promisify(execFile);
@@ -400,13 +403,32 @@ test('depois de publicar, a poda apaga o que não é current, recente nem uso', 
     await mkdir(recent, {mode: 0o777});
     await writeFile(join(ancient, 'marker'), 'old');
     await claimVerifyDatabaseStamp(data, used, runLive);
-    const result = await refreshVerifyDatabases({dataDirectory: data, image, spawn: publishingSpawn(), now});
+    const result = await refreshVerifyDatabases({dataDirectory: data, image, spawn: publishingSpawn(), now, usedDiskPercent: async () => 50});
     const left = (await readdir(parent)).filter((name) => /^\d{8}-\d{6}/.test(name)).sort();
     assert.deepEqual(left, ['20200101-000001', '20240101-000000', basename(result.directory)]);
     assert.equal(basename(result.directory), '20261117-150405');
     await assert.rejects(stat(ancient));
     assert.equal((await readFile(join(parent, 'current.json'), 'utf8')).includes(result.directory), true);
     assert.equal((await stat(join(parent, 'in-use', `${runLive}.json`))).mode & 0o777, 0o600);
+  } finally {
+    await rm(data, {recursive: true, force: true});
+  }
+});
+
+test('a busca nova com o disco em 90% ou mais deixa só a atual e as em uso', async () => {
+  const data = await privateDirectory();
+  try {
+    const parent = join(data, 'verify-db');
+    await mkdir(parent, {mode: 0o700});
+    const used = join(parent, '20200101-000001');
+    const recent = join(parent, '20240101-000000');
+    await mkdir(used, {mode: 0o777});
+    await mkdir(recent, {mode: 0o777});
+    await claimVerifyDatabaseStamp(data, used, runLive);
+    const result = await refreshVerifyDatabases({dataDirectory: data, image, spawn: publishingSpawn(), now, usedDiskPercent: async () => 96});
+    const left = (await readdir(parent)).filter((name) => /^\d{8}-\d{6}/.test(name)).sort();
+    assert.deepEqual(left, ['20200101-000001', basename(result.directory)]);
+    await releaseVerifyDatabaseStamp(data, used, runLive);
   } finally {
     await rm(data, {recursive: true, force: true});
   }
@@ -554,5 +576,62 @@ record_tool absent /bin/true "$OUT/nope.json" sh -c 'exit 4'
     await stat(join(dir, 'blank.stderr'));
   } finally {
     await rm(dir, {recursive: true, force: true});
+  }
+});
+
+test('sob pressão de disco a poda guarda só a base atual e as em uso', async () => {
+  assert.equal(verifyDatabaseKeepRecent(89.99), 2);
+  assert.equal(verifyDatabaseKeepRecent(90), 1);
+  assert.equal(verifyDatabaseKeepRecent(97), 1);
+  assert.equal(verifyDatabaseKeepRecent(undefined), 2);
+  assert.equal(verifyDatabaseKeepRecent(Number.NaN), 2);
+  const data = await privateDirectory();
+  try {
+    const parent = join(data, 'verify-db');
+    await mkdir(parent, {recursive: true, mode: 0o700});
+    const names = ['20261120-052924', '20261121-040000', '20261122-040008'];
+    for (const name of names) {
+      await mkdir(join(parent, name), {mode: 0o777});
+      await writeFile(join(parent, name, 'marker'), name);
+    }
+    await writeFile(join(parent, 'current.json'), JSON.stringify({
+      directory: join(parent, names[2]), fetchedAt: new Date().toISOString(), manifestSha256: 'abc',
+    }) + '\n', {mode: 0o600});
+    // Sem pressão, nada sai: a atual é a mais recente e as 2 mais recentes ficam.
+    assert.deepEqual(await verifyDatabaseStampsToDiscard(data, 2), ['20261120-052924']);
+    const preview = await runVerifyDatabaseRetention(data, false, {usedPercent: 50, image});
+    assert.match(preview[0]!, /as 2 mais recentes\): 1 elegível\(is\): 20261120-052924\./);
+    // Uma rodada viva ainda usa a de 21/11.
+    await claimVerifyDatabaseStamp(data, join(parent, names[1]), runLive);
+    const pressured = await runVerifyDatabaseRetention(data, false, {usedPercent: 96, image});
+    assert.match(pressured[0]!, /disco em 90% ou mais: fica só a base atual e as em uso\): 1 elegível\(is\): 20261120-052924\./);
+    const left = async () => (await readdir(parent)).filter((name) => /^\d{8}-\d{6}$/.test(name)).sort();
+    assert.deepEqual(await left(), names, 'a prévia não apaga nada');
+    let dockerCalls = 0;
+    const applied = await runVerifyDatabaseRetention(data, true, {usedPercent: 96, image, spawn: async () => { dockerCalls += 1; return 0; }});
+    assert.match(applied[0]!, /removida\(s\) 1 de 1: 20261120-052924\./);
+    assert.deepEqual(await left(), ['20261121-040000', '20261122-040008']);
+    // Liberada a rodada, sob pressão sobra só a atual.
+    await releaseVerifyDatabaseStamp(data, join(parent, names[1]), runLive);
+    await runVerifyDatabaseRetention(data, true, {usedPercent: 96, image, spawn: async () => { dockerCalls += 1; return 0; }});
+    assert.deepEqual(await left(), ['20261122-040008']);
+    assert.equal(dockerCalls, 0, 'as pastas de teste são graváveis: o contêiner de chmod não é necessário');
+    const nothing = await runVerifyDatabaseRetention(data, true, {usedPercent: 96, image});
+    assert.match(nothing[0]!, /nada a remover\./);
+  } finally {
+    await rm(data, {recursive: true, force: true});
+  }
+});
+
+test('a retenção das bases recusa quando não consegue ler current.json', async () => {
+  const data = await privateDirectory();
+  try {
+    const parent = join(data, 'verify-db');
+    await mkdir(join(parent, '20261120-052924'), {recursive: true, mode: 0o777});
+    await writeFile(join(parent, 'current.json'), '{quebrado', {mode: 0o600});
+    await assert.rejects(runVerifyDatabaseRetention(data, true, {usedPercent: 96, image}), (error: unknown) => error instanceof Refusal && error.code === 'VERIFY_DB_PRUNE_FAILED');
+    assert.ok((await stat(join(parent, '20261120-052924'))).isDirectory());
+  } finally {
+    await rm(data, {recursive: true, force: true});
   }
 });
