@@ -11,7 +11,8 @@ import {designRunArguments, designTrustArguments, DESIGN_TRUST_CA_MOUNT} from '.
 import {executeDesignImage} from '../src/design-image-run.ts';
 import {normalizeDesignTrustCa, readDesignTrustCa, stageDesignTrustCa} from '../src/design-trust.ts';
 // @ts-expect-error módulo da imagem, em JavaScript puro
-import {spkiHash, trustFlags, verifiedTrustFlags} from '../deploy/design-tools/trust.mjs';
+import {installNssTrust, prepareTrust, verifyTargetAgainstCa} from '../deploy/design-tools/trust.mjs';
+import {claimDesignContainer, closeDesignContainers, resetDesignContainersForTest} from '../src/design-containers.ts';
 
 const refusal = (code: string) => (error: unknown) => error instanceof Refusal && error.code === code;
 const dir = mkdtempSync(join(tmpdir(), 'design-trust-test-'));
@@ -46,24 +47,52 @@ after(() => {
   rmSync(dir, {recursive: true, force: true});
 });
 
-test('a cadeia que fecha na CA vira a flag só com a chave do certificado final', async () => {
-  const flags = await verifiedTrustFlags(`https://localhost:${port}`, caPem, 5000);
-  assert.equal(flags.length, 1);
-  const hashes = (flags[0] as string).replace('--ignore-certificate-errors-spki-list=', '').split(',');
-  // Só a chave do certificado final: a da CA é pública e deixaria qualquer servidor anexá-la.
-  assert.deepEqual(hashes, [spkiHash(leafPem)]);
-  assert.equal(hashes.includes(spkiHash(caPem)), false);
+test('o alvo que fecha na CA, com o nome certo, passa na conferência', async () => {
+  await verifyTargetAgainstCa(`https://localhost:${port}`, caPem, 5000);
 });
 
 test('outra CA, outro nome ou HTTP são recusados', async () => {
-  await assert.rejects(verifiedTrustFlags(`https://localhost:${port}`, otherCaPem, 5000), /DESIGN_TRUST_CA_FAILED/);
-  await assert.rejects(verifiedTrustFlags(`https://127.0.0.1:${port}`, caPem, 5000), /DESIGN_TRUST_CA_FAILED/);
-  await assert.rejects(verifiedTrustFlags(`http://localhost:${port}`, caPem, 5000), /DESIGN_TRUST_CA_FAILED/);
+  await assert.rejects(verifyTargetAgainstCa(`https://localhost:${port}`, otherCaPem, 5000), /DESIGN_TRUST_CA_FAILED/);
+  await assert.rejects(verifyTargetAgainstCa(`https://127.0.0.1:${port}`, caPem, 5000), /DESIGN_TRUST_CA_FAILED/);
+  await assert.rejects(verifyTargetAgainstCa(`http://localhost:${port}`, caPem, 5000), /DESIGN_TRUST_CA_FAILED/);
 });
 
-test('sem DESIGN_TRUST_CA nada muda; caminho fora do fixo é recusado', async () => {
-  assert.deepEqual(await trustFlags('https://app.local', {}), []);
-  await assert.rejects(trustFlags('https://app.local', {DESIGN_TRUST_CA: '/etc/passwd'}), /DESIGN_TRUST_CA_FAILED/);
+test('sem DESIGN_TRUST_CA nada muda; caminho ou HOME fora do esperado é recusado', async () => {
+  assert.equal(await prepareTrust('https://app.local', {}), undefined);
+  await assert.rejects(prepareTrust('https://app.local', {DESIGN_TRUST_CA: '/etc/passwd', HOME: '/tmp'}), /DESIGN_TRUST_CA_FAILED/);
+  await assert.rejects(prepareTrust('https://app.local', {DESIGN_TRUST_CA: '/trust/ca.pem', HOME: '/home/app'}), /DESIGN_TRUST_CA_FAILED/);
+});
+
+test('a CA entra no banco NSS como âncora só de TLS, sem flag que ignore erro', () => {
+  const home = mkdtempSync(join(tmpdir(), 'design-nss-'));
+  const calls: string[][] = [];
+  try {
+    installNssTrust(home, caPem, (_bin: string, args: string[]) => {
+      calls.push(args);
+      return {status: 0};
+    });
+    assert.deepEqual(calls[0], ['-d', `sql:${join(home, '.pki', 'nssdb')}`, '-N', '--empty-password']);
+    assert.deepEqual(calls[1]?.slice(2, 6), ['-A', '-t', 'C,,', '-n']);
+    assert.equal(calls.length, 2);
+    assert.throws(() => installNssTrust(home, leafPem, () => ({status: 0})), /DESIGN_TRUST_CA_FAILED/);
+    assert.throws(() => installNssTrust(home, caPem, () => ({status: 1})), /DESIGN_TRUST_CA_FAILED/);
+  } finally {
+    rmSync(home, {recursive: true, force: true});
+  }
+  const exam = readFileSync(new URL('../deploy/design-tools/run-exam.mjs', import.meta.url), 'utf8');
+  const loginScript = readFileSync(new URL('../deploy/design-tools/write-login-state.mjs', import.meta.url), 'utf8');
+  for (const text of [exam, loginScript]) {
+    assert.equal(/ignore-certificate-errors|ignoreHTTPSErrors/.test(text), false);
+    assert.match(text, /prepareTrust\(/);
+  }
+});
+
+test('depois do fim da sessão nenhum contêiner de design sobe', async () => {
+  resetDesignContainersForTest();
+  assert.match(claimDesignContainer(), /^ac-design-exam-/);
+  await closeDesignContainers();
+  assert.throws(() => claimDesignContainer(), /DESIGN_SESSION_CLOSED/);
+  resetDesignContainersForTest();
 });
 
 test('o arquivo de --ca aceita só certificados de CA', async () => {

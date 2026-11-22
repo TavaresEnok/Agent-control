@@ -7,6 +7,7 @@ import {Refusal} from './contracts.ts';
 import type {DesignCaptureDriver, DesignCaptureTheme} from './design-capture.ts';
 import type {DesignLogin} from './design-discover.ts';
 import {assertDesignDestination, assertDesignTarget, designTrustArguments} from './design-image.ts';
+import {claimDesignContainer, releaseDesignContainer} from './design-containers.ts';
 
 type DesignPage = {
   url(): string;
@@ -290,6 +291,8 @@ function commandCode(command: string, args: readonly string[]): Promise<number> 
 /** O contêiner 65532 lê a senha pelo arquivo e grava o estado no mesmo uid, modo 0600. */
 async function writeLoginStateInImage(targetUrl: string, login: DesignLogin, pinnedImage: string, trustCa?: string): Promise<string> {
   const trust = designTrustArguments(targetUrl, trustCa);
+  // Com nome, a sessão remove este contêiner na interrupção, como o do exame.
+  const name = claimDesignContainer();
   const directory = await mkdtemp(join(tmpdir(), 'design-login-'));
   const cred = join(directory, 'login.json');
   const out = join(directory, 'out');
@@ -308,7 +311,7 @@ async function writeLoginStateInImage(targetUrl: string, login: DesignLogin, pin
     await chmod(out, 0o1777);
     if (await commandCode('setfacl', ['-m', 'u:65532:r', cred]) !== 0) throw new Error('DESIGN_LOGIN_IMAGE');
     const code = await commandCode('docker', [
-      'run', '--rm', '--init', '--pull', 'never', '--user', '65532:65532',
+      'run', '--rm', '--init', '--pull', 'never', '--name', name, '--user', '65532:65532',
       '--network', 'design-homologation',
       '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
       '--pids-limit', '512', '--memory', '2147483648', '--memory-swap', '2147483648',
@@ -332,6 +335,7 @@ async function writeLoginStateInImage(targetUrl: string, login: DesignLogin, pin
     await rm(directory, {recursive: true, force: true});
     throw error;
   } finally {
+    await releaseDesignContainer(name);
     await commandCode('setfacl', ['-b', cred]).catch(() => undefined /* ACL reset is best effort; the credential directory is private anyway */);
   }
 }

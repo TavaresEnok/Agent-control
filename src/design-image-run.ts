@@ -1,12 +1,12 @@
 import {spawn} from 'node:child_process';
-import {randomUUID} from 'node:crypto';
 import {constants} from 'node:fs';
 import {chmod, lstat, mkdir, mkdtemp, open, readFile, readdir, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Refusal} from './contracts.ts';
 import type {DesignToolReports} from './design-collect.ts';
-import {DESIGN_EXAM_CONTAINER, DESIGN_RUNTIME_BIN, DESIGN_USER, designRunArguments, requirePinnedDesignImage} from './design-image.ts';
+import {claimDesignContainer, closeDesignContainers, releaseDesignContainer} from './design-containers.ts';
+import {DESIGN_USER, designRunArguments, requirePinnedDesignImage} from './design-image.ts';
 import {parseFocusWalks, type FocusWalk} from './design-keyboard.ts';
 import {parseRenderCells, type DesignRenderCell} from './design-render.ts';
 import {stylelintConfig} from './design-stylelint.ts';
@@ -287,31 +287,9 @@ export function readRebuildImagePin(text: string): string {
   return requirePinnedDesignImage(line);
 }
 
-/** Contêineres de exame deste processo que ainda podem estar de pé. */
-const activeExamContainers = new Set<string>();
-
-/** Matar o cliente `docker run` não para o contêiner: ele é removido pelo nome. */
-function removeExamContainer(name: string): Promise<void> {
-  if (!DESIGN_EXAM_CONTAINER.test(name)) return Promise.resolve();
-  return new Promise(resolve => {
-    const child = spawn(DESIGN_RUNTIME_BIN, ['rm', '-f', name], {stdio: 'ignore'});
-    const timer = setTimeout(() => child.kill('SIGKILL'), 30_000);
-    child.on('error', () => { clearTimeout(timer); resolve(); });
-    child.on('close', () => { clearTimeout(timer); resolve(); });
-  });
-}
-
-/** Remove os contêineres de exame que ficaram de pé. A sessão do design chama no fim, também na interrupção. */
-export async function removeActiveDesignContainers(): Promise<void> {
-  const names = [...activeExamContainers];
-  activeExamContainers.clear();
-  await Promise.all(names.map(removeExamContainer));
-}
-
 async function defaultSpawn(argv: readonly string[], timeoutMs: number, name?: string): Promise<{code: number | null; stderr: string}> {
-  if (name !== undefined) activeExamContainers.add(name);
   const finished = async <T>(value: T): Promise<T> => {
-    if (name !== undefined && activeExamContainers.delete(name)) await removeExamContainer(name);
+    if (name !== undefined) await releaseDesignContainer(name);
     return value;
   };
   return new Promise(resolve => {
@@ -351,8 +329,9 @@ export async function executeDesignImage(input: {
   loginState?: string;
   trustCa?: string;
 }): Promise<DesignImageExecution> {
+  // Sessão já fechada (interrupção): recusa antes de criar qualquer coisa.
+  const containerName = input.run === undefined ? claimDesignContainer() : undefined;
   const output = await mkdtemp(join(tmpdir(), 'design-img-'));
-  const containerName = `ac-design-exam-${randomUUID()}`;
   try {
     // 0o1777 só enquanto o uid 65532 escreve; o host não é esse uid.
     await chmod(output, 0o1777);
@@ -372,9 +351,10 @@ export async function executeDesignImage(input: {
         pidsLimit: 512,
         ...(input.loginState === undefined ? {} : {loginState: input.loginState}),
         ...(input.trustCa === undefined ? {} : {trustCa: input.trustCa}),
-        ...(input.run === undefined ? {name: containerName} : {}),
+        ...(containerName === undefined ? {} : {name: containerName}),
       });
     } catch (error) {
+      if (containerName !== undefined) await releaseDesignContainer(containerName);
       const code = error instanceof Refusal ? error.code : 'DESIGN_IMAGE_FAILED';
       return {ok: false, code, ...emptyExecution(code), shots: []};
     }
@@ -484,3 +464,6 @@ function emptyExecution(code: string): Omit<DesignImageExecution, 'ok' | 'code' 
     computedBlocks: [],
   };
 }
+
+/** Remove os contêineres de design que ficaram de pé e fecha o registro. A sessão chama no fim, também na interrupção. */
+export const removeActiveDesignContainers = closeDesignContainers;

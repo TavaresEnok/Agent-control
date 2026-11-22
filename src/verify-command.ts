@@ -2,7 +2,7 @@ import {extractGitArchive,stripScannerSuppressions,suppressionNote} from './git-
 import {assertDiskSpaceForLaunch,installationVolumes,launchVolumesOf} from './personal-disk.ts';
 import {execFile, spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
-import {chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile} from 'node:fs/promises';
+import {chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {Capacity} from './capacity.ts';
@@ -269,9 +269,17 @@ async function ensureTree(root: string, segments: readonly string[]): Promise<st
   return current;
 }
 
+/** Grava num temporário e renomeia: quem lê nunca vê o arquivo pela metade. */
 async function writePrivateFile(path: string, body: string): Promise<void> {
-  await writeFile(path, body, {encoding: 'utf8', mode: 0o600});
-  await chmod(path, 0o600);
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, body, {encoding: 'utf8', mode: 0o600, flag: 'wx'});
+    await chmod(temporary, 0o600);
+    await rename(temporary, path);
+  } catch (error) {
+    await rm(temporary, {force: true}).catch(() => undefined /* the original write error is what the caller sees */);
+    throw error;
+  }
 }
 
 function renderProgress(state: ProgressState): string {

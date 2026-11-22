@@ -57,6 +57,8 @@ export type ResolvedPersonalDesign = {
   reserve(role: 'specialist' | 'reviewer', avoidProvider?: string, options?: DesignReserveOptions): Promise<DesignSeat>;
   release(seat: DesignSeat): Promise<void>;
   close(): Promise<void>;
+  /** Ctrl-C ou SIGTERM: para a espera na fila de capacidade. */
+  interrupt?(): void;
 };
 
 export type OpenedDesignLogin = {
@@ -456,8 +458,9 @@ export async function resolvePersonalDesign(
     });
     const capacity = new Capacity(ledger);
     // A espera é explícita (--esperar-cota) e tem um prazo só para a rodada inteira.
+    const waitAbort = new AbortController();
     const capacityWait: ExamCapacityWaitOptions | undefined = parsed.waitCapacity === true
-      ? {enabled: true, pollBackoff: project.economy?.managerDiscipline !== false, deadlineAt: Date.now() + DEFAULT_EXAM_CAPACITY_WAIT_DEADLINE_MS}
+      ? {enabled: true, pollBackoff: project.economy?.managerDiscipline !== false, deadlineAt: Date.now() + DEFAULT_EXAM_CAPACITY_WAIT_DEADLINE_MS, signal: waitAbort.signal}
       : undefined;
     const reserve = (role: 'specialist' | 'reviewer', _avoidProvider?: string, options?: DesignReserveOptions): Promise<DesignSeat> => {
       const purpose = options?.purpose ?? (role === 'reviewer' ? 'reviewer' : 'examiner');
@@ -475,6 +478,7 @@ export async function resolvePersonalDesign(
       worker,
       reserve,
       release: seat => releaseDesignGrant(ledger, principal, authority!, seat.grantId, 'not_started'),
+      interrupt: () => waitAbort.abort(),
       close: async () => {
         if (capacityWait) await clearExamContextCapacityWaits(ledger.pool, authority!.contextId, intentId);
         await ledger.releaseLease(authority!).catch(() => undefined /* an unreleased lease expires by itself */);

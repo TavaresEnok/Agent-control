@@ -1,1 +1,1 @@
-localhost:5000/ac-design:reconstrucao@sha256:463b2090842e9433437a18b5cf1f2391a4e0c160b48e72dad9c337185ad61147
+localhost:5000/ac-design:reconstrucao@sha256:74668ac022d781b3eab2aeec79f0acd45605c8e00971360cced033407ff38e06

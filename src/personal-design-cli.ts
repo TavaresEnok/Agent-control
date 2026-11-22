@@ -33,7 +33,7 @@ const messages: Record<string, string> = {
   DESIGN_CONTEXT_REQUIRED: 'O projeto não tem um contexto para o exame.',
   DESIGN_BUSY: 'Já existe uma execução de design em andamento neste projeto.',
   CAPACITY_BUSY: 'As vagas de execução para o design estão ocupadas. Repita com --esperar-cota para esperar na fila.',
-  CAPACITY_QUEUED: 'O design ficou na fila até o fim do prazo. Repita com --esperar-cota quando as vagas liberarem.',
+  CAPACITY_QUEUED: 'Há outro exame na frente da fila de capacidade. Repita com --esperar-cota para esperar a vez.',
   DESIGN_WORKER_UNAVAILABLE: 'O runtime pessoal não está ativo.',
   DESIGN_EXTERNAL_TARGET: 'A URL tem que ficar em localhost, 127.0.0.1 ou num host .local.',
   DESIGN_TARGET_ESCAPE: 'A URL aponta para outro destino.',
@@ -334,7 +334,7 @@ async function runPrepare(invocation: {installationPath: string; projectId: stri
 
 /** Shared exam/create lifecycle: keeps lease, catches Ctrl-C/SIGTERM, finalizes the intent (`done` or `failed`), and closes the ledger. */
 export async function runDesignSession<T>(
-  resolved: Pick<ResolvedPersonalDesign, 'ledger' | 'authority' | 'intentId' | 'close'>,
+  resolved: Pick<ResolvedPersonalDesign, 'ledger' | 'authority' | 'intentId' | 'close' | 'interrupt'>,
   run: () => Promise<T>,
   outcomeForResult: (result: T) => 'done' | 'failed' = () => 'done',
   cleanup?: () => Promise<void>,
@@ -343,7 +343,7 @@ export async function runDesignSession<T>(
   let outcome: 'done' | 'failed' = 'failed';
   let failed = false;
   try {
-    const result = await withExamSignals(() => run());
+    const result = await withExamSignals(() => run(), () => resolved.interrupt?.());
     outcome = outcomeForResult(result);
     return result;
   } catch (error) {

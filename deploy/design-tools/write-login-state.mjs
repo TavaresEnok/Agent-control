@@ -1,7 +1,7 @@
 /** Grava o storageState do laboratório. A senha não sai no stdout e não entra no arquivo. */
 import {chmodSync, readdirSync, readFileSync, statSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {trustFlags} from './trust.mjs';
+import {prepareTrust} from './trust.mjs';
 
 function findChrome() {
   let entries;
@@ -43,6 +43,29 @@ async function passwordState(page) {
   }
 }
 
+/** localStorage e sessionStorage da página, para reconhecer SPA que guarda o token fora de cookie. */
+async function storageSnapshot(page) {
+  try {
+    return await page.evaluate(() => JSON.stringify([Object.entries(localStorage).sort(), Object.entries(sessionStorage).sort()]));
+  } catch {
+    return null;
+  }
+}
+
+/** Segundo fator ou outra senha na tela: o login não terminou. */
+async function secondStepVisible(page) {
+  try {
+    const step = page.locator('input[type=password], input[autocomplete="one-time-code"]');
+    const total = await step.count();
+    for (let index = 0; index < total; index += 1) {
+      if (await step.nth(index).isVisible()) return true;
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 function samePage(a, b) {
   return a.origin === b.origin && a.pathname.replace(/\/+$/u, '') === b.pathname.replace(/\/+$/u, '');
 }
@@ -51,22 +74,22 @@ function samePage(a, b) {
 function passwordForms(username, password) {
   const forms = new Set([password, encodeURIComponent(password), Buffer.from(password).toString('base64')]);
   if (typeof username === 'string') forms.add(Buffer.from(`${username}:${password}`).toString('base64'));
-  return [...forms].filter(form => form.length >= 4);
+  // A senha crua sempre entra, mesmo curta. As formas derivadas só quando têm tamanho para não casar por acaso.
+  return [...forms].filter(form => form === password || form.length >= 4);
 }
 
 const login = JSON.parse(readFileSync('/login/login.json', 'utf8'));
 const playwright = await import('playwright');
 const chrome = findChrome();
 const origin = new URL(login.url).origin;
-let trust;
 try {
-  trust = await trustFlags(origin);
+  await prepareTrust(origin);
 } catch {
   process.exit(3);
 }
 const browser = await playwright.chromium.launch({
   executablePath: chrome ?? undefined,
-  args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', ...trust],
+  args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
 });
 try {
   const context = await browser.newContext();
@@ -77,6 +100,7 @@ try {
   await page.fill(login.usernameSelector, login.username);
   await page.fill(login.passwordSelector, login.password);
   const before = cookieMap(await context.cookies());
+  const storageBefore = await storageSnapshot(page);
   const loginPage = new URL(page.url());
   await page.click(login.submitSelector);
   const deadline = Date.now() + 30000;
@@ -101,7 +125,9 @@ try {
       left = false;
     }
     // Uma SPA que abre a sessão na mesma URL precisa do campo oculto por mais tempo.
-    if (cookieChanged(before, cookies) && hiddenReads >= 2 && (left || hiddenReads >= 4)) {
+    const storageNow = hiddenReads >= 2 ? await storageSnapshot(page) : null;
+    const changed = cookieChanged(before, cookies) || (storageNow !== null && storageBefore !== null && storageNow !== storageBefore);
+    if (changed && hiddenReads >= 2 && (left || hiddenReads >= 4) && !(await secondStepVisible(page))) {
       open = true;
       break;
     }

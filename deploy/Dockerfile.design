@@ -12,6 +12,11 @@ ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
     NPM_CONFIG_UPDATE_NOTIFIER=false \
     PATH="/opt/design-tools/node_modules/.bin:${PATH}"
 
+# certutil: a CA de uma homologação HTTPS (--ca) entra no banco NSS do Chrome, com validação normal.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libnss3-tools=2:3.98-1ubuntu0.3 \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd --system --gid 65532 design \
     && useradd --system --uid 65532 --gid 65532 --home-dir /tmp --no-create-home --shell /bin/false design \
     && mkdir -p /opt/design-tools /output /repository \

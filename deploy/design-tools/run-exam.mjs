@@ -8,7 +8,7 @@ import {createHash} from 'node:crypto';
 import {mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
-import {trustFlags} from './trust.mjs';
+import {prepareTrust} from './trust.mjs';
 
 const HOST = /^(?:127\.0\.0\.1|localhost|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+local)$/;
 const AXE_TAGS = ['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa', 'best-practice'];
@@ -989,10 +989,9 @@ async function main() {
   const plan = readPlan(target.origin);
   const chrome = findChrome();
   if (chrome) process.env.PUPPETEER_EXECUTABLE_PATH = chrome;
-  // Homologação HTTPS com CA própria: a cadeia é validada antes, e o Chrome só aceita as chaves dela.
-  let trust;
+  // Homologação HTTPS com CA própria: a CA entra no banco NSS do Chrome, com validação normal.
   try {
-    trust = await trustFlags(target.origin);
+    await prepareTrust(target.origin);
   } catch {
     // Código próprio: o host diz que a causa é a CA, não uma falha genérica da imagem.
     console.error('DESIGN_TRUST_CA_FAILED');
@@ -1048,7 +1047,7 @@ async function main() {
     AxeBuilder = axeMod.default ?? axeMod.AxeBuilder;
     browser = await playwright.chromium.launch({
       executablePath: chrome ?? undefined,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', ...trust],
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
     });
   } catch (error) {
     axeFailures.push(`DESIGN_AXE_FAILED ${shortError(error)}`);
@@ -1377,7 +1376,7 @@ async function main() {
           writeFileSync(pa11yConfig, JSON.stringify({
             chromeLaunchConfig: {
               executablePath: chrome ?? undefined,
-              args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', ...trust],
+              args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
             },
             viewport: {width: viewport, height: viewportHeight(viewport)},
           }));
@@ -1419,7 +1418,7 @@ async function main() {
         try {
           chromeSession = await launch({
             chromePath: chrome ?? undefined,
-            chromeFlags: ['--headless=new', '--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', ...trust],
+            chromeFlags: ['--headless=new', '--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
           });
           const url = routeUrl(target.origin, route.route);
           // Página com animação infinita ou rede que nunca sossega pode prender o Lighthouse.
