@@ -70,6 +70,7 @@ test('briefing longo completo é enviado sem corte em todas as rodadas com a ins
       },
     };
 
+    const tokensSeen: {path: string; text: string}[] = [];
     const created = await runDesignCreate({
       dataDirectory: data,
       runId: randomUUID(),
@@ -82,7 +83,9 @@ test('briefing longo completo é enviado sem corte em todas as rodadas com a ins
       reserve: async () => seat(),
       release: async () => {},
       intentId: randomUUID(),
-      examine: async round => ({
+      examine: async (round, _files, context) => {
+        tokensSeen.push(context.tokens);
+        return {
         notes: [`rodada ${round}`],
         screens: [
           {name: 'editorial-claro', rejected: false, findings: [], visualNotes: []},
@@ -105,10 +108,18 @@ test('briefing longo completo é enviado sem corte em todas as rodadas com a ins
             visualNotes: round === 1 ? ['elevar contraste do conceito B'] : [],
           },
         ],
-      }),
+        };
+      },
     });
 
     assert.equal(calls.length, 2);
+    // O exame de cada rodada recebe o tokens.json gerado, para comparar as telas com os tokens.
+    assert.equal(tokensSeen.length, 2);
+    for (const [at, seen] of tokensSeen.entries()) {
+      assert.equal(seen.path, 'tokens.json');
+      assert.equal(seen.text, await readFile(join(created.directory, `rodada-${at + 1}`, 'tokens.json'), 'utf8'));
+    }
+    assert.deepEqual(JSON.parse(tokensSeen[0]?.text ?? '{}'), {color: {bg: {$type: 'color', $value: '#faf8f5'}}});
     assert.equal(created.rounds.length, 2);
     for (const call of calls) {
       assert.equal(call.forcedModel, 'claude-opus-5-5');

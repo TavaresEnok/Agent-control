@@ -1,7 +1,7 @@
 import type {ModuleExamBatch} from './module-exam.ts';
 import {assertDiskSpaceForLaunch,launchVolumesOf} from './personal-disk.ts';
 import {constants, existsSync} from 'node:fs';
-import {mkdtemp, open, readFile, rm} from 'node:fs/promises';
+import {lstat, mkdtemp, open, readFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -26,7 +26,10 @@ import {
   type DesignImageSpawn,
   type ToolCoverageRow,
 } from './design-image-run.ts';
-import {parseDesignProjectConfig, planDesignRoutes, type DesignProjectConfig} from './design-project-config.ts';
+import {DESIGN_TOKENS_MAX_BYTES, parseDesignProjectConfig, planDesignRoutes, type DesignProjectConfig} from './design-project-config.ts';
+import {BRAND_TOOL, brandFindings, brandMarkdown, compareWithDeclared, parseDeclaredTokens, type BrandComparison} from './design-brand-tokens.ts';
+import {CONSISTENCY_TOOL, analyzeConsistency, consistencyFindings, consistencyMarkdown, type ConsistencyResult} from './design-consistency.ts';
+import {collectGenericSignals, genericLookMarkdown} from './design-generic.ts';
 import {stageDesignReferences} from './design-reference-files.ts';
 import {approveDesignBaseline, baselineBuffer, regressionHits, regressionMarkdown} from './design-regression.ts';
 import {stylelintConfig} from './design-stylelint.ts';
@@ -101,12 +104,21 @@ export type DesignModuleInput = {
   scoreVisual?: boolean;
   recordStates?: boolean;
   computedSamples?: readonly DesignComputedSample[];
+  /** Blocos de amostra com rota, somados aos da imagem. Alimentam a consistência e os tokens do projeto. */
+  computedBlocks?: DesignImageExecution['computedBlocks'];
   analyzeTokens?: boolean;
   regressionThreshold?: number;
   approveBaseline?: boolean;
   referenceFiles?: readonly {name: string; bytes: Buffer}[];
   /** Rotas já resolvidas, usadas pelo modo criar. */
   routes?: readonly {route: string}[];
+  /**
+   * Exame chamado pelo laço do modo criar. Só aqui o alvo de 44px (DESIGN-ALVO-REFERENCIA)
+   * continua alta, para a tela gerada voltar com a área de toque maior. O exame comum usa baixa.
+   */
+  createMode?: boolean;
+  /** Tokens já em mãos, como o tokens.json que o modo criar gerou. Ganha da chave `tokens` do config. */
+  brandTokens?: {path: string; text: string};
 };
 
 export type DesignModuleResult = {
@@ -141,6 +153,9 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
   const rawDesignConfig = await readRepoDesignConfig(input.repo, input.files);
   const projectConfig = parseDesignProjectConfig(rawDesignConfig);
   const hasProjectConfig = rawDesignConfig !== undefined && rawDesignConfig.trim().length > 0;
+  const brandSource = input.brandTokens ?? (projectConfig.tokens === undefined
+    ? undefined
+    : await readRepoTokensFile(input.repo, input.files, projectConfig.tokens));
   const plannedStates = input.recordStates === true ? statePlan(input.files, projectConfig) : undefined;
   const reference = input.referenceFiles === undefined || input.referenceFiles.length === 0
     ? undefined
@@ -199,19 +214,33 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     await writeImageFailure(input, target.origin, image);
     throw new Refusal(image.code === 'DESIGN_IMAGE_TIMEOUT' ? 'DESIGN_IMAGE_TIMEOUT' : 'DESIGN_IMAGE_FAILED');
   }
+  const fileMap = routeFileMap(input.files, projectConfig);
+  // Régua e Tab entram pelo collect, para a rota virar o arquivo da tela que o examinador lê.
   const findings = attributeDesignFindings(
-    collectDesignFindings(input.files, mergeTools(input.tools, image?.tools)),
+    collectDesignFindings(input.files, mergeTools(input.tools, image === undefined
+      ? undefined
+      : {...image.tools, render: image.render, keyboard: image.keyboard})),
     input.files,
-    routeFileMap(input.files, projectConfig),
+    fileMap,
   );
-  for (const item of image?.declaredFindings ?? []) {
-    if (!findings.some(existing => existing.fingerprint === item.fingerprint)) findings.push(item);
-  }
+  pushNew(findings, image?.declaredFindings ?? []);
   const samples = [...(image?.computed ?? []), ...(input.computedSamples ?? [])];
   const tokens = samples.length > 0 || input.analyzeTokens === true
-    ? analyzeDesignTokens(input.files[0]?.path ?? 'tokens', samples, loadDesignReferences(referencesDirectory()))
+    ? analyzeDesignTokens(
+        input.files[0]?.path ?? 'tokens',
+        samples,
+        loadDesignReferences(referencesDirectory()),
+        input.createMode === true ? {referenceTargetSeverity: 'alta'} : {},
+      )
     : undefined;
   if (tokens) findings.push(...tokens.findings);
+  const blocks = [...(image?.computedBlocks ?? []), ...(input.computedBlocks ?? [])];
+  const consistency = blocks.length > 0 ? analyzeConsistency(blocks) : undefined;
+  if (consistency) pushNew(findings, attributeDesignFindings(consistencyFindings(consistency), input.files, fileMap));
+  const brand = brandComparison(brandSource, blocks);
+  if (brand.comparison) {
+    pushNew(findings, attributeDesignFindings(brandFindings(brand.comparison.off, brand.comparison.source), input.files, fileMap));
+  }
   const imageRows = image === undefined ? [] : applyHostFindingCounts(image.coverage, findings);
   const routes = screenRoutesForExam(input.files, input.routes);
   const loggedRoutes = new Set((image?.shots ?? []).filter(shot => shot.state === 'logado').map(shot => shot.route));
@@ -221,7 +250,7 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
       return !(loggedRoutes.has(route) && note.includes('logado não capturado'));
     }),
     ...(loginNote.length > 0 ? [loginNote] : []),
-    ...(image?.notes.filter(note => note.includes('indisponível')) ?? []),
+    ...imageStateNotes(image?.notes ?? []),
   ];
   const notes: string[] = [...stateNotes];
   if (reference) notes.push(reference.note);
@@ -310,7 +339,10 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     '',
     screenCoverageMarkdown(coverageRows),
   ].join('\n');
-  const ranTools = toolsThatRan(input.files, image, imageRows, tokens !== undefined, findings);
+  const ranTools = toolsThatRan(input.files, image, imageRows, tokens !== undefined, findings, [
+    ...(consistency ? [CONSISTENCY_TOOL] : []),
+    ...(brand.comparison && brand.comparison.categories.length > 0 ? [BRAND_TOOL] : []),
+  ]);
   const raw = {...designRawDocument(target.origin, findings), ferramentas: ranTools};
   const note = [input.note, ...notes].filter(part => part && part.trim().length > 0).join(' ').replace(/\s+/g, ' ').trim().slice(0, 500)
     || 'Verificação de design somente leitura concluída.';
@@ -329,6 +361,7 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
   const previous = await previousRawFindings(input.dataDirectory, input.projectId, designReportDirectoryName(input.createdAt));
   extras.sections = [
     ...(extras.sections ?? []),
+    ...analysisSections(input, projectConfig, brand, consistency),
     {title: 'Desde o último relatório', markdown: deltaMarkdown(previous, {findings, tools: ranTools})},
   ];
   const gaps = collectDesignGaps({
@@ -600,15 +633,23 @@ export function collectDesignGaps(input: {
 
 const COVERAGE_TOOL: Record<string, string> = {'axe-core': 'axe'};
 
+/** Notas da imagem que vão para a seção Estados: rota indisponível e rota que redirecionou. */
+export function imageStateNotes(notes: readonly string[]): string[] {
+  return notes.filter(note => note.includes('indisponível') || note.includes('redirecionou'));
+}
+
 /** Ferramentas que rodaram nesta rodada. A próxima rodada só compara o que as duas mediram. */
-function toolsThatRan(
+export function toolsThatRan(
   files: readonly DesignSourceFile[],
   image: DesignImageExecution | undefined,
   rows: readonly ToolCoverageRow[],
   tokens: boolean,
   findings: readonly DesignRawFinding[],
+  analyses: readonly string[] = [],
 ): string[] {
   const ran = new Set(findings.map(item => item.tool));
+  // Consistência e tokens do projeto contam como rodados mesmo sem achado; senão o delta os daria como não comparados.
+  for (const tool of analyses) ran.add(tool);
   if (files.some(file => /\.(?:html?|tsx|jsx|vue)$/i.test(file.path))) ran.add('html');
   if (files.some(file => /\.css$/i.test(file.path))) {
     ran.add('inventario');
@@ -879,6 +920,83 @@ async function readRepoDesignConfig(repo: string, files: readonly DesignSourceFi
   }
 }
 
+/**
+ * Arquivo de tokens do projeto (chave `tokens`). Mesmo cuidado do design.config.json:
+ * sem seguir symlink em nenhum trecho do caminho e com teto de tamanho.
+ * Arquivo ausente ou ilegível volta como nota, sem achado. Arquivo grande demais recusa o config.
+ */
+async function readRepoTokensFile(
+  repo: string,
+  files: readonly DesignSourceFile[],
+  path: string,
+): Promise<{path: string; text?: string; note?: string}> {
+  const unreadable = {path, note: `O arquivo de tokens ${path} não pôde ser lido. Nada foi comparado.`};
+  const fromFiles = files.find(file => file.path === path)?.text;
+  if (fromFiles !== undefined) {
+    if (Buffer.byteLength(fromFiles, 'utf8') > DESIGN_TOKENS_MAX_BYTES) throw new Refusal('DESIGN_CONFIG_INVALID', 400);
+    return {path, text: fromFiles};
+  }
+  const parts = path.split('/');
+  for (let at = 1; at < parts.length; at += 1) {
+    const info = await lstat(join(repo, ...parts.slice(0, at))).catch(() => undefined /* missing directory: note below */);
+    if (info === undefined || info.isSymbolicLink() || !info.isDirectory()) return unreadable;
+  }
+  const handle = await open(join(repo, ...parts), constants.O_RDONLY | constants.O_NOFOLLOW).catch(() => undefined /* missing or symlink: note */);
+  if (handle === undefined) return unreadable;
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) return unreadable;
+    if (info.size > DESIGN_TOKENS_MAX_BYTES) throw new Refusal('DESIGN_CONFIG_INVALID', 400);
+    const bytes = await handle.readFile();
+    if (bytes.length > DESIGN_TOKENS_MAX_BYTES) throw new Refusal('DESIGN_CONFIG_INVALID', 400);
+    if (bytes.includes(0)) return unreadable;
+    return {path, text: bytes.toString('utf8')};
+  } finally {
+    await handle.close();
+  }
+}
+
+type BrandRun = {comparison?: BrandComparison; source?: string; note?: string};
+
+/** Compara as amostras medidas com os tokens do projeto. Sem amostra, nada é julgado. */
+function brandComparison(source: {path: string; text?: string; note?: string} | undefined, blocks: DesignImageExecution['computedBlocks']): BrandRun {
+  if (source === undefined) return {};
+  if (source.text === undefined) return {source: source.path, note: source.note ?? `O arquivo de tokens ${source.path} não pôde ser lido.`};
+  if (blocks.length === 0) return {source: source.path, note: 'A imagem não mediu a página. Os tokens do projeto não foram comparados.'};
+  if (Buffer.byteLength(source.text, 'utf8') > DESIGN_TOKENS_MAX_BYTES) {
+    return {source: source.path, note: `O arquivo de tokens ${source.path} passa de ${DESIGN_TOKENS_MAX_BYTES} bytes. Nada foi comparado.`};
+  }
+  return {source: source.path, comparison: compareWithDeclared(blocks, parseDeclaredTokens(source.path, source.text))};
+}
+
+function pushNew(findings: DesignRawFinding[], extra: readonly DesignRawFinding[]): void {
+  for (const item of extra) {
+    if (!findings.some(existing => existing.fingerprint === item.fingerprint)) findings.push(item);
+  }
+}
+
+/** Seções dos analisadores: sinais de modelo genérico, tokens do projeto e consistência entre telas. */
+function analysisSections(
+  input: DesignModuleInput,
+  config: DesignProjectConfig,
+  brand: BrandRun,
+  consistency: ConsistencyResult | undefined,
+): {title: string; markdown: string}[] {
+  const sections: {title: string; markdown: string}[] = [];
+  if (config.genericSignals !== false) {
+    const signals = collectGenericSignals(input.files);
+    if (input.scoreVisual === true || signals.length > 0) {
+      sections.push({title: 'Sinais de modelo genérico', markdown: genericLookMarkdown(signals)});
+    }
+  }
+  if (brand.comparison) sections.push({title: 'Tokens do projeto', markdown: brandMarkdown(brand.comparison)});
+  else if (brand.source !== undefined) {
+    sections.push({title: 'Tokens do projeto', markdown: `Fonte: \`${brand.source.replace(/[|`<>\r\n]/g, ' ')}\`.\n${brand.note ?? ''}`.trim()});
+  }
+  if (consistency) sections.push({title: 'Consistência entre telas', markdown: consistencyMarkdown(consistency)});
+  return sections;
+}
+
 function imageStates(route: {states: readonly {name: string; url?: string; acoes?: readonly string[]}[]; loginState: boolean}): unknown[] {
   const states: unknown[] = route.states.map(state => ({...state}));
   if (route.loginState && !route.states.some(state => state.name === 'logado')) states.push({name: 'logado'});
@@ -1008,6 +1126,7 @@ function mergeTools(left: DesignToolReports | undefined, right: DesignToolReport
   const stylelint = [...(left?.stylelint ?? []), ...(right?.stylelint ?? [])];
   const cssAnalyzer = [...(left?.cssAnalyzer ?? []), ...(right?.cssAnalyzer ?? [])];
   const keyboard = [...(left?.keyboard ?? []), ...(right?.keyboard ?? [])];
+  const render = [...(left?.render ?? []), ...(right?.render ?? [])];
   return {
     ...(axe.length > 0 ? {axe} : {}),
     ...(pa11y.length > 0 ? {pa11y} : {}),
@@ -1015,6 +1134,7 @@ function mergeTools(left: DesignToolReports | undefined, right: DesignToolReport
     ...(stylelint.length > 0 ? {stylelint} : {}),
     ...(cssAnalyzer.length > 0 ? {cssAnalyzer} : {}),
     ...(keyboard.length > 0 ? {keyboard} : {}),
+    ...(render.length > 0 ? {render} : {}),
   };
 }
 

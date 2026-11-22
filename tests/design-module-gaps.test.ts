@@ -10,6 +10,11 @@ import {designBenchWorker} from '../src/design-bench.ts';
 import {assembleAchados, collectDesignGaps, filesDark, runDesignModule, type DesignModuleInput} from '../src/design-module.ts';
 import {DESIGN_LIMITS_TEXT} from '../src/design-report.ts';
 import {DESIGN_SUGGESTION_FALLBACK, suggestionFor} from '../src/design-suggestions.ts';
+import {CLICK_WITHOUT_KEYBOARD_RULE} from '../src/design-a11y.ts';
+import {BRAND_RULE} from '../src/design-brand-tokens.ts';
+import {CONSISTENCY_ISOLATED_RULE, HEADING_SCALE_RULE} from '../src/design-consistency.ts';
+import {FOCUS_COVERED_RULE} from '../src/design-keyboard.ts';
+import {DESIGN_RENDER_RULES} from '../src/design-render.ts';
 import {designRawFinding, type DesignConfirmResult, type DesignExamFinding} from '../src/design-types.ts';
 
 const labRoot = fileURLToPath(new URL('./fixtures/design-lab/', import.meta.url));
@@ -199,6 +204,23 @@ test('cada regra medida tem frase própria; regra desconhecida usa o texto de an
   }
   assert.equal(suggestionFor('REGRA-NOVA'), DESIGN_SUGGESTION_FALLBACK);
   assert.equal(suggestionFor('toString'), DESIGN_SUGGESTION_FALLBACK);
+});
+
+test('toda regra nova da régua, do Tab e dos analisadores tem frase própria', () => {
+  const rules = [
+    ...Object.values(DESIGN_RENDER_RULES),
+    FOCUS_COVERED_RULE,
+    'LH-VIEWPORT',
+    'LH-FONTE-LEGIVEL',
+    CLICK_WITHOUT_KEYBOARD_RULE,
+    'DESIGN-TOKENS-ENTRELINHA',
+    BRAND_RULE,
+    CONSISTENCY_ISOLATED_RULE,
+    HEADING_SCALE_RULE,
+    'declaration-property-value-disallowed-list',
+  ];
+  assert.equal(rules.length, 18);
+  for (const rule of rules) assert.notEqual(suggestionFor(rule), DESIGN_SUGGESTION_FALLBACK, rule);
 });
 
 test('color-scheme só conta como escuro quando cita dark', () => {

@@ -46,6 +46,7 @@ const SUGGESTIONS: Readonly<Record<string, string>> = {
   'DESIGN-TOKENS-FORA-DO-DECLARADO': 'Troque o valor solto pelo token declarado mais próximo.',
   'DESIGN-CONSISTENCIA-VALOR-ISOLADO': 'Use o mesmo valor das outras telas, pelo token comum.',
   'DESIGN-TITULOS-ESCALA': 'Deixe h1 maior que h2 e h2 maior que h3.',
+  'declaration-property-value-disallowed-list': 'Troque transition: all pela lista do que anima, como opacity e transform.',
 };
 
 /** Frase de correção da regra. Regra sem frase própria recebe o texto de antes. */
