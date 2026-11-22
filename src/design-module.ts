@@ -212,10 +212,10 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
       });
     } finally {
       // A pasta inteira do login sai, com o state.json que o uid da imagem gravou.
+      // A pasta é criada sob o caminho real do tmp, então a raiz sempre é achada.
       if (loginState !== undefined) {
         const scratch = await designScratchRoot(loginState);
         if (scratch !== undefined) await removeDesignScratch(scratch);
-        else await rm(loginDir!, {recursive: true, force: true}).catch(() => undefined /* best-effort; the exam result stays */);
       }
     }
   })();

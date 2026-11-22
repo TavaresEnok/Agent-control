@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Refusal} from './contracts.ts';
 import type {DesignToolReports} from './design-collect.ts';
-import {claimDesignContainer, closeDesignContainers, releaseDesignContainer, removeDesignScratch} from './design-containers.ts';
+import {claimDesignContainer, closeDesignContainers, makeDesignScratch, releaseDesignContainer, removeDesignScratch} from './design-containers.ts';
 import {DESIGN_USER, designRunArguments, requirePinnedDesignImage} from './design-image.ts';
 import {parseFocusWalks, type FocusWalk} from './design-keyboard.ts';
 import {parseRenderCells, type DesignRenderCell} from './design-render.ts';
@@ -331,7 +331,7 @@ export async function executeDesignImage(input: {
 }): Promise<DesignImageExecution> {
   // Sessão já fechada (interrupção): recusa antes de criar qualquer coisa.
   const containerName = input.run === undefined ? claimDesignContainer() : undefined;
-  const output = await mkdtemp(join(tmpdir(), 'design-img-'));
+  const output = await makeDesignScratch('img');
   try {
     // 0o1777 só enquanto o uid 65532 escreve; o host não é esse uid.
     await chmod(output, 0o1777);

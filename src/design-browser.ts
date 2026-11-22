@@ -7,7 +7,7 @@ import {Refusal} from './contracts.ts';
 import type {DesignCaptureDriver, DesignCaptureTheme} from './design-capture.ts';
 import type {DesignLogin} from './design-discover.ts';
 import {assertDesignDestination, assertDesignTarget, designTrustArguments} from './design-image.ts';
-import {claimDesignContainer, releaseDesignContainer, removeDesignScratch} from './design-containers.ts';
+import {claimDesignContainer, makeDesignScratch, releaseDesignContainer, removeDesignScratch} from './design-containers.ts';
 
 type DesignPage = {
   url(): string;
@@ -254,7 +254,7 @@ export async function writeDesignLoginState(targetUrl: string, login: DesignLogi
     executablePath: CHROME,
     args: ['--no-sandbox', '--disable-dev-shm-usage'],
   });
-  const directory = await mkdtemp(join(tmpdir(), 'design-login-'));
+  const directory = await makeDesignScratch('login');
   try {
     await chmod(directory, 0o700);
     const context = await browser.newContext(designBrowserContextOptions);
@@ -272,8 +272,7 @@ export async function writeDesignLoginState(targetUrl: string, login: DesignLogi
     await chmod(path, 0o600);
     return path;
   } catch (error) {
-    const {rm} = await import('node:fs/promises');
-    await rm(directory, {recursive: true, force: true});
+    await removeDesignScratch(directory);
     throw error;
   } finally {
     await browser.close().catch(() => undefined /* best-effort close; the result was already decided */);
@@ -293,7 +292,7 @@ async function writeLoginStateInImage(targetUrl: string, login: DesignLogin, pin
   const trust = designTrustArguments(targetUrl, trustCa);
   // Com nome, a sessão remove este contêiner na interrupção, como o do exame.
   const name = claimDesignContainer();
-  const directory = await mkdtemp(join(tmpdir(), 'design-login-'));
+  const directory = await makeDesignScratch('login');
   const cred = join(directory, 'login.json');
   const out = join(directory, 'out');
   try {

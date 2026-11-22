@@ -61,6 +61,14 @@ export function resetDesignContainersForTest(): void {
 
 const SCRATCH = /^design-(?:login|img)-[A-Za-z0-9]{6}$/;
 
+/** Cria a pasta de trabalho sob o caminho real do tmp, o mesmo que a limpeza confere. */
+export async function makeDesignScratch(kind: 'login' | 'img'): Promise<string> {
+  const {mkdtemp, realpath} = await import('node:fs/promises');
+  const {tmpdir} = await import('node:os');
+  const {join} = await import('node:path');
+  return mkdtemp(join(await realpath(tmpdir()), `design-${kind}-`));
+}
+
 /**
  * A pasta de trabalho do design que contém `path`: a primeira ancestral `design-login-XXXXXX`
  * ou `design-img-XXXXXX` filha direta do tmp. Fora disso, nenhuma.
