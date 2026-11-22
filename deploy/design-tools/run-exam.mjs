@@ -522,6 +522,9 @@ export function overlayProbe(query) {
 }
 
 /** Corrida contra o relógio. Quem perde não fica sem tratamento: race assina as duas promessas. */
+/** Teto de uma rodada do Lighthouse, rota por formato. */
+export const LIGHTHOUSE_TIMEOUT_MS = 120_000;
+
 export async function bounded(promise, ms = PROBE_TIMEOUT_MS) {
   let timer;
   try {
@@ -1409,10 +1412,13 @@ async function main() {
             chromeFlags: ['--headless=new', '--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
           });
           const url = routeUrl(target.origin, route.route);
-          const result = await lighthouse(url, {
+          // Página com animação infinita ou rede que nunca sossega pode prender o Lighthouse.
+          // O teto fecha o Chrome e segue para a próxima rota, com a falha registrada.
+          const result = await bounded(lighthouse(url, {
             port: chromeSession.port,
             output: 'json',
             logLevel: 'error',
+            maxWaitForLoad: 30000,
             onlyCategories: ['accessibility', 'best-practices', 'performance', 'seo'],
             // O atraso plantado do laboratório está no servidor. A simulação padrão
             // reescreve esse tempo; a medida observada é a que o exame guarda.
@@ -1421,7 +1427,7 @@ async function main() {
             screenEmulation: mobile
               ? {mobile: true, width: 375, height: 812, deviceScaleFactor: 2, disabled: false}
               : {mobile: false, width: 1350, height: 940, deviceScaleFactor: 1, disabled: false},
-          });
+          }), LIGHTHOUSE_TIMEOUT_MS);
           const lhr = slimLighthouse(result?.lhr ?? null);
           if (!lhr) {
             lhFailures.push(`DESIGN_LIGHTHOUSE_FAILED ${route.route} ${formFactor} sem LHR`);

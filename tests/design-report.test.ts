@@ -456,7 +456,7 @@ test('registra usuário, limites e rede da imagem sem afirmar execução', async
     assert.equal(readme.includes('capturado'), false);
     assert.equal(readme.includes('não deu'), false);
     assert.match(readme, /não executou o contêiner/);
-    assert.match(readme, new RegExp(`${DESIGN_RUNTIME_BIN} run --rm --network ${DESIGN_NETWORK}`));
+    assert.match(readme, new RegExp(`${DESIGN_RUNTIME_BIN} run --rm --init --network ${DESIGN_NETWORK}`));
     assert.doesNotMatch(readme, /o contêiner (?:foi|executou)|foi executad/i);
 
     let nano = 1;

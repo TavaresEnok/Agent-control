@@ -76,6 +76,7 @@ test('os argumentos trazem usuário, limites, rede e imagem com digest', () => {
     DESIGN_RUNTIME_BIN,
     'run',
     '--rm',
+    '--init',
     '--network',
     'design-homologation',
     '--read-only',
