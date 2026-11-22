@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {createHash, randomUUID} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
+import {readdirSync, readFileSync} from 'node:fs';
 import {mkdir, writeFile} from 'node:fs/promises';
 import {dirname, join} from 'node:path';
 import {mapModuleSnapshot} from '../src/module-exam-map.ts';
@@ -10,6 +11,7 @@ import {digest, Refusal} from '../src/contracts.ts';
 import {isMeasuredModuleRule, isPublicModuleRule, type CollectorCriterion, type ModuleExamCollectorContext} from '../src/module-exam-collector-proof.ts';
 import {hasModuleReviewProof, moduleReviewProofReason, moduleReviewTask, readModuleReviewVerdict, type ModuleReviewObservation} from '../src/module-exam-proof.ts';
 import {examineFunctionalModule, moduleCollectorCandidate, moduleExamReadRequestBinding, moduleExamReviewEvidence, type ModuleExamCoverage, type ModuleExamSeat} from '../src/module-exam.ts';
+import {sanitizeText} from '../src/verification-modules-collector.ts';
 import {requestModuleCorrection, runVerificationModule, validateModuleCollectorObject, type ModuleRawFinding, type ModuleToolCoverage} from '../src/verification-modules.ts';
 
 const commit = 'a'.repeat(40);
@@ -546,7 +548,10 @@ test('regras medidas pela ferramenta ficam marcadas e as demais seguem para revi
   assert.equal(isMeasuredModuleRule('arquitetura', 'ast-complexity', 'COMPLEXITY-CYCLOMATIC-HIGH'), true);
   assert.equal(isMeasuredModuleRule('qa', 'node-test-v8', 'QA-COBERTURA-FUNCAO-SEM-TESTE'), true);
   assert.equal(isMeasuredModuleRule('dependencias', 'npm-check-updates', 'NCU-OUTDATED-MAJOR'), true);
-  // Fatos que dependem de juízo continuam revisados.
+  assert.equal(isMeasuredModuleRule('dependencias', 'sbom-lockfile', 'LOCKFILE-OUTDATED-RESOLVED'), true);
+  // Fatos que dependem de juízo continuam revisados. Arquivo sem uso do Knip pode ser
+  // import dinâmico ou entrada não detectada, então segue para o caso knipFile.
+  assert.equal(isMeasuredModuleRule('arquitetura', 'knip', 'KNIP-UNUSED-FILE'), false);
   assert.equal(isMeasuredModuleRule('conformidade', 'presidio-analyzer', 'PII_BR_CPF'), false);
   assert.equal(isMeasuredModuleRule('arquitetura', 'jscpd', 'JSCPD-DUPLICATION'), false);
   assert.equal(isMeasuredModuleRule('arquitetura', 'dependency-cruiser', 'DEPCRUISE-NO-CIRCULAR'), false);
@@ -554,6 +559,40 @@ test('regras medidas pela ferramenta ficam marcadas e as demais seguem para revi
   assert.equal(isMeasuredModuleRule('banco', 'typedoc', 'DOC-TYPEDOC-SIMBOLO-SEM-DOC'), false);
   assert.equal(isMeasuredModuleRule('documentacao', 'outra', 'DOC-TYPEDOC-SIMBOLO-SEM-DOC'), false);
   assert.equal(isMeasuredModuleRule(undefined, 'typedoc', 'DOC-TYPEDOC-SIMBOLO-SEM-DOC'), false);
+});
+
+test('a referência ferramenta:regra das regras reais sai legível pelo caminho do relatório', () => {
+  // Mesma expressão de verification-modules-run.ts para a referência do achado.
+  const reference = (module: Parameters<typeof isPublicModuleRule>[0], tool: string, rule: string) =>
+    isPublicModuleRule(module, tool, rule) ? `${tool}:${rule}` : sanitizeText(`${tool}:${rule}`);
+  const pairs = [
+    ['arquitetura', 'ast-complexity', 'COMPLEXITY-CYCLOMATIC-HIGH'], ['arquitetura', 'ast-complexity', 'COMPLEXITY-NESTING-DEEP'],
+    ['arquitetura', 'ast-complexity', 'COMPLEXITY-FILE-CYCLOMATIC'], ['arquitetura', 'knip', 'KNIP-UNUSED-PEER-DEPENDENCY'],
+    ['dependencias', 'npm-check-updates', 'NCU-OUTDATED-MAJOR'], ['dependencias', 'sbom-lockfile', 'LOCKFILE-OUTDATED-RESOLVED'],
+    ['dependencias', 'sbom-lockfile', 'SBOM-OUTDATED-COMPONENT'], ['qa', 'node-test-v8', 'QA-TESTE-PULADO-EXECUCAO'],
+    ['conformidade', 'presidio-analyzer', 'PII_PHONE_NUMBER'], ['conformidade', 'npm-license-policy', 'LICENSE_DEPENDENCY_DECLARED'],
+    ['documentacao', 'typedoc', 'DOC-TYPEDOC-PARAM-DESATUALIZADO'], ['documentacao', 'mermaid', 'DOC-MERMAID-SINTAXE-INVALIDA'],
+    ['documentacao', 'dependency-cruiser', 'DOC-DEPCRUISE-CICLO-DEPENDENCIA'], ['prontidao', 'prontidao-audit', 'PRONTIDAO-TLS-PROTOCOLO-FRACO'],
+    ['prontidao', 'prontidao-audit', 'PRONTIDAO-SEGREDO-ARQUIVO-ENV'], ['prontidao', 'prontidao-audit', 'PRONTIDAO-LIMITE-PIDS-AUSENTE'],
+  ] as const;
+  for (const [module, tool, rule] of pairs) assert.equal(reference(module, tool, rule), `${tool}:${rule}`, rule);
+  // Um formato de segredo conhecido nunca passa, mesmo curto.
+  assert.equal(isPublicModuleRule('qa', 'node-test-v8', 'AKIAIOSFODNN7EXAMPLE'), false);
+  assert.equal(isPublicModuleRule('qa', 'node-test-v8', 'QA ESPACO'), false);
+});
+
+test('todo identificador de regra longo dos coletores está liberado para a sua ferramenta', () => {
+  const root = join(dirname(new URL(import.meta.url).pathname), '..', 'deploy', 'modules');
+  for (const module of ['qa', 'arquitetura', 'dependencias', 'prontidao', 'desempenho', 'documentacao', 'conformidade'] as const) {
+    const text = readdirSync(join(root, module)).filter(file => /\.(?:mjs|py)$/.test(file))
+      .map(file => readFileSync(join(root, module, file), 'utf8')).join('\n');
+    const tools = new Set([...text.matchAll(/(?:tool|Tool)['"]?\s*[:=]\s*['"]([a-z][a-z0-9_.-]+)['"]/g)].map(match => match[1]!));
+    // Regras do achado têm hífen; códigos de erro com sublinhado não chegam ao relatório.
+    for (const [, id] of text.matchAll(/['"]([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+)['"]/g)) {
+      if (id!.length < 32) continue;
+      assert.ok([...tools].some(tool => isPublicModuleRule(module, tool, id)), `${module}: ${id}`);
+    }
+  }
 });
 
 test('identificadores longos fixos dos coletores saem legíveis só no par de módulo e ferramenta', () => {

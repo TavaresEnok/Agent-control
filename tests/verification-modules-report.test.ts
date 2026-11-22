@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
+import {isPublicModuleRule} from '../src/module-exam-collector-proof.ts';
+import {sanitizeText} from '../src/verification-modules-collector.ts';
 import {renderModuleReadme} from '../src/verification-modules-report.ts';
 import type {Achado} from '../src/verify-types.ts';
 
@@ -7,6 +9,10 @@ const base = {
   module: 'documentacao' as const, runId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', directoryName: 'dir',
   createdAt: new Date('2026-11-22T00:00:00Z'), commit: 'a'.repeat(40), note: 'Nota.', discarded: 0, toolCoverage: [],
 };
+
+// Mesma expressão de verification-modules-run.ts: a referência passa pelo filtro de entropia.
+const ref = (tool: string, rule: string) =>
+  isPublicModuleRule('documentacao', tool, rule) ? `${tool}:${rule}` : sanitizeText(`${tool}:${rule}`);
 
 function achado(index: number, reference: string, severity: Achado['severity'], status: Achado['status']) {
   return {id: `ACH-${String(index).padStart(3, '0')}`, title: 't', severity, status, verifier: null, reference,
@@ -16,11 +22,11 @@ function achado(index: number, reference: string, severity: Achado['severity'], 
 
 test('a contagem por gravidade mostra o total e os confirmados, e a tabela por regra mostra a inundação', () => {
   const achados = [
-    achado(1, 'typedoc:DOC-TYPEDOC-SIMBOLO-SEM-DOC', 'media', 'provavel'),
-    achado(2, 'typedoc:DOC-TYPEDOC-SIMBOLO-SEM-DOC', 'media', 'provavel'),
-    achado(3, 'typedoc:DOC-TYPEDOC-SIMBOLO-SEM-DOC', 'media', 'provavel'),
-    achado(4, 'mermaid:DOC-MERMAID-SINTAXE-INVALIDA', 'alta', 'confirmado'),
-    achado(5, 'mermaid:DOC-MERMAID-SINTAXE-INVALIDA', 'alta', 'descartado'),
+    achado(1, ref('typedoc', 'DOC-TYPEDOC-SIMBOLO-SEM-DOC'), 'media', 'provavel'),
+    achado(2, ref('typedoc', 'DOC-TYPEDOC-SIMBOLO-SEM-DOC'), 'media', 'provavel'),
+    achado(3, ref('typedoc', 'DOC-TYPEDOC-SIMBOLO-SEM-DOC'), 'media', 'provavel'),
+    achado(4, ref('mermaid', 'DOC-MERMAID-SINTAXE-INVALIDA'), 'alta', 'confirmado'),
+    achado(5, ref('mermaid', 'DOC-MERMAID-SINTAXE-INVALIDA'), 'alta', 'descartado'),
   ];
   const counts = {alta: 1, media: 0, baixa: 0, informativa: 0};
   const readme = renderModuleReadme({...base, total: achados.length, counts, achados});

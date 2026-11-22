@@ -465,22 +465,34 @@ const fixedRuleIds: Partial<Record<VerificationModule, Record<string, readonly s
   conformidade: {'npm-license-policy': ['LICENSE_DEPENDENCY_OBLIGATION_REVIEW']},
 };
 
-/** Only compile-time, public tool/rule pairs may bypass entropy heuristics. */
+// Below 32 characters a tool name or a rule ID never reaches the entropy threshold,
+// but joined as `tool:rule` it can, and the report then lost the rule name.
+const SHORT_TOOL = /^[a-z][a-z0-9_.-]{0,30}$/;
+const SHORT_RULE = /^[A-Za-z][A-Za-z0-9_-]{1,30}$/;
+const shortPublicId = (value: string, shape: RegExp) => shape.test(value) && redactUnknownSecrets(value) === value;
+
+/**
+ * Tool/rule pairs that may bypass entropy heuristics: compile-time pairs, and short
+ * identifiers that would pass the filter one by one. Known secret formats never pass.
+ */
 export function isPublicModuleRule(module: VerificationModule | undefined, tool: unknown, rule: unknown): boolean {
   if (!module || typeof tool !== 'string' || typeof rule !== 'string' || tool.includes(':') || rule.includes(':')) return false;
   return Object.hasOwn(rules[module], tool + ':' + rule)
-    || (Object.hasOwn(fixedRuleIds[module] ?? {}, tool) && fixedRuleIds[module]![tool]!.includes(rule));
+    || (Object.hasOwn(fixedRuleIds[module] ?? {}, tool) && fixedRuleIds[module]![tool]!.includes(rule))
+    || (shortPublicId(tool, SHORT_TOOL) && shortPublicId(rule, SHORT_RULE));
 }
 
-// Metrics counted by the tool itself: symbols without JSDoc, unreachable files,
+// Metrics counted by the tool itself: symbols without JSDoc, unused exports,
 // complexity, V8 counts, outdated versions and aggregated name or phone matches.
 // A model review adds nothing to them, so they are published as measured facts.
+// KNIP-UNUSED-FILE stays reviewed (knipFile): a file loaded only by a dynamic import
+// or an entry Knip did not detect is a known false positive.
 const measuredRules: Partial<Record<VerificationModule, Record<string, readonly string[]>>> = {
   qa: {'node-test-v8': ['QA-COBERTURA-FUNCAO-SEM-TESTE', 'QA-TESTE-PULADO-EXECUCAO']},
   arquitetura: {
     'ast-complexity': ['COMPLEXITY-CYCLOMATIC-HIGH', 'COMPLEXITY-NESTING-DEEP', 'COMPLEXITY-FILE-LARGE', 'COMPLEXITY-FILE-CYCLOMATIC'],
     jscpd: ['JSCPD-COMPLEXITY-HIGH'],
-    knip: ['KNIP-UNUSED-FILE', 'KNIP-UNUSED-EXPORT', 'KNIP-UNUSED-NS-EXPORT', 'KNIP-UNUSED-TYPE', 'KNIP-UNUSED-NS-TYPE',
+    knip: ['KNIP-UNUSED-EXPORT', 'KNIP-UNUSED-NS-EXPORT', 'KNIP-UNUSED-TYPE', 'KNIP-UNUSED-NS-TYPE',
       'KNIP-UNUSED-ENUM-MEMBER', 'KNIP-UNUSED-NS-MEMBER', 'KNIP-DUPLICATE-EXPORT', 'KNIP-UNUSED-DEV-DEPENDENCY'],
   },
   dependencias: {
@@ -494,6 +506,9 @@ const measuredRules: Partial<Record<VerificationModule, Record<string, readonly 
 /**
  * The collector's own measurement is the proof of this finding. The exam
  * publishes it as confirmed by the tool and never sends it to a model reviewer.
+ * Check it before `buildCollectorReviewCase`: it wins over a review case of the
+ * same rule. Those builders stay for the per-symbol form (qaFunction feeds the
+ * functional recheck) and for runs that do not apply this mark yet.
  */
 export function isMeasuredModuleRule(module: VerificationModule | undefined, tool: unknown, rule: unknown): boolean {
   if (!module || typeof tool !== 'string' || typeof rule !== 'string') return false;
