@@ -264,3 +264,7 @@ Ordem: `docs/ORDEM-CHATISP.md`. Equipe: `AGENTS.md`, seção "Equipe ChatISP". C
        - tokens por modelo;
        - tempo total, com meta abaixo de 2 h.
        Só então abra a F3 (correções, trabalhadores Sonnet 5.5 alto ou Opus 5.5 médio, nunca junto com exame).
+- 22/11/2026 19:23 UTC — **Gerente: F1 lançada (rodada única).** Executei `bash /tmp/ac-gerente-chatisp/rodada-completa.sh`; disco em 92%, sem processo da rodada antes.
+  - **Pasta da rodada:** `/tmp/ac-gerente-chatisp/exames/rodada-20261122-1922` (`inicio.txt` = 19:22 UTC; um log por módulo: `m01-seguranca.log`, `m-<módulo>.log`, `m10-design.log`).
+  - **Processos:** 10 módulos lançados em segundo plano; a capacidade do produto serializa o excesso (4 vagas).
+  - **Próximo passo do gerente:** não relançar enquanto houver processo da rodada. Quando módulo terminar, registrar situação (`tail -n 40`), arquivos julgados, achados por gravidade (tabela "Por regra" do README do relatório) e tempo desde `inicio.txt`. Quando todos terminarem: `npm run personal:tokens -- /home/app/.agent-control/ispagent/installation.json --desde <inicio.txt>`, registrar tokens por modelo e tempo total (meta < 2 h); só então abrir F3 (correções), nunca junto com exame.
