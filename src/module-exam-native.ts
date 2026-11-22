@@ -409,7 +409,13 @@ function createModuleExamNativeWorker(input: WorkerInput): ModuleExamWorker {
         // A signed terminal outcome already sealed the physical receipt and released the grant.
         // Retirement can be resumed from the journal if housekeeping fails.
         await supervisor.retireTerminal(principal, authority, jobId).catch(() => undefined /* resumed from the journal by the retirement sweep */);
-        if (outcome.state === 'failed') throw examJobExited(new Refusal(safeFailureCode(outcome.failureCode, 'MODULE_EXAM_PROVIDER_FAILED')));
+        if (outcome.state === 'failed') {
+          // The pre-launch receipt carries the login reason in lower case (exam_login_stale and siblings): the exam
+          // must stop on it, not retry every file against the same expired login.
+          const reported = typeof outcome.failureCode === 'string' && /^exam_login_[a-z_]+$/.test(outcome.failureCode)
+            ? outcome.failureCode.toUpperCase() : outcome.failureCode;
+          throw examJobExited(new Refusal(safeFailureCode(reported, 'MODULE_EXAM_PROVIDER_FAILED')));
+        }
         return outcome.output;
       } catch (error) {
         // Before there is an execution journal the broker cannot have created a worker. A release

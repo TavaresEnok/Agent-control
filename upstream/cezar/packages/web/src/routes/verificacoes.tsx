@@ -89,6 +89,13 @@ const phaseLabel: Record<string, string> = {
   failed: 'falhou',
 }
 
+const runStatusLabel: Record<string, string> = {
+  running: 'em andamento',
+  done: 'concluída',
+  incomplete: 'incompleta: arquivos ficaram sem julgamento',
+  failed: 'falhou',
+}
+
 function labelPhase(phase: string): string {
   return phaseLabel[phase] ?? phase
 }
@@ -244,7 +251,7 @@ function VerificacoesLista({ projectId }: { projectId?: string }) {
           const current = body.runs.find((run) => run.id === progress?.id) ?? body.runs.find((run) => run.status === 'running')
           if (!current) return
           setProgress(current)
-          if (current.status === 'done') setReloadKey((key) => key + 1)
+          if (current.status === 'done' || current.status === 'incomplete') setReloadKey((key) => key + 1)
         })
         .catch(() => {})
     }, 3000)
@@ -269,7 +276,7 @@ function VerificacoesLista({ projectId }: { projectId?: string }) {
         if (response.status !== 202) return
         const body = progressSchema.parse(await response.json())
         setProgress(body)
-        if (body.status === 'done') setReloadKey((key) => key + 1)
+        if (body.status === 'done' || body.status === 'incomplete') setReloadKey((key) => key + 1)
       })
       .catch(() => { setStartError('Não foi possível iniciar a verificação.') })
       .finally(() => {
@@ -291,7 +298,7 @@ function VerificacoesLista({ projectId }: { projectId?: string }) {
         Nova verificação
       </button>
       {startError ? <p role="alert">{startError}</p> : null}
-      {progress ? <p>Fase: {labelPhase(progress.phase)}. Status: {progress.status}</p> : null}
+      {progress ? <p>Fase: {labelPhase(progress.phase)}. Status: {runStatusLabel[progress.status] ?? progress.status}</p> : null}
       {progress && progress.total !== undefined && progress.judged !== undefined ? (
         <p>
           Arquivos julgados: {progress.judged} de {progress.total}

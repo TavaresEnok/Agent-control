@@ -10,7 +10,7 @@ import {redactUnknownSecrets} from './verify-redact.ts';
 import {VerifyWorkerCall} from './verify-types.ts';
 import type {ModuleRawFinding} from './verification-modules.ts';
 import {findModuleExamRoutes, moduleExamRouteKey, moduleExamRouteMatcher, redactModuleExamText, type ModuleExamMap} from './module-exam-map.ts';
-import {buildCollectorReviewCase, type ModuleExamCollectorContext} from './module-exam-collector-proof.ts';
+import {buildCollectorReviewCase, type ModuleExamCollectorContext, isMeasuredModuleRule} from './module-exam-collector-proof.ts';
 import {moduleCollectorHypothesis, moduleExamQuestions, moduleReviewObservationTitle, moduleReviewProofReason, moduleReviewTask, readModuleReviewVerdict, type ModuleReviewDecision, type ModuleReviewEvidence, type ModuleReviewObservation} from './module-exam-proof.ts';
 import {scanModuleExamSource} from './module-exam-syntax.ts';
 import {isModuleExamTerminalNotice, parseModuleExamJsonObject} from './module-exam-worker.ts';
@@ -414,7 +414,7 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
       prepared.push({file, row, code, limited, sent, sentRoutes, prompt, sourceDigest, complete, promptDigest, lines});
     }
     const commit = input.commit ? {commit: input.commit} : {};
-    const stopCodes = new Set(['PROVIDER_USAGE_LIMIT', 'EXAM_LOGIN_STALE', 'PROVIDER_AUTH_FAILED', 'MODULE_EXAM_EXAMINER_UNAVAILABLE',
+    const stopCodes = new Set(['PROVIDER_USAGE_LIMIT', 'EXAM_LOGIN_STALE', 'EXAM_LOGIN_BUSY', 'EXAM_LOGIN_RESTORE_FAILED', 'PROVIDER_AUTH_FAILED', 'MODULE_EXAM_EXAMINER_UNAVAILABLE',
       'NO_ELIGIBLE_CAPACITY', 'ROLE_NOT_CONFIGURED', 'NATIVE_IMAGE_MISSING', 'MODULE_EXAM_EGRESS_UNAVAILABLE', 'CAPACITY_BUSY', 'CAPACITY_QUEUED']);
     const requestFor = (p: Prepared) => {
       const read = {requestId: randomUUID(), sourceDigest: p.sourceDigest, complete: p.complete, promptDigest: p.promptDigest, ...commit};
@@ -847,7 +847,8 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
     for (const s of subjects) {
       const raw = input.findings[s.index];
       if (!triage) { items.push({members: [s], group: false, capped: false}); continue; }
-      if (raw && measuredRules.has(`${raw.tool}:${raw.rule}`)) {
+      // A métrica que a própria ferramenta mede (P2: isMeasuredModuleRule) não vai ao revisor; o modelo não muda o veredito.
+      if (raw && (measuredRules.has(`${raw.tool}:${raw.rule}`) || isMeasuredModuleRule(input.module, raw.tool, raw.rule))) {
         s.finding.reason = 'Regra medida pela própria ferramenta, sem revisão por modelo.';
         measuredCount++;
         continue;

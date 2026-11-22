@@ -58,7 +58,7 @@ it('posta uma verificação nova e mostra a fase', async () => {
   renderAt('/verificacoes')
   expect(await screen.findByText('Nenhuma verificação ainda.')).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Nova verificação' }))
-  expect(await screen.findByText('Fase: confirmação. Status: running')).toBeTruthy()
+  expect(await screen.findByText('Fase: confirmação. Status: em andamento')).toBeTruthy()
   const post = fetcher.mock.calls.find((call) => call[1]?.method === 'POST')
   expect(post?.[0]).toBe('/api/v1/ac/personal/verificacoes')
   expect(post?.[1]?.headers).toEqual({ 'Content-Type': 'application/json' })
@@ -114,15 +114,15 @@ it('consulta o andamento enquanto corre e recarrega a lista ao concluir', async 
   expect(screen.getByText('Nenhuma verificação ainda.')).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Nova verificação' }))
   await act(async () => { await vi.advanceTimersByTimeAsync(0) })
-  expect(screen.getByText('Fase: ferramentas. Status: running')).toBeTruthy()
+  expect(screen.getByText('Fase: ferramentas. Status: em andamento')).toBeTruthy()
   phase = 'exame'
   await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
-  expect(screen.getByText('Fase: exame. Status: running')).toBeTruthy()
+  expect(screen.getByText('Fase: exame. Status: em andamento')).toBeTruthy()
   expect(polls).toEqual(['exame'])
   status = 'done'
   phase = 'done'
   await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
-  expect(screen.getByText('Fase: concluída. Status: done')).toBeTruthy()
+  expect(screen.getByText('Fase: concluída. Status: concluída')).toBeTruthy()
   expect(screen.getByText('Achados altos: 1')).toBeTruthy()
   expect(screen.queryByText('Nenhuma verificação ainda.')).toBeNull()
   const pollsAtDone = polls.length
@@ -254,6 +254,6 @@ it('mantém a operação da instalação e descarta a resposta funcional tardia 
   })
   expect(reads).toBe(2)
   expect(screen.queryByRole('link', { name: /QA/ })).toBeNull()
-  expect(screen.getByText('Fase: confirmação. Status: running')).toBeTruthy()
+  expect(screen.getByText('Fase: confirmação. Status: em andamento')).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Nova verificação' })).toHaveProperty('disabled', true)
 })

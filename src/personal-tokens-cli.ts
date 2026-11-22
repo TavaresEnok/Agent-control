@@ -55,16 +55,19 @@ export function groupRows(rows:readonly Row[]):Row[]{
 export const SECURITY_FILE_LIMIT=15;
 const SECURITY_READ_FACTOR=4;
 const DESIGN_TOKEN_CEILING=20000;
+/** Defaults when the project does not set batchFiles (DEFAULT_MODULE_EXAM_BATCH and the design CLI). */
+const MODULE_BATCH_FILES=20,DESIGN_BATCH_FILES=8;
 /** What each module will actually do with the project's batching settings. Module 1 ignores batchFiles; modules 2-10 use it, and fewer than 2 means no batching. */
 export function effectiveBatchLines(economyInput:unknown,label:string):string[]{
  let e;try{e=ProjectEconomy.parse(economyInput??{});}catch{return ['projeto '+label+': configuração de economia inválida; lotes não puderam ser determinados'];}
- const lines=['projeto '+label+': lotes '+(e.batch?'ligados':'desligados')+', batchTokens='+e.batchTokens+', batchFiles='+e.batchFiles];
+ const moduleFiles=e.batchFiles??MODULE_BATCH_FILES,designFiles=e.batchFiles??DESIGN_BATCH_FILES;
+ const lines=['projeto '+label+': lotes '+(e.batch?'ligados':'desligados')+', batchTokens='+e.batchTokens+', batchFiles='+(e.batchFiles??'padrão de cada módulo')];
  if(!e.batch)return [...lines,'  módulos 1 a 10: 1 arquivo por chamada'];
  const per=(files:number,tokens:number)=>files<2?'1 arquivo por chamada (lote exige batchFiles >= 2)':'até '+files+' arquivos e '+tokens+' tokens por chamada';
  return [...lines,
-  '  módulo 1 (segurança): até '+SECURITY_FILE_LIMIT+' arquivos por chamada (limite histórico fixo; batchFiles='+e.batchFiles+' não se aplica) e orçamento de leitura de '+e.batchTokens*SECURITY_READ_FACTOR+' tokens (batchTokens x '+SECURITY_READ_FACTOR+')',
-  '  módulos 2 a 9: '+per(e.batchFiles,e.batchTokens),
-  '  módulo 10 (design): '+per(e.batchFiles,Math.min(e.batchTokens,DESIGN_TOKEN_CEILING))+(e.batchTokens>DESIGN_TOKEN_CEILING?' (teto do design: '+DESIGN_TOKEN_CEILING+')':'')];
+  '  módulo 1 (segurança): até '+SECURITY_FILE_LIMIT+' arquivos por chamada (limite histórico fixo; batchFiles não se aplica) e orçamento de leitura de '+e.batchTokens*SECURITY_READ_FACTOR+' tokens (batchTokens x '+SECURITY_READ_FACTOR+')',
+  '  módulos 2 a 9: '+per(moduleFiles,e.batchTokens),
+  '  módulo 10 (design): '+per(designFiles,Math.min(e.batchTokens,DESIGN_TOKEN_CEILING))+(e.batchTokens>DESIGN_TOKEN_CEILING?' (teto do design: '+DESIGN_TOKEN_CEILING+')':'')];
 }
 
 /** Cache read, cache write and the share of input served from the cache. Claude reports input without the cache;

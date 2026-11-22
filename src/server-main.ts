@@ -285,7 +285,7 @@ async function main(){
       }))
       :executions;
      const worker=createCapacityNativeWorker({supervisors:scopedExecutions,ledger,principal,authority,base:commit,releaseGrant:(grantId,how)=>releaseGrant(principal,authority,grantId,how),pollBackoff:examOptions.pollBackoff});
-     return beginPersonalVerification({projectId:panel.projectId,mapEnabled:examOptions.mapEnabled,batch:examOptions.batch,dataDirectory:panel.dataDirectory,repoPath:project.repo,...(body.url?{url:body.url}:{}),...(allowedAccountIds?{allowedAccountIds}:{}),ledger,principal,authority,policyRevision,commit,worker,databasesDirectory,image,installationPath:path,accountRoot:personalAccountRoot(config)});
+     return beginPersonalVerification({projectId:panel.projectId,mapEnabled:examOptions.mapEnabled,batch:examOptions.batch,productionOnly:examOptions.productionOnly,dataDirectory:panel.dataDirectory,repoPath:project.repo,...(body.url?{url:body.url}:{}),...(allowedAccountIds?{allowedAccountIds}:{}),ledger,principal,authority,policyRevision,commit,worker,databasesDirectory,image,installationPath:path,accountRoot:personalAccountRoot(config)});
     },
     recheck:async(principal,authority,input)=>{
      const project=[config.project,...config.projects].find(item=>item.id===input.projectId);
