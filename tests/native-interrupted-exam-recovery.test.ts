@@ -353,13 +353,22 @@ test('historical interrupted exam in main context is recovered explicitly via pe
   await assert.rejects(cli('--abandonar-design',histJobId));
   await rm(join(spool,histJobId),{recursive:true});
 
-  // Clean up coJobId so OPEN_EXECUTION_JOBS_SQL reflects only retired status and retiredImages can be dropped cleanly.
+  // The historical job no longer keeps the old executor open. Manual maintenance
+  // still preserves the image pin because the daemon is shared.
   await db.pool.query("DELETE FROM ac_native_execution_jobs WHERE id=$1",[coJobId]);
   assert.equal((await db.pool.query(OPEN_EXECUTION_JOBS_SQL,[supervisor.executorDigest])).rows[0].n,0);
+  const installationBefore=await readFile(installationFile,'utf8');
   const removedImages:string[]=[];
   const cleanMaint=await runPersonalMaintenance([installationFile],{docker:async args=>{if(args[0]==='image'&&args[1]==='rm')removedImages.push(args[2]!);return 0;},imageExists:async()=>true,refreshDatabases:async()=>{}});
-  assert.ok(cleanMaint.some(line=>line.includes('1 par(es) de execução')));
-  assert.deepEqual(removedImages,[retiredImage]);
+  assert.match(cleanMaint.join('\n'),/Imagens aposentadas e seus registros preservados/);
+  assert.deepEqual(removedImages,[]);
+  assert.equal(await readFile(installationFile,'utf8'),installationBefore);
+  // Simulate an explicit fixture rotation so replay has neither the old
+  // executor pair nor the old Docker image available.
+  const rotated=JSON.parse(installationBefore);
+  delete rotated.nativeBootstrap.execution.retiredImages;
+  await writeFile(installationFile,JSON.stringify(rotated),{mode:0o600});
+  dockerState.images.delete(retiredImage);
   await cli('--abandonar-design',histJobId);
   assert.equal(dockerRequests,replayDockerRequests);
   dockerState.unavailable=false;
@@ -399,6 +408,14 @@ test('historical interrupted exam in main context is recovered explicitly via pe
   // 6) Forward prevention: failure at releaseBeforeLaunch settles future pre-launch exam jobs when bindings and proof suffice.
   await db.pool.query('UPDATE ac_accounts SET enabled=true WHERE id=$1',[account]);
   await capacity.observeQuota(appPrincipal,account,{status:'available',source:'https://example.invalid/fixture',ttlSeconds:3600});
+  const examinerProfile=randomUUID(),examinerModel='claude-opus-5-5';
+  await db.pool.query("INSERT INTO ac_model_catalog VALUES('claude',$1,ARRAY['high'],ARRAY['specialist'],'synthetic://design-exam') ON CONFLICT DO NOTHING",[examinerModel]);
+  await capacity.addProfile(appPrincipal,project,{id:examinerProfile,accountId:account,model:examinerModel,effort:'high',role:'specialist'});
+  const examinerRevision=await capacity.publish(appPrincipal,project,1,{
+   schemaVersion:1,maxProgrammersPerContext:1,maxEvaluatorsPerContext:1,roles:{specialist:{regular:[examinerProfile],emergency:[]}},
+  });
+  await capacity.assignPolicy(appPrincipal,mainContext,examinerRevision);
+  const examinerDigest=digest({accountId:account,profileId:examinerProfile,model:examinerModel,effort:'high',role:'specialist'});
   const claudeAccountRoot=join(accounts,account);
   await mkdir(claudeAccountRoot,{recursive:true,mode:0o700});await chmod(claudeAccountRoot,0o700);
   await writeFile(join(claudeAccountRoot,'.credentials.json'),JSON.stringify({claudeAiOauth:{accessToken:'old-tok-secret-123',refreshToken:'ref-tok-secret-123',expiresAt:Date.now()-10_000}}),{mode:0o600});
@@ -411,13 +428,14 @@ test('historical interrupted exam in main context is recovered explicitly via pe
    const appAuth=await db.acquire(appPrincipal,mainContext,randomUUID(),'personal-design',60);
    const {id:intentId}=await insertDesignExamIntent(db,appPrincipal,mainContext,appAuth.epoch,project,headCommit,true);
    const grantId=randomUUID(),siblingJobId=randomUUID(),siblingGrantId=randomUUID();
-   await db.pool.query(`INSERT INTO ac_capacity_grants(id,attempt_id,intent_id,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,request_digest,emergency,state)
-    VALUES($1,$2,$3,$4,$5,$6,$7,'specialist',$8,1,1,$9,false,'reserved'),($10,$11,$3,$4,$5,$6,$7,'specialist',$8,1,1,$12,false,'released')`,
-    [grantId,randomUUID(),intentId,mainContext,appAuth.epoch,account,profile,project,digest({fixture:true}),siblingGrantId,randomUUID(),digest({siblingJobId})]);
+   await db.pool.query(`INSERT INTO ac_capacity_grants(id,attempt_id,intent_id,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,request_digest,emergency,state,selection)
+    VALUES($1,$2,$3,$4,$5,$6,$7,'specialist',$8,$13,1,$9,false,'reserved','{"designPurpose":"examiner"}'),
+          ($10,$11,$3,$4,$5,$6,$7,'specialist',$8,$13,1,$12,false,'released',NULL)`,
+    [grantId,randomUUID(),intentId,mainContext,appAuth.epoch,account,examinerProfile,project,digest({fixture:true}),siblingGrantId,randomUUID(),digest({siblingJobId}),examinerRevision]);
    const siblingReceipt={payload:{jobId:siblingJobId,exitCode:0,executionStarted:true}};
    await db.pool.query(`INSERT INTO ac_native_execution_jobs(id,grant_id,intent_id,context_id,manager_epoch,session_id,account_id,profile_id,profile_digest,eligibility_revision,executor_digest,key_fingerprint,input_digest,base_id,role,state,receipt)
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,1,$10,$11,$12,$13,'specialist','completed',$14)`,
-    [siblingJobId,siblingGrantId,intentId,mainContext,appAuth.epoch,randomUUID(),account,profile,profileDigest,futureSupervisor.executorDigest,execFingerprint,digest({siblingJobId}),headCommit,siblingReceipt]);
+    [siblingJobId,siblingGrantId,intentId,mainContext,appAuth.epoch,randomUUID(),account,examinerProfile,examinerDigest,futureSupervisor.executorDigest,execFingerprint,digest({siblingJobId}),headCommit,siblingReceipt]);
 
    const failureTable=failure==='proof'?'ac_native_terminal_retirements':failure==='intent'?'ac_intents':null;
    if(failureTable)await db.pool.query(`CREATE TRIGGER fixture_fail_settlement BEFORE UPDATE ON ${failureTable} FOR EACH ROW EXECUTE FUNCTION fixture_fail_exam_settlement()`);
@@ -429,9 +447,9 @@ test('historical interrupted exam in main context is recovered explicitly via pe
     retireTerminal:(principal,authority,id)=>futureSupervisor.retireTerminal(principal,authority,id)}],principal:appPrincipal,authority:appAuth,ledger:db,base:headCommit,
     releaseGrant:(id,how)=>releaseDesignGrant(db,appPrincipal,appAuth,id,how)});
    try{
-    await assert.rejects(worker.run({role:'specialist',provider:'claude',accountId:account,profileId:profile,model:'claude-sonnet-5-5',grantId,intentId,task:'future prelaunch exam failure',repo,writePaths:[]}),(err:unknown)=>{
+    await assert.rejects(worker.run({role:'specialist',provider:'claude',accountId:account,profileId:examinerProfile,model:examinerModel,designPurpose:'examiner',grantId,intentId,task:'future prelaunch exam failure',repo,writePaths:[]}),(err:unknown)=>{
      if(!failure)return err instanceof Refusal&&err.code==='EXAM_LOGIN_STALE';
-     assert.ok(err instanceof UnstartedExamRetirementPending);
+     assert.ok(err instanceof UnstartedExamRetirementPending,String(err));
      assert.equal(err.jobId,jobId);
      assert.equal(isProviderLimit(err.code),false);
      assert.match(designCliFailureText(err),new RegExp(`--abandonar-design ${jobId}`));
