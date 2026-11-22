@@ -95,6 +95,12 @@ test('new review jobs get the triage wording; the replay check still accepts job
 test('new programmer jobs get the habits and, in a correction, the recorded failure; existing jobs replay their stored request', async () => {
   const {PROGRAMMER_HABITS_TEXT} = await import('../src/native-implementation.ts');
   assert.match(PROGRAMMER_HABITS_TEXT, /fail before the fix and pass after it/);
+  // The reuse ladder travels with the habits into every new programmer request.
+  assert.match(PROGRAMMER_HABITS_TEXT, /does this repository already have it/);
+  assert.match(PROGRAMMER_HABITS_TEXT, /a dependency already installed;/);
+  assert.match(PROGRAMMER_HABITS_TEXT, /Add a new dependency only when none of these solves it, and say why/);
+  assert.doesNotMatch(PROGRAMMER_HABITS_TEXT, /never a new one/);
+  assert.match(PROGRAMMER_HABITS_TEXT, /Never remove input validation, error handling, security controls, accessibility, tests/);
   const {readFile} = await import('node:fs/promises');
   const source = await readFile(new URL('../src/native-implementation.ts', import.meta.url), 'utf8');
   assert.match(source, /const task=existing\?\(await supervisor\.storedRequest\(owner,authority,intent\.operation_id\)\)\.task:fresh;/);

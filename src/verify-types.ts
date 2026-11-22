@@ -169,4 +169,4 @@ export const ReportSummary = z.object({
 }).strict();
 export type ReportSummary = z.infer<typeof ReportSummary>;
 
-export const REMEDIATION_ACCEPTANCE = 'O teste de regressão passa e a nova verificação do mesmo ponto não reabre o achado.';
+export const REMEDIATION_ACCEPTANCE = 'O teste de regressão passa e a nova verificação do mesmo ponto não reabre o achado. A correção muda só o necessário para fechar o achado, reaproveita o que o projeto e a biblioteca padrão já oferecem, só adiciona dependência quando nada disso resolve, dizendo por quê, e não mexe em código além do achado e da sua causa comum.';

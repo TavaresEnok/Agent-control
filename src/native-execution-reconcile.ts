@@ -133,6 +133,21 @@ export abstract class NativeExecutionReconciler extends NativeExecutionExamRecov
    await this.removeLaunchFiles(input.jobId);
    return {state:job.state as 'completed'|'failed',receipt,output:result.output,artifact:payload.artifact??null,failureCode:result.failureCode};
   }
+  // A module exam refused before launch by the Claude login keeps only its pre-launch receipt.
+  // Its intent is shared with the other jobs of the module, so seal this job alone.
+  if(input.moduleExam&&!job.worker_id&&!job.tools_id&&!job.network_id&&!job.launch_digest&&!job.receipt){
+   const sealed=await this.ledger.tx(async c=>{
+    await this.scope(c,principal,authority,input,true);
+    const row=(await c.query('SELECT j.*,g.state grant_state,g.physical_receipt FROM ac_native_execution_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id WHERE j.id=$1 FOR UPDATE OF j,g',[input.jobId])).rows[0];
+    if(row?.state!=='uncertain'||row.grant_state!=='released'||row.worker_id||row.tools_id||row.network_id||row.launch_digest||row.receipt||
+     !this.validPreLaunchExamReceipt(row.physical_receipt,row.id,Boolean(this.config.syntheticFixture)))return null;
+    await this.confirmUnstartedAbsence(input.jobId);
+    const receipt=this.unstartedReceipt(row,row.physical_receipt);
+    await c.query("UPDATE ac_native_execution_jobs SET state='failed',receipt=$2 WHERE id=$1",[row.id,receipt]);
+    return {receipt,failureCode:String(row.physical_receipt.reason)};
+   });
+   if(sealed)return {state:'failed',receipt:sealed.receipt,output:'',artifact:null,failureCode:sealed.failureCode};
+  }
   // Never recreate missing resources or rerun an uncertain start.
   const worker=await this.docker.inspect('ac-native-worker-'+input.jobId),tools=await this.docker.inspect('ac-native-tools-'+input.jobId);
   for(const [physical,id,image] of [[worker,job.worker_id,this.config.workerImage],[tools,job.tools_id,this.config.toolsImage]] as const){

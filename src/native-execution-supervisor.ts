@@ -82,8 +82,10 @@ export class NativeExecutionSupervisor extends NativeExecutionTerminalWork{
     }
     await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND state IN ('reserved','uncertain')",[input.grantId,receipt]);
     // The live call has the original request. Limit automatic settlement to
-    // exam login refusals that immediately terminate the caller's exam.
-    return grant.state==='uncertain'&&PreLaunchExamReason.safeParse(reason).success&&!input.model&&!input.effort&&input.designPurpose!=='create'&&!input.task.startsWith('Pedido de criação.');
+    // exam login refusals that immediately terminate the caller's exam. A module
+    // exam shares one intent across its jobs and its caller ends that intent, so
+    // only this job is sealed later by reconcile and the login refusal is rethrown.
+    return grant.state==='uncertain'&&PreLaunchExamReason.safeParse(reason).success&&!input.moduleExam&&!input.model&&!input.effort&&input.designPurpose!=='create'&&!input.task.startsWith('Pedido de criação.');
    });
    if(!shouldSettle)return;
    // Commit the physical receipt before settlement so maintenance can retry
