@@ -180,3 +180,27 @@ Substitui, para a auditoria e a melhoria do ChatISP, as seções de equipe acima
 - **Prioridade da cota do Max:** examinador, depois gerente, depois revisor, depois trabalhadores Opus.
 - **Cota:** erro de cota é registrado na hora em `docs/PROGRESSO-CHATISP.md` com a palavra `COTA`. Ninguém para de vez por cota: espera e tenta de novo a cada 15 min, adiantando o que não depende daquilo. Nunca comprar créditos.
 - **ChatISP:** o servidor de origem (`enok@177.104.156.25`) e a instalação publicada `chatisp.tokstiloesporte.com` não são alterados. Nada é enviado (push) sem o sim do titular. O trabalho fica num clone central em `/home/app/projetos-externos/chatisp`, em ramo próprio.
+
+## Equipe ChatISP só com o Claude Max (titular, 22/11/2026 ~17:30 UTC)
+
+Substitui a seção anterior na escolha de modelos e trabalhadores. Hoje só a conta Claude Max da Enok tem cota, e todos os papéis dividem essa cota. As outras regras da seção anterior continuam valendo: conta, cota, ChatISP e prioridade.
+
+- **Login:** todos usam `CLAUDE_CONFIG_DIR=/home/app/.claude-trabalhadores/enok`, sem tela. Os Gemini, os Sonnet pelo Antigravity e o Codex não são acionados.
+- **Gerente:** Claude Code `claude-sonnet-5-5`, esforço `high`.
+  - Acordado pelo vigia `ac-gerente-chatisp.timer` só quando um processo termina ou aparece log novo.
+  - Sessões de até 30 turnos (`--max-turns 30`), sem esperar dentro da sessão.
+- **Revisor:** Claude Code `claude-opus-5-5`, esforço `medium`, só leitura, `--max-turns 25`. Recebe a ordem e o diff.
+- **Examinador:** pelo caminho do produto, com os esforços por módulo já definidos:
+  - Sonnet 5.5 `high` nos módulos 1, 5 e 9 e `medium` nos demais;
+  - Opus 5.5 `medium` para os achados altos;
+  - Opus 5.5 `high` no design;
+  - até 4 vagas de exame (`evaluation_limit` 4).
+- **Trabalhadores:**
+  - correções comuns: até 2 Claude Code `claude-sonnet-5-5`, esforço `high`. Trailer `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`;
+  - correções graves (segurança, banco, arquitetura): até 2 Claude Code `claude-opus-5-5`, esforço `medium`. Trailer `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+- **Fases separadas:** com uma conta só, as fases não se misturam.
+  - Exame: só o exame e o gerente. Nenhum trabalhador roda.
+  - Correção: até 4 trabalhadores ao todo, mais o revisor.
+  - No máximo 6 sessões ao mesmo tempo na conta.
+- **Medição:** antes de abrir cada fase, o gerente roda `npm run personal:tokens -- <instalação> --desde <início da fase anterior>` e registra no progresso. Gerente mais revisor não podem passar do que gastam os trabalhadores e o examinador somados.
+- **Regra de mudança mínima:** todo trabalhador segue a regra de `docs/ORDEM-CHATISP.md`. Antes de escrever, reaproveita o que o projeto, a biblioteca padrão e os recursos nativos já oferecem, sem criar dependência nem abstração que a tarefa não peça, e sem retirar validação, segurança ou testes.

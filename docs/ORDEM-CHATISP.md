@@ -69,10 +69,10 @@ Marque cada item em `docs/PROGRESSO-CHATISP.md` assim que ele acontecer. Esse ar
 
 - **Prioridade:** achados confirmados, por gravidade: alta, depois média, depois baixa.
 - **Execução:** use o fluxo de correção do produto quando ele cobrir o módulo. Se não cobrir, use trabalhadores, cada um no seu worktree do clone, com itens que não tocam os mesmos arquivos.
-- **Distribuição:**
-  - correções complexas ou graves: Argon, Sonnet 5.5 médio, Codex Sol médio e, na reserva, Opus médio;
-  - correções simples: Flash e Sonnet 4.6.
-- **Fila e cota:** no máximo 2 ao mesmo tempo de cada trabalhador. Se um trabalhador devolver erro de cota (429 ou limite de uso), passe ao próximo da lista e registre `COTA`. Só quando todos estiverem sem cota use até 4 Opus 5.5 médios.
+- **Distribuição (só Claude Max, ver `AGENTS.md`):**
+  - correções graves (segurança, banco, arquitetura): até 2 Opus 5.5 médio;
+  - correções comuns: até 2 Sonnet 5.5 alto.
+- **Fila e cota:** no máximo 4 trabalhadores ao todo, e só na fase de correção, nunca junto com o exame. Em erro de cota (429 ou limite de uso), registre `COTA`, espere e tente de novo a cada 15 min.
 - **Integração:** cada correção passa pelos testes do próprio ChatISP (`scripts/test.sh` ou `make test` e os testes do `web/`) e por revisão independente antes de entrar no ramo de trabalho. Depois, rode o reexame do módulo (`--reverificar`).
 - **Proteções:** nunca apague testes para passar. Nunca enfraqueça a segurança para fechar um achado. Achado discordante vai para o relatório com o motivo, sem descarte silencioso.
 
@@ -99,26 +99,17 @@ Cada trabalhador recebe uma ordem escrita e autocontida, com:
 - os testes a rodar;
 - o trailer e a regra de commit, sem push.
 
-Comandos de acionamento:
-- **Argon** (conta ajust):
+Comandos de acionamento (só Claude Max, login dedicado da Enok):
+- **Correção comum, Sonnet 5.5 alto:**
   ```
-  cd <worktree> && setsid nohup /home/app/.local/bin/agy -p "<ordem>" --model gemini-4-argon-high --dangerously-skip-permissions --print-timeout 0s > <log> 2>&1 < /dev/null &
+  cd <worktree> && CLAUDE_CONFIG_DIR=/home/app/.claude-trabalhadores/enok setsid nohup claude -p "<ordem>" --model claude-sonnet-5-5 --effort high --max-turns 60 --dangerously-skip-permissions > <log> 2>&1 < /dev/null &
   ```
-- **Sonnet 5.5 médio** (conta ajust): o mesmo comando, com `--model claude-sonnet-5-5-medium`.
-- **Sonnet 4.6** (conta enok): o mesmo comando, com `HOME=/home/app/.agy-enok` antes e `--model claude-sonnet-4-6`.
-- **Flash** (conta enok): o mesmo comando, com `HOME=/home/app/.agy-enok` antes e `--model gemini-3.8-flash-high`.
-- **Codex Sol médio:**
-  ```
-  codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -m gpt-6.2-sol -c model_reasoning_effort=medium -C <worktree> "<ordem>" > <log> 2>&1 < /dev/null &
-  ```
+- **Correção grave, Opus 5.5 médio:** o mesmo comando, com `--model claude-opus-5-5 --effort medium`.
 - **Revisor:**
   ```
   CLAUDE_CONFIG_DIR=/home/app/.claude-trabalhadores/enok claude -p "<ordem de revisão>" --model claude-opus-5-5 --effort medium --max-turns 25 --dangerously-skip-permissions --disallowedTools Edit Write NotebookEdit
   ```
-- **Reserva Opus médio:**
-  ```
-  CLAUDE_CONFIG_DIR=/home/app/.claude-trabalhadores/enok claude -p "<ordem>" --model claude-opus-5-5 --effort medium --dangerously-skip-permissions
-  ```
+- Os comandos do Antigravity (`agy`) e do Codex ficam fora enquanto só o Max tiver cota.
 
 Os commits usam `GIT_AUTHOR_NAME="Enok Tavares" GIT_AUTHOR_EMAIL=migration@localhost` e o mesmo nome e e-mail no committer, mais o trailer do modelo que escreveu.
 
