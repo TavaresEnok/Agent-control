@@ -6,7 +6,7 @@ import {pathToFileURL} from 'node:url';
 import {Refusal} from './contracts.ts';
 import type {DesignCaptureDriver, DesignCaptureTheme} from './design-capture.ts';
 import type {DesignLogin} from './design-discover.ts';
-import {assertDesignDestination, assertDesignTarget} from './design-image.ts';
+import {assertDesignDestination, assertDesignTarget, designTrustArguments} from './design-image.ts';
 
 type DesignPage = {
   url(): string;
@@ -243,9 +243,11 @@ async function waitForPaint(page: DesignPage): Promise<void> {
  * Um alvo `.local` entra pela imagem, na rede de homologação: o host não resolve esse nome.
  * A senha não entra no arquivo nem na linha de comando. O chamador apaga o diretório no fim.
  */
-export async function writeDesignLoginState(targetUrl: string, login: DesignLogin, pinnedImage?: string): Promise<string> {
+export async function writeDesignLoginState(targetUrl: string, login: DesignLogin, pinnedImage?: string, trustCa?: string): Promise<string> {
   const target = assertDesignTarget(targetUrl);
-  if (pinnedImage !== undefined && target.host.endsWith('.local')) return writeLoginStateInImage(targetUrl, login, pinnedImage);
+  if (pinnedImage !== undefined && target.host.endsWith('.local')) return writeLoginStateInImage(targetUrl, login, pinnedImage, trustCa);
+  // A CA de homologação só é usada dentro da imagem, na rede isolada.
+  if (trustCa !== undefined) throw new Refusal('DESIGN_TRUST_CA_INVALID', 400);
   const chromium = await loadChromium();
   const browser = await chromium.launch({
     executablePath: CHROME,
@@ -286,7 +288,8 @@ function commandCode(command: string, args: readonly string[]): Promise<number> 
 }
 
 /** O contêiner 65532 lê a senha pelo arquivo e grava o estado no mesmo uid, modo 0600. */
-async function writeLoginStateInImage(targetUrl: string, login: DesignLogin, pinnedImage: string): Promise<string> {
+async function writeLoginStateInImage(targetUrl: string, login: DesignLogin, pinnedImage: string, trustCa?: string): Promise<string> {
+  const trust = designTrustArguments(targetUrl, trustCa);
   const directory = await mkdtemp(join(tmpdir(), 'design-login-'));
   const cred = join(directory, 'login.json');
   const out = join(directory, 'out');
@@ -314,10 +317,12 @@ async function writeLoginStateInImage(targetUrl: string, login: DesignLogin, pin
       '--entrypoint', 'node',
       '--mount', `type=bind,source=${cred},destination=/login/login.json,readonly`,
       '--mount', `type=bind,source=${out},destination=/output`,
+      ...trust,
       pinnedImage,
       '/opt/design-tools/write-login-state.mjs',
     ]);
     if (code === 2) throw new Refusal('DESIGN_PASSWORD_LEAK');
+    if (code === 3) throw new Refusal('DESIGN_TRUST_CA_FAILED');
     if (code !== 0) throw new Error('DESIGN_LOGIN_IMAGE');
     const state = join(out, 'state.json');
     const info = await stat(state);

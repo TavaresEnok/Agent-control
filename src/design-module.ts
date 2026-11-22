@@ -94,6 +94,8 @@ export type DesignModuleInput = {
   release: (seat: DesignSeat) => Promise<void>;
   tools?: DesignToolReports;
   driver?: DesignCaptureDriver;
+  /** CA conferida da homologação HTTPS, montada no exame e no login dentro da imagem. */
+  trustCa?: string;
   login?: DesignLogin;
   captureDarkTheme?: boolean;
   forceStates?: boolean;
@@ -165,11 +167,11 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
   let loginNote = '';
   if (input.image !== undefined && plannedStates?.wantsLogin === true && input.login !== undefined) {
     try {
-      loginState = await writeDesignLoginState(input.targetUrl, input.login, input.image.pinnedImage);
+      loginState = await writeDesignLoginState(input.targetUrl, input.login, input.image.pinnedImage, input.trustCa);
       loginDir = dirname(loginState);
     } catch (error) {
-      if (error instanceof Refusal && error.code === 'DESIGN_PASSWORD_LEAK') throw error;
-      loginNote = 'O estado logado não foi capturado: o login no host falhou.';
+      if (error instanceof Refusal && (error.code === 'DESIGN_PASSWORD_LEAK' || error.code.startsWith('DESIGN_TRUST_CA_'))) throw error;
+      loginNote = 'O estado logado não foi capturado: o login falhou.';
     }
   }
   const imagePlan = input.image === undefined
@@ -205,6 +207,7 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     ...(input.image.run === undefined ? {} : {run: input.image.run}),
     ...(input.image.timeoutMs === undefined ? {} : {timeoutMs: input.image.timeoutMs}),
     ...(loginState === undefined ? {} : {loginState}),
+    ...(input.trustCa === undefined ? {} : {trustCa: input.trustCa}),
       });
     } finally {
       if (loginDir !== undefined) await rm(loginDir, {recursive: true, force: true});

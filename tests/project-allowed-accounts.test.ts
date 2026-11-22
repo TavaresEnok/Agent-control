@@ -352,7 +352,38 @@ test(' caminhos de reserva (verify, exam-provider, design e módulos 2 a 9 com e
       );
       await ledger.pool.query('DELETE FROM ac_capacity_waits');
     }
-    await release(holdDesignB.grantId);
+    // Com --esperar-cota, outra rodada de design espera na fila, com o mesmo attemptId,
+    // e recebe a vaga quando ela libera. Nunca cai para a Conta A.
+    {
+      const waitingIntent = await openIntent();
+      let sleeps = 0;
+      let clock = 0;
+      const seat = await reserveDesignModel(ledger, capacity, owner, authority, waitingIntent, 'examiner', [accountB], {
+        enabled: true,
+        pollBackoff: true,
+        deadlineAt: 60_000,
+        now: () => clock,
+        sleep: async ms => {
+          sleeps += 1;
+          clock += ms;
+          const waits = (await ledger.pool.query<{n: string}>('SELECT count(*)::text AS n FROM ac_capacity_waits WHERE intent_id=$1', [waitingIntent])).rows[0]?.n;
+          assert.ok(Number(waits) <= 1, 'uma linha de espera por reserva');
+          if (sleeps === 2) await release(holdDesignB.grantId);
+        },
+      });
+      assert.equal(seat.accountId, accountB);
+      assert.ok(sleeps >= 2);
+      await release(seat.grantId);
+    }
+    // Sem a espera, a recusa continua imediata.
+    const holdAgain = await reserveDesignModel(ledger, capacity, owner, authority, intentId, 'examiner', [accountB]);
+    const otherIntent = await openIntent();
+    await assert.rejects(
+      () => reserveDesignModel(ledger, capacity, owner, authority, otherIntent, 'examiner', [accountB]),
+      (err: unknown) => err instanceof Refusal && err.code === 'CAPACITY_BUSY',
+    );
+    await ledger.pool.query('DELETE FROM ac_capacity_waits');
+    await release(holdAgain.grantId);
 
     // Design com Conta B sem cota -> PROVIDER_USAGE_LIMIT (nunca usa Conta A).
     await capacity.observeQuota(owner, accountB, {status: 'exhausted', ttlSeconds: 3600, source: 'synthetic://allow'});

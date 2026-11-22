@@ -1,5 +1,5 @@
-import {randomUUID} from 'node:crypto';
 import type {Capacity} from './capacity.ts';
+import {reserveWithCapacityQueue, type ExamCapacityWaitOptions} from './exam-provider.ts';
 import {Refusal, type Authority} from './contracts.ts';
 import type {DesignReserveOptions, DesignSeat} from './design-examine.ts';
 import type {Ledger} from './ledger.ts';
@@ -65,13 +65,20 @@ export async function reserveDesignModel(
   intentId: string,
   purpose: DesignPurpose,
   allowedAccountIds?: readonly string[],
+  capacityWait?: ExamCapacityWaitOptions,
 ): Promise<DesignSeat> {
   const profile = await requiredDesignProfile(ledger.pool, authority.contextId, purpose, allowedAccountIds);
-  const seat = await capacity.reserveWithSeat(principal, {
-    attemptId: randomUUID(), intentId, contextId: authority.contextId, role: 'specialist',
-    provider: 'claude', requiredProfileId: profile.id, designPurpose: purpose, allowedAccounts: [profile.account],
-    ...(allowedAccountIds ? {projectAllowedAccounts: [...allowedAccountIds]} : {}),
-  }, authority);
+  // Sem capacityWait, uma vaga ocupada recusa na hora, como antes. Com ele, a reserva
+  // espera na fila com o mesmo attemptId e pausa crescente, até o prazo da rodada.
+  const seat = await reserveWithCapacityQueue({
+    capacity, ledger, principal, authority,
+    request: {
+      intentId, contextId: authority.contextId, role: 'specialist',
+      provider: 'claude', requiredProfileId: profile.id, designPurpose: purpose, allowedAccounts: [profile.account],
+      ...(allowedAccountIds ? {projectAllowedAccounts: [...allowedAccountIds]} : {}),
+    },
+    ...(capacityWait ? {capacityWait} : {}),
+  });
   if (
     seat.grant.profile_id !== profile.id
     || seat.grant.account_id !== profile.account

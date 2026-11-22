@@ -22,14 +22,18 @@ import {readDesignCaptureFiles} from './design-report.ts';
 import {loadInstallation} from './installation.ts';
 import {Ledger} from './ledger.ts';
 import {containFailure} from './failure-log.ts';
+import {readDesignTrustCa, stageDesignTrustCa} from './design-trust.ts';
 
 const messages: Record<string, string> = {
-  DESIGN_USAGE: 'Uso: npm run personal:design -- <instalação.json> <projectId> --url <url> [--login-file <arquivo>]',
+  DESIGN_USAGE: 'Uso: npm run personal:design -- <instalação.json> <projectId> --url <url> [--login-file <arquivo>] [--ca <arquivo.pem>] [--esperar-cota]',
+  DESIGN_TRUST_CA_INVALID: 'O --ca tem que ser um arquivo PEM só com certificados de CA, e a URL tem que ser https num host .local.',
+  DESIGN_TRUST_CA_FAILED: 'O certificado da homologação não fecha na CA informada em --ca, ou o host não respondeu em HTTPS.',
   PERSONAL_ACTIVATION_REQUIRED: 'O exame de design só roda numa instalação pessoal.',
   NOT_FOUND: 'Projeto não encontrado.',
   DESIGN_CONTEXT_REQUIRED: 'O projeto não tem um contexto para o exame.',
   DESIGN_BUSY: 'Já existe uma execução de design em andamento neste projeto.',
-  CAPACITY_BUSY: 'As vagas de execução para o design estão ocupadas. Repita o exame quando houver uma vaga.',
+  CAPACITY_BUSY: 'As vagas de execução para o design estão ocupadas. Repita com --esperar-cota para esperar na fila.',
+  CAPACITY_QUEUED: 'O design ficou na fila até o fim do prazo. Repita com --esperar-cota quando as vagas liberarem.',
   DESIGN_WORKER_UNAVAILABLE: 'O runtime pessoal não está ativo.',
   DESIGN_EXTERNAL_TARGET: 'A URL tem que ficar em localhost, 127.0.0.1 ou num host .local.',
   DESIGN_TARGET_ESCAPE: 'A URL aponta para outro destino.',
@@ -382,6 +386,15 @@ async function main() {
   }
   const parsed = parseDesignArgs(invocation.argv);
   const opened = parsed.loginFile === undefined ? undefined : await readDesignLoginFile(parsed.loginFile);
+  let trust: Awaited<ReturnType<typeof stageDesignTrustCa>> | undefined;
+  try {
+    trust = parsed.caFile === undefined ? undefined : await stageDesignTrustCa(await readDesignTrustCa(parsed.caFile));
+  } catch (error) {
+    opened?.wipe();
+    fail(error);
+  }
+  // Um host .local só existe na rede de homologação: as capturas vêm da imagem, não do Chrome do host.
+  const hostBrowser = opened !== undefined && !new URL(parsed.url).hostname.endsWith('.local');
   let examStatus: {code: number; lines: string[]} = {code: 0, lines: []};
   let browser: Awaited<ReturnType<typeof openDesignBrowser>> | undefined;
   try {
@@ -389,7 +402,7 @@ async function main() {
     examStatus = await runDesignSession(
       resolved,
       async () => {
-        browser = opened === undefined ? undefined : await openDesignBrowser(parsed.url);
+        browser = hostBrowser ? await openDesignBrowser(parsed.url) : undefined;
         const pinnedImage = readPinnedImage();
         const runId = randomUUID();
         const files = await readDesignRepository(resolved.repo);
@@ -418,6 +431,7 @@ async function main() {
           regressionThreshold: invocation.threshold,
           ...(referenceFiles === undefined ? {} : {referenceFiles}),
           ...(opened === undefined ? {} : {login: opened.login}),
+          ...(trust === undefined ? {} : {trustCa: trust.path}),
           ...(routes === undefined ? {} : {routes}),
         });
         const result = invocation.serveDir === undefined
@@ -434,9 +448,11 @@ async function main() {
     );
   } catch (error) {
     opened?.wipe();
+    await trust?.dispose();
     fail(error);
   }
   opened?.wipe();
+  await trust?.dispose();
   for (const line of examStatus.lines) console.error(line);
   process.exit(examStatus.code);
 }

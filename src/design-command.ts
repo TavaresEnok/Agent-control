@@ -7,6 +7,7 @@ import {randomUUID} from 'node:crypto';
 import {Capacity} from './capacity.ts';
 import {digest, Id, Refusal, type Authority} from './contracts.ts';
 import {finishExamIntent} from './exam-intent.ts';
+import {clearExamContextCapacityWaits, DEFAULT_EXAM_CAPACITY_WAIT_DEADLINE_MS, type ExamCapacityWaitOptions} from './exam-provider.ts';
 import {reserveDesignModel} from './design-model-reservation.ts';
 import {assertDesignTarget} from './design-image.ts';
 import {publicLoginRecord, type DesignLogin, type PublicLoginRecord} from './design-discover.ts';
@@ -37,6 +38,10 @@ export type ParsedDesignArgs = {
   url: string;
   loginFile?: string;
   serveDir?: string;
+  /** Arquivo PEM com a CA de uma homologação HTTPS num host .local. */
+  caFile?: string;
+  /** Espera vaga na fila de capacidade em vez de recusar com CAPACITY_BUSY. */
+  waitCapacity?: boolean;
 };
 
 export type ResolvedPersonalDesign = {
@@ -65,6 +70,8 @@ export function parseDesignArgs(argv: readonly string[]): ParsedDesignArgs {
   let url: string | undefined;
   let loginFile: string | undefined;
   let serveDir: string | undefined;
+  let caFile: string | undefined;
+  let waitCapacity = false;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] ?? '';
     if (arg === '--url') {
@@ -78,6 +85,18 @@ export function parseDesignArgs(argv: readonly string[]): ParsedDesignArgs {
       const value = argv[index + 1];
       if (loginFile !== undefined || value === undefined || value.startsWith('--')) throw new Refusal('DESIGN_USAGE', 400);
       loginFile = value;
+      index += 1;
+      continue;
+    }
+    if (arg === '--esperar-cota') {
+      if (waitCapacity) throw new Refusal('DESIGN_USAGE', 400);
+      waitCapacity = true;
+      continue;
+    }
+    if (arg === '--ca') {
+      const value = argv[index + 1];
+      if (caFile !== undefined || value === undefined || value.length === 0 || value.startsWith('--')) throw new Refusal('DESIGN_USAGE', 400);
+      caFile = value;
       index += 1;
       continue;
     }
@@ -97,12 +116,19 @@ export function parseDesignArgs(argv: readonly string[]): ParsedDesignArgs {
   if (!Id.safeParse(projectId).success) throw new Refusal('NOT_FOUND', 404);
   assertDesignTarget(url);
   if (serveDir === undefined && loopbackExamHost(url)) throw new Refusal('DESIGN_TARGET_UNREACHABLE', 400);
+  if (caFile !== undefined) {
+    // A CA vale só para um alvo HTTPS em host .local, dentro da rede de homologação.
+    const target = new URL(url);
+    if (serveDir !== undefined || target.protocol !== 'https:' || !target.hostname.endsWith('.local')) throw new Refusal('DESIGN_TRUST_CA_INVALID', 400);
+  }
   return {
     installationPath,
     projectId,
     url,
     ...(loginFile === undefined ? {} : {loginFile}),
     ...(serveDir === undefined ? {} : {serveDir}),
+    ...(caFile === undefined ? {} : {caFile}),
+    ...(waitCapacity ? {waitCapacity} : {}),
   };
 }
 
@@ -379,7 +405,7 @@ export async function resolvePersonalDesign(
   known?: {installationPath?: string; projectId?: string; composeRuntime?: typeof composePersonalRuntime},
   readonlyExam = false,
 ): Promise<ResolvedPersonalDesign> {
-  const parsed = known?.installationPath !== undefined && known?.projectId !== undefined
+  const parsed: {installationPath: string; projectId: string; waitCapacity?: boolean} = known?.installationPath !== undefined && known?.projectId !== undefined
     ? {installationPath: known.installationPath, projectId: known.projectId}
     : parseDesignArgs(argv);
   const config = await loadInstallation(resolve(parsed.installationPath));
@@ -429,9 +455,13 @@ export async function resolvePersonalDesign(
       pollBackoff: project.economy?.managerDiscipline !== false,
     });
     const capacity = new Capacity(ledger);
+    // A espera é explícita (--esperar-cota) e tem um prazo só para a rodada inteira.
+    const capacityWait: ExamCapacityWaitOptions | undefined = parsed.waitCapacity === true
+      ? {enabled: true, pollBackoff: project.economy?.managerDiscipline !== false, deadlineAt: Date.now() + DEFAULT_EXAM_CAPACITY_WAIT_DEADLINE_MS}
+      : undefined;
     const reserve = (role: 'specialist' | 'reviewer', _avoidProvider?: string, options?: DesignReserveOptions): Promise<DesignSeat> => {
       const purpose = options?.purpose ?? (role === 'reviewer' ? 'reviewer' : 'examiner');
-      return reserveDesignModel(ledger, capacity, principal, authority!, intentId!, purpose, allowedAccountIds);
+      return reserveDesignModel(ledger, capacity, principal, authority!, intentId!, purpose, allowedAccountIds, capacityWait);
     };
     return {
       ledger,
@@ -446,6 +476,7 @@ export async function resolvePersonalDesign(
       reserve,
       release: seat => releaseDesignGrant(ledger, principal, authority!, seat.grantId, 'not_started'),
       close: async () => {
+        if (capacityWait) await clearExamContextCapacityWaits(ledger.pool, authority!.contextId, intentId);
         await ledger.releaseLease(authority!).catch(() => undefined /* an unreleased lease expires by itself */);
         await ledger.close();
       },

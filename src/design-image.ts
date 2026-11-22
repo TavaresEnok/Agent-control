@@ -38,7 +38,22 @@ export type DesignRunInput = {
   network?: string;
   /** Caminho absoluto do storageState. Sem o campo, o argv não ganha mount. */
   loginState?: string;
+  /** CA da homologação HTTPS, já conferida. O exame só aceita a cadeia que fecha nela. */
+  trustCa?: string;
 };
+
+export const DESIGN_TRUST_CA_MOUNT = '/trust/ca.pem';
+
+/** Monta a CA no caminho fixo que a imagem lê. Só vale para alvo HTTPS. */
+export function designTrustArguments(targetUrl: string, trustCa: string | undefined): string[] {
+  if (trustCa === undefined) return [];
+  if (parseTarget(targetUrl, 'DESIGN_EXTERNAL_TARGET').protocol !== 'https:') throw new Refusal('DESIGN_TRUST_CA_INVALID', 400);
+  assertMountPath(trustCa);
+  return [
+    '--mount', `type=bind,source=${trustCa},destination=${DESIGN_TRUST_CA_MOUNT},readonly`,
+    '--env', `DESIGN_TRUST_CA=${DESIGN_TRUST_CA_MOUNT}`,
+  ];
+}
 
 function writtenHost(value: string): string {
   const match = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]*)/i.exec(value);
@@ -153,6 +168,7 @@ export function designRunArguments(input: DesignRunInput): readonly string[] {
     assertMountPath(input.loginState);
     loginMount.push('--mount', `type=bind,source=${input.loginState},destination=/login/state.json,readonly`);
   }
+  const trust = designTrustArguments(input.targetUrl, input.trustCa);
   const memory = String(input.memoryBytes);
   return [
     DESIGN_RUNTIME_BIN,
@@ -191,6 +207,7 @@ export function designRunArguments(input: DesignRunInput): readonly string[] {
     '--mount',
     `type=bind,source=${input.output},destination=/output`,
     ...loginMount,
+    ...trust,
     '--entrypoint',
     DESIGN_ENTRYPOINT,
     input.image,

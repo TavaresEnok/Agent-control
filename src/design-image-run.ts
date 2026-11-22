@@ -321,6 +321,7 @@ export async function executeDesignImage(input: {
   timeoutMs?: number;
   run?: DesignImageSpawn;
   loginState?: string;
+  trustCa?: string;
 }): Promise<DesignImageExecution> {
   const output = await mkdtemp(join(tmpdir(), 'design-img-'));
   try {
@@ -341,6 +342,7 @@ export async function executeDesignImage(input: {
         nanoCpus: 2_000_000_000,
         pidsLimit: 512,
         ...(input.loginState === undefined ? {} : {loginState: input.loginState}),
+        ...(input.trustCa === undefined ? {} : {trustCa: input.trustCa}),
       });
     } catch (error) {
       const code = error instanceof Refusal ? error.code : 'DESIGN_IMAGE_FAILED';

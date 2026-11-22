@@ -21,7 +21,7 @@ test('DESIGN_PREPARE_NO_CLAUDE diz que o projeto não tem conta Claude', () => {
 });
 
 test('DESIGN_USAGE continua a linha de uso em português', () => {
-  const usage = 'Uso: npm run personal:design -- <instalação.json> <projectId> --url <url> [--login-file <arquivo>]';
+  const usage = 'Uso: npm run personal:design -- <instalação.json> <projectId> --url <url> [--login-file <arquivo>] [--ca <arquivo.pem>] [--esperar-cota]';
   assert.equal(designCliFailureText(new Refusal('DESIGN_USAGE')), usage);
   assert.equal(designCliFailureText(new Error('DESIGN_USAGE')), usage);
 });
@@ -36,7 +36,7 @@ test('DESIGN_BUSY dá mensagem clara e não vaza MANAGER_ACTIVE', () => {
 test('CAPACITY_BUSY informa quando repetir o exame sem divulgar detalhes da reserva', () => {
   const error = new Refusal('CAPACITY_BUSY');
   error.message = leaked;
-  assert.equal(designCliFailureText(error), 'As vagas de execução para o design estão ocupadas. Repita o exame quando houver uma vaga.');
+  assert.equal(designCliFailureText(error), 'As vagas de execução para o design estão ocupadas. Repita com --esperar-cota para esperar na fila.');
 });
 
 test('DESIGN_REVIEWER_UNAVAILABLE orienta rodar preparar --aplicar e não cai em EXAM_PROVIDER_UNSUPPORTED', () => {
