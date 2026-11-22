@@ -161,3 +161,22 @@
   - **Critério para entrar no padrão:** só entra o que provar economia sem perda de qualidade, medido antes e depois.
   - **T6:** levar a disciplina do gerente para dentro do produto, no gerente semântico do painel e no examinador.
 - **Registro de imagens candidatas (titular, 20/11/2026).** Toda imagem candidata de módulo que for construída deve ser registrada logo depois do build com `npm run personal:maintenance -- <instalação.json> --registrar-imagem --projeto <id> --modulo <módulo> --imagem <sha256:id>`, para a retenção automática (agora em `apply`) poder removê-la depois de 24 h se não for o digest fixado nem estiver em uso. Imagem não registrada nunca é removida.
+
+## Equipe ChatISP (titular, 22/11/2026 ~02:00 UTC)
+
+Substitui, para a auditoria e a melhoria do ChatISP, as seções de equipe acima. A ordem está em `docs/ORDEM-CHATISP.md` e o andamento em `docs/PROGRESSO-CHATISP.md`.
+
+- **Conta Claude:** só a Claude Max da Enok. A conta ajustconsulting (Pro) não é usada, nem como examinador nem como trabalhador.
+- **Gerente:** Claude Code `claude-opus-5-5`, esforço `high`, login `CLAUDE_CONFIG_DIR=/home/app/.claude-trabalhadores/enok`, sem tela. Iniciado e reiniciado pelo vigia `ac-gerente-chatisp.timer`.
+- **Revisor:** Claude Code `claude-opus-5-5`, esforço `medium`, mesmo login, só leitura. Recebe a ordem e o diff, nunca a conclusão do autor.
+- **Examinador dos módulos:** pelo caminho do produto, só na conta Enok Max da instalação, com os modelos e esforços por módulo já definidos acima.
+- **Trabalhadores**, no máximo 2 ao mesmo tempo de cada um:
+  1. `agy --model gemini-4-argon-high` (conta ajust, `HOME` padrão). Trailer `Co-Authored-By: Gemini 4 Argon <noreply@google.com>`.
+  2. `agy --model claude-sonnet-5-5-medium` (conta ajust). Trailer `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
+  3. `agy --model claude-sonnet-4-6` (conta enok, `HOME=/home/app/.agy-enok`). Trailer `Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>`.
+  4. `agy --model gemini-3.8-flash-high` (conta enok), só para tarefas simples: gravidade baixa ou média, poucos arquivos, testes de algo definido, documentação, ajustes mecânicos. Trailer `Co-Authored-By: Gemini 3.8 Flash <noreply@google.com>`.
+  5. Codex `gpt-6.2-sol`, esforço `medium`, modo normal, login `~/.codex` (ajustconsulting). Trailer `Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>`.
+- **Reserva:** quando todos os trabalhadores acima estiverem sem cota, até 4 Claude Code `claude-opus-5-5` esforço `medium` no login Enok, ao mesmo tempo. Trailer `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+- **Prioridade da cota do Max:** examinador, depois gerente, depois revisor, depois trabalhadores Opus.
+- **Cota:** erro de cota é registrado na hora em `docs/PROGRESSO-CHATISP.md` com a palavra `COTA`. Ninguém para de vez por cota: espera e tenta de novo a cada 15 min, adiantando o que não depende daquilo. Nunca comprar créditos.
+- **ChatISP:** o servidor de origem (`enok@177.104.156.25`) e a instalação publicada `chatisp.tokstiloesporte.com` não são alterados. Nada é enviado (push) sem o sim do titular. O trabalho fica num clone central em `/home/app/projetos-externos/chatisp`, em ramo próprio.
