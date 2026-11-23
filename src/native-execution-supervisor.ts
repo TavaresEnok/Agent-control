@@ -2,7 +2,7 @@ import {assertDiskSpaceForLaunch} from './personal-disk.ts';
 import {personalEgressEnabled} from './personal-egress.ts';
 import {pinRetainedArtifact} from './native-work-retention.ts';
 import {moduleExamSocket,startModuleExamEgress} from './module-exam-egress.ts';
-import {designGrantProjectAccounts,requiredDesignProfile} from './design-model-reservation.ts';
+import {designGrantEffort,designGrantProjectAccounts,requiredDesignProfile} from './design-model-reservation.ts';
 import {assertModelAllowed} from './model-policy.ts';
 import {assertNoNativeTaskSecrets} from './native-execution-redaction.ts';
 import {writeNativeSecretSnapshot,readNativeArtifactSecrets} from './native-execution-secret-snapshot.ts';
@@ -175,7 +175,7 @@ export class NativeExecutionSupervisor extends NativeExecutionTerminalWork{
     if(personal && readonlyDesignExam(examWorkflowEarly,input.role)){
      const purpose=input.designPurpose;
      if(!purpose||current.selection?.designPurpose!==purpose)throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE');
-     const profile=await requiredDesignProfile(c,authority.contextId,purpose,designGrantProjectAccounts(current.selection));
+     const profile=await requiredDesignProfile(c,authority.contextId,purpose,designGrantProjectAccounts(current.selection),designGrantEffort(current.selection));
      if(this.config.provider!=='claude'||current.profile_id!==profile.id||current.account_id!==profile.account||
         current.model!==profile.model||current.effort!==profile.effort)throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE');
     }

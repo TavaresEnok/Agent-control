@@ -478,3 +478,24 @@ Ordem: `docs/ORDEM-CHATISP.md`. Equipe: `AGENTS.md`, seção "Equipe ChatISP". C
   - **Vereditos:** banco 65 confirmados, 59 descartados e 81 inconclusivos; desempenho 120/10/32; arquitetura 184/3/7; QA 43/14/8.
   - **Arquivos sem exame do QA:** os 92 foram examinados, com cerca de 58 achados novos.
   - Detalhe em `docs/COMPLEMENTO-TERRA-CHATISP.md`.
+- 23/11/2026 22:16 UTC — **Supervisor: 4 trabalhadores Codex `gpt-6.2-sol` médio, só leitura, a pedido do titular, só para segurança e prontidão. Design fica de fora.**
+  - A segurança não tinha trabalho aproveitável: as 8 execuções parciais do produto não gravaram achados nem cobertura (pastas vazias e saída dos jobs vazia). Por isso o exame recomeça, agora pelo Codex.
+  - Segurança: 628 arquivos de produção (sem testes, docs, vendor, binários e código gerado), cerca de 100 mil linhas, em 8 lotes.
+  - Prontidão: revisão dos 36 achados não informativos e exame direto da parte em que a ferramenta falhou (deploy, Dockerfiles, compose, pontos de entrada).
+  - Fila com no máximo 4 ao mesmo tempo, em `/tmp/claude-1000/sol/`. É fora do produto e não deixa recibo.
+- 23/11/2026 22:22 UTC — **Resultado da fila Codex `gpt-6.2-sol` médio (segurança e prontidão).** O clone continuou limpo.
+  - **Prontidão:** feita. Dos 36 achados, 20 foram confirmados, 16 descartados e nenhum ficou inconclusivo. Houve também o exame direto da parte em que a ferramenta falhou.
+  - **Segurança:** 5 de 8 lotes feitos, 441 arquivos com cobertura declarada completa. São 27 achados: 4 altos, 21 médios e 2 baixos.
+  - **Lotes bloqueados:** o filtro de cibersegurança da OpenAI recusou os lotes 1, 4 e 5 (187 arquivos: migrações, canais e inbox, autenticação e MFA da plataforma). O erro foi "flagged for possible cybersecurity risk".
+  - **Não reformulado:** o pedido não foi reescrito para passar pelo filtro. Esses lotes aguardam decisão do titular.
+  - **Ressalva:** cada lote levou de 1 a 7 minutos, então o exame tende a ser raso.
+- 23/11/2026 22:47 UTC — **4 trabalhadores Claude Code `claude-sonnet-5-5` médio, conta Claude Max Enok, só leitura, a pedido do titular.** Eles examinam os 187 arquivos de segurança que o filtro da OpenAI recusou, redivididos em 4 lotes. O trabalho fica em `/tmp/claude-1000/sol/c*`.
+- 23/11/2026 22:48 UTC — **Os 4 Sonnet 5.5 médio terminaram em cerca de 2 min.** Cobertura declarada: 187 de 187 arquivos. Achados: 0 altos, 9 médios e 31 baixos. O clone continuou limpo.
+  - **Segurança fora do produto:** 628 de 628 arquivos de produção examinados, com 67 achados (4 altos, 30 médios e 33 baixos). Ainda falta conferir os 4 altos antes de corrigir.
+  - **Tempo:** a lentidão das rodadas anteriores vinha do caminho do produto (lotes, contêineres, triagem, revisão e espera de vaga e cota), não do modelo.
+- 23/11/2026 23:09 UTC — **Módulo 10 (design) lançado pelo produto com Opus 5.5 médio, a pedido do titular.**
+  - O produto ganhou a opção `economy.designEffort` por projeto (padrão `high`). Ela vale para o exame e a crítica visual; a criação continua alta e o revisor, médio.
+  - O grant registra o esforço escolhido, e o lançamento confere o mesmo perfil. Há teste em `tests/project-allowed-accounts.test.ts` e `tests/installation.test.ts`.
+  - Na instalação viva, o ChatISP ficou com `designEffort: medium`, com backup do `installation.json`.
+  - O login foi renovado.
+  - O produto examina as 11 rotas uma de cada vez, com lotes, e não 4 ao mesmo tempo.

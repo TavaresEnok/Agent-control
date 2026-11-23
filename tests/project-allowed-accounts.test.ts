@@ -9,7 +9,7 @@ import {AccountHomes} from '../src/account-homes.ts';
 import {Capacity} from '../src/capacity.ts';
 import {type Command, digest, Refusal} from '../src/contracts.ts';
 import {resolvePersonalDesign} from '../src/design-command.ts';
-import {designGrantProjectAccounts, requiredDesignProfile, reserveDesignModel} from '../src/design-model-reservation.ts';
+import {designGrantEffort, designGrantProjectAccounts, requiredDesignProfile, reserveDesignModel} from '../src/design-model-reservation.ts';
 import {prepareDesignSpecialist} from '../src/design-prepare.ts';
 import {loadSpecialistExamPlan, reserveSpecialistExamSeat} from '../src/exam-provider.ts';
 import {Ledger} from '../src/ledger.ts';
@@ -340,6 +340,23 @@ test(' caminhos de reserva (verify, exam-provider, design e módulos 2 a 9 com e
       await release(seat.grantId);
     }
     assert.equal(designGrantProjectAccounts({allowedAccounts: [accountB]}), undefined, 'the seat-level allowedAccounts is not the project restriction');
+    // Esforço médio escolhido pelo projeto: exame e crítica visual usam o Opus médio, que pode estar só na cadeia de emergência.
+    // A criação continua alta e o revisor continua médio. O grant registra o esforço para a checagem do lançamento.
+    for (const [role, expectedProfile, recordedEffort] of [
+      ['examiner', bOpusMed, 'medium'],
+      ['visual', bOpusMed, 'medium'],
+      ['create', bOpusHigh, undefined],
+      ['reviewer', bOpusMed, undefined],
+    ] as const) {
+      const prof = await requiredDesignProfile(ledger.pool, context, role, [accountB], role === 'create' || role === 'reviewer' ? undefined : 'medium');
+      assert.equal(prof.id, expectedProfile, `design role ${role} com esforço médio`);
+      const seat = await reserveDesignModel(ledger, capacity, owner, authority, intentId, role, [accountB], undefined, 'medium');
+      assert.equal(seat.profileId, expectedProfile);
+      const recorded = (await ledger.pool.query<{selection: unknown}>('SELECT selection FROM ac_capacity_grants WHERE id=$1', [seat.grantId])).rows[0]?.selection;
+      assert.equal(designGrantEffort(recorded), recordedEffort);
+      await release(seat.grantId);
+    }
+    assert.equal(designGrantEffort({designEffort: 'ultra'}), undefined);
     assert.equal(designGrantProjectAccounts(null), undefined);
 
     // Design com Conta B ocupada -> CAPACITY_BUSY (nunca usa Conta A).

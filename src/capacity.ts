@@ -59,6 +59,8 @@ export const GrantRequest = z.object({ attemptId: Id, intentId: Id, contextId: I
   /** Only this profile in the published chain may fund the request. */
   requiredProfileId: Id.optional(),
   designPurpose: DesignPurpose.optional(),
+  /** Design exam effort chosen by the project (create is always high). Recorded in the grant for the launch check. */
+  designEffort: z.enum(['medium', 'high']).optional(),
   /** Exam-reviewer-only contract: prepared specialist reviewer profiles prioritized over examiner-account avoidance while still preferring non-avoided accounts first. */
   examReviewer: z.object({
     preparedProfiles: z.array(Id).max(20),
@@ -522,6 +524,7 @@ export class Capacity {
         reason: selectionReason, preferredProfileId: preferred ?? null,
       };
       if (request.designPurpose) selection.designPurpose = request.designPurpose;
+      if (request.designEffort) selection.designEffort = request.designEffort;
       if (request.projectAllowedAccounts) selection.projectAllowedAccounts = request.projectAllowedAccounts;
       if (skippedCandidates.length === pos) selection.skippedCandidates = skippedCandidates;
       const grant = (await c.query<Grant>(`INSERT INTO ac_capacity_grants

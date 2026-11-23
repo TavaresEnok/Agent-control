@@ -54,12 +54,14 @@ test('private installation initializes without fixtures, manager or worker; keys
 });
 
 test('project economy options are independent and validated', () => {
- assert.deepEqual(ProjectEconomy.parse({map:false,measurement:false,batch:false}),{map:false,measurement:false,batch:false,imageRetention:true,batchTokens:40000,managerDiscipline:true,managerContextTokens:2500,scope:true,securityProductionOnly:true});
- assert.deepEqual(ProjectEconomy.parse({}),{map:true,measurement:true,batch:true,imageRetention:true,batchTokens:40000,managerDiscipline:true,managerContextTokens:2500,scope:true,securityProductionOnly:true});
+ assert.deepEqual(ProjectEconomy.parse({map:false,measurement:false,batch:false}),{map:false,measurement:false,batch:false,imageRetention:true,batchTokens:40000,managerDiscipline:true,managerContextTokens:2500,scope:true,securityProductionOnly:true,designEffort:"high"});
+ assert.deepEqual(ProjectEconomy.parse({}),{map:true,measurement:true,batch:true,imageRetention:true,batchTokens:40000,managerDiscipline:true,managerContextTokens:2500,scope:true,securityProductionOnly:true,designEffort:"high"});
  assert.equal(ProjectEconomy.parse({managerDiscipline:false}).managerDiscipline,false);
  assert.equal(ProjectEconomy.safeParse({managerContextTokens:100}).success,false);
  assert.equal(ProjectEconomy.safeParse({map:'false'}).success,false);
  assert.equal(ProjectEconomy.parse({imageRetention:false}).imageRetention,false);
+ assert.equal(ProjectEconomy.parse({designEffort:"medium"}).designEffort,"medium");
+ assert.equal(ProjectEconomy.safeParse({designEffort:"ultra"}).success,false);
 });
 
 test('allowedAccountIds per project is optional and validates UUID format, uniqueness and bounds', () => {

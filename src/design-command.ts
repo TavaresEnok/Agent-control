@@ -467,7 +467,7 @@ export async function resolvePersonalDesign(
       : undefined;
     const reserve = (role: 'specialist' | 'reviewer', _avoidProvider?: string, options?: DesignReserveOptions): Promise<DesignSeat> => {
       const purpose = options?.purpose ?? (role === 'reviewer' ? 'reviewer' : 'examiner');
-      return reserveDesignModel(ledger, capacity, principal, authority!, intentId!, purpose, allowedAccountIds, capacityWait);
+      return reserveDesignModel(ledger, capacity, principal, authority!, intentId!, purpose, allowedAccountIds, capacityWait, project.economy?.designEffort);
     };
     return {
       ledger,
