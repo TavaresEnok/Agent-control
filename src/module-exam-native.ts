@@ -125,7 +125,9 @@ export function createModuleExamReservations(input: ReservationInput): Pick<Requ
     }
     let hadRuntimeProvider = false;
     let hadAllowedIntersection = false;
+    let onlyExaminerProvider = false;
     for (const [provider, rawAccounts] of input.supportedSeats) {
+      if (provider === avoid?.provider && rawAccounts.size && intersectAccounts(rawAccounts).size) onlyExaminerProvider = true;
       if (provider === avoid?.provider || !rawAccounts.size) continue;
       hadRuntimeProvider = true;
       const accounts = intersectAccounts(rawAccounts);
@@ -164,6 +166,10 @@ export function createModuleExamReservations(input: ReservationInput): Pick<Requ
         throw error;
       }
     }
+    // The project allows only the examiner's provider (one Claude account, say): there is no distinct provider to review.
+    // That is a reviewer gap, not a missing account. The finding stays probable with the reason and the exam goes on;
+    // PROJECT_ACCOUNTS_UNAVAILABLE here stopped the whole module at its first reviewed finding.
+    if (allowedSet && !hadAllowedIntersection && onlyExaminerProvider) throw new Refusal('MODULE_EXAM_REVIEWER_UNAVAILABLE');
     if (allowedSet && (!hadAllowedIntersection || !hadRuntimeProvider)) {
       throw new Refusal('PROJECT_ACCOUNTS_UNAVAILABLE', 409);
     }

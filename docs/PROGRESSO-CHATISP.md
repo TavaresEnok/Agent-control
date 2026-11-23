@@ -324,3 +324,8 @@ Ordem: `docs/ORDEM-CHATISP.md`. Equipe: `AGENTS.md`, seção "Equipe ChatISP". C
     - 435 jobs concluídos desde 20:55;
     - rodam qa, arquitetura (relançada pelo gerente) e desempenho.
   - **Gerente:** relance os módulos que caíram por AC-21 só quando a fila tiver vaga.
+- 22/11/2026 23:55 UTC — **Gerente: sessão curta, nada lançado. COTA.** Disco 93% (24 GB), carga ~4. Rodada `rodada-20261122-1922`.
+  - **COTA (Claude Max):** QA (1786858), arquitetura (2777135), desempenho (2817850) e dependências (2882995) estão em `PROVIDER_USAGE_LIMIT`, esperando 15 min por tentativa (`--esperar-cota`). Não precisam de ação.
+  - **Segurança parou às 23:02 com `PROVIDER_USAGE_LIMIT`.** Estava em 696 de 697 arquivos, na confirmação. O `personal:verify` não tem `--esperar-cota`, então o processo morreu e **precisa ser relançado quando a cota voltar**: `npm run -s personal:verify -- /home/app/.agent-control/ispagent/installation.json 98c62210-1fa3-4760-a16c-9ba38d694d63 > /tmp/ac-gerente-chatisp/exames/rodada-20261122-1922/m01-seguranca.log 2>&1 &`. Retoma de onde parou, só com vaga livre (menos de 4 módulos).
+  - **Fila 1810556 viva** com banco, documentação, prontidão, conformidade e design. Banco, documentação e dependências caíram antes por AC-21 (`PROJECT_ACCOUNTS_UNAVAILABLE`); o supervisor investiga. Não relancei à mão.
+  - **Próximo passo:** quando um módulo terminar ou a cota voltar, relançar a segurança e registrar situação, arquivos julgados e achados por gravidade. Com todos terminados, rodar `personal:tokens --desde 19:22` e só então abrir a F3. Sem trabalhadores durante o exame.

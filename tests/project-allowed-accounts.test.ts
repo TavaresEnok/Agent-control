@@ -438,12 +438,14 @@ test(' caminhos de reserva (verify, exam-provider, design e módulos 2 a 9 com e
     assert.equal(modHighRevB.profileId, bOpusMed);
     await reservationsB.release(modHighRevB, 'not_started');
 
-    // Revisor comum (que exige outro provedor) com allowedAccountIds=[accountB] recusa com PROJECT_ACCOUNTS_UNAVAILABLE e nunca usa codexAccount não permitida!
+    // Revisor comum (que exige outro provedor) com allowedAccountIds=[accountB] nunca usa codexAccount não permitida.
+    // Sem outro provedor permitido, é falta de revisor (o achado fica provável e o exame segue), não falta de conta:
+    // PROJECT_ACCOUNTS_UNAVAILABLE derrubava o módulo inteiro no primeiro achado revisado.
     await assert.rejects(
       () => reservationsB.reserve('reviewer', modExaminerB, {
         source: 'coletor', severity: 'media', fromExaminer: false,
       }),
-      (err: unknown) => err instanceof Refusal && err.code === 'PROJECT_ACCOUNTS_UNAVAILABLE',
+      (err: unknown) => err instanceof Refusal && err.code === 'MODULE_EXAM_REVIEWER_UNAVAILABLE',
     );
 
     // Com allowedAccountIds=[accountB, codexAccount], examinador usa accountB e revisor comum usa codexAccount (nunca accountA).
