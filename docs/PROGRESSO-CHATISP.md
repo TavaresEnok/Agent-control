@@ -470,3 +470,11 @@ Ordem: `docs/ORDEM-CHATISP.md`. Equipe: `AGENTS.md`, seção "Equipe ChatISP". C
   - **Saídas:** `/tmp/claude-1000/terra/*-resultado.md`. Segurança e QA ficaram de fora.
 - 23/11/2026 18:50 UTC — **Supervisor:** os 4 Terra falharam na 1ª tentativa (`bwrap: loopback: Failed RTM_NEWADDR`: o sandbox read-only não sobe nesta máquina). Relançados com `--dangerously-bypass-approvals-and-sandbox`, **autorizado pelo titular**, com a ordem de só leitura no texto. Conferir `git status` do clone no fim.
 - 23/11/2026 19:05 UTC — **Supervisor:** os 4 Terra terminaram (sem sandbox, autorizado), clone do ChatISP limpo. Resultado em `docs/COMPLEMENTO-TERRA-CHATISP.md`, rotulado como complemento fora do produto.
+- 23/11/2026 19:24 UTC — **Supervisor, a pedido do titular:**
+  - **Fase 1:** 4 Terra 6.1 médio revisam todos os 561 achados não informativos de banco, desempenho e arquitetura.
+  - **Fase 2,** que começa sozinha depois: 4 Terra examinam os 92 arquivos do QA que ficaram sem exame (disco cheio) e revisam os 65 achados do QA.
+  - Sem sandbox, autorizado. Roteiro em `/tmp/claude-1000/terra/rodar-fases.sh`, andamento em `fases.log`.
+- 23/11/2026 20:05 UTC — **Supervisor:** as duas fases dos Terra terminaram, com o clone limpo.
+  - **Vereditos:** banco 65 confirmados, 59 descartados e 81 inconclusivos; desempenho 120/10/32; arquitetura 184/3/7; QA 43/14/8.
+  - **Arquivos sem exame do QA:** os 92 foram examinados, com cerca de 58 achados novos.
+  - Detalhe em `docs/COMPLEMENTO-TERRA-CHATISP.md`.
