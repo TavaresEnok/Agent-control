@@ -100,6 +100,74 @@ export function redactUnknownSecrets(text: string, mask: (secret: string) => str
   return out;
 }
 
+// A JSON key names a secret when one of its words does: `Secret`, `apiKey`, `client_secret`, `AppSecret`.
+// `Author`, `keywords` and `evaluated_keys` are not secrets, and the old unanchored text pattern masked them.
+const SECRET_WORDS = new Set(['pass', 'passwd', 'password', 'passwords', 'passphrase', 'secret', 'secrets', 'token', 'tokens', 'key', 'auth', 'credential', 'credentials']);
+const MASK_SHAPE = /^.{0,4}\u2026(?: \(sha256:[0-9a-f]{64}\))?$/u;
+// Shorter values are masked under their own key but not hunted for in other fields: a 4-character word would eat prose.
+const PROPAGATE_MIN_LENGTH = 8;
+
+function isSecretKey(key: string): boolean {
+  const words = key.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2').toLowerCase().split(/[^a-z0-9]+/);
+  return words.some(word => SECRET_WORDS.has(word));
+}
+
+function secretText(value: unknown): string | null {
+  const text = typeof value === 'string' ? value : typeof value === 'number' ? String(value) : null;
+  if (text === null || text.length === 0 || /^(?:null|true|false)$/.test(text) || MASK_SHAPE.test(text)) return null;
+  return text;
+}
+
+/** Values the tool filed under a secret-looking key. The same value shows up in `Match`, in code blocks and in messages. */
+function collectJsonSecrets(value: unknown, key: string | null, found: Set<string>): void {
+  if (Array.isArray(value)) {
+    for (const item of value) collectJsonSecrets(item, key, found);
+  } else if (value !== null && typeof value === 'object') {
+    for (const [name, item] of Object.entries(value)) collectJsonSecrets(item, name, found);
+  } else if (key !== null && isSecretKey(key)) {
+    const text = secretText(value);
+    if (text !== null && text.length >= PROPAGATE_MIN_LENGTH) found.add(text);
+  }
+}
+
+function redactJsonValue(value: unknown, key: string | null, secrets: readonly string[]): unknown {
+  if (Array.isArray(value)) return value.map(item => redactJsonValue(item, key, secrets));
+  if (value !== null && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [name, item] of Object.entries(value)) {
+      // defineProperty: a plain assignment to "__proto__" would swap the prototype and drop the field.
+      Object.defineProperty(out, redactUnknownSecrets(name), {value: redactJsonValue(item, name, secrets), enumerable: true, writable: true, configurable: true});
+    }
+    return out;
+  }
+  if (key !== null && isSecretKey(key)) {
+    const text = secretText(value);
+    if (text !== null) return masked(text);
+  }
+  return typeof value === 'string' ? redactUnknownSecrets(redactText(value, secrets)) : value;
+}
+
+/**
+ * Redacts a JSON document value by value, so the result is still valid JSON. Running the text patterns over the raw
+ * document eats quotes and commas around a match (`"Secret": "x",` becomes `"Secr… (sha256:…),`) and breaks the file.
+ * A value under a secret-looking key is masked whole, and that same value is masked wherever else it appears (`Match`).
+ * Every other string goes through redactUnknownSecrets. Written compact, so the file does not outgrow the read limit.
+ * Returns null when the text is not JSON, so the caller can fall back to the text patterns.
+ */
+export function redactJsonDocument(text: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text) as unknown;
+  } catch {
+    return null;
+  }
+  const found = new Set<string>();
+  collectJsonSecrets(parsed, null, found);
+  const compact = JSON.stringify(parsed);
+  const redacted = JSON.stringify(redactJsonValue(parsed, null, [...found]));
+  return redacted === compact ? text : `${redacted}\n`;
+}
+
 /** True when text still contains a live known secret. A mask from secretPreview does not count. */
 export function hasKnownSecret(text: string): boolean {
   return UNKNOWN_PATTERNS.some(pattern => pattern === AWS_SECRET_KEY

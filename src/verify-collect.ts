@@ -3,7 +3,7 @@ import {constants} from 'node:fs';
 import {chmod, lstat, open, readdir, rename, rm, writeFile} from 'node:fs/promises';
 import {basename, dirname, isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {normalizeToolOutput} from './verify-normalize.ts';
-import {redactUnknownSecrets} from './verify-redact.ts';
+import {redactJsonDocument, redactUnknownSecrets} from './verify-redact.ts';
 import {RawFinding, ToolResult, type ToolState} from './verify-types.ts';
 
 const MAX_EXAM_FILE_BYTES = 50 * 1024 * 1024;
@@ -76,7 +76,7 @@ async function readRegularExam(path: string): Promise<string | null> {
 
 /** Redact before the finding is built, then replace the file without following a symlink. */
 async function rewriteRedactedExam(path: string, text: string): Promise<string | null> {
-  const redacted = redactUnknownSecrets(text);
+  const redacted = redactJsonDocument(text) ?? redactUnknownSecrets(text);
   if (redacted === text) return text;
   const info = await lstat(path);
   if (info.isSymbolicLink() || !info.isFile()) return null;
