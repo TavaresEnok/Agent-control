@@ -129,6 +129,7 @@
   "module-exam-capacity-queue.test.ts",
   "module-exam-finding-binding.test.ts",
   "module-exam-inventory.test.ts",
+  "module-exam-grok.test.ts",
   "module-exam-native.test.ts",
   "module-exam-persistence.test.ts",
   "module-exam-quota-wait.test.ts",
