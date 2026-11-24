@@ -156,10 +156,16 @@ function fileFromUri(uri: string): string | null {
 
 function finishSnippet(base: string, secrets: readonly string[]): string {
   const unique = [...new Set(secrets.filter(secret => secret.length >= 4))];
-  let snippet = redactUnknownSecrets(redactText(base, unique)).replace(/\s+/g, ' ').trim();
+  // A value the redaction already masked keeps the hash it was masked with; hashing the mask would give another identity.
+  const masks = new Map<string, {preview: string; sha256: string}>();
+  for (const secret of unique) {
+    const mask = /^(.{0,4}\u2026)(?: \(sha256:([0-9a-f]{64})\))?$/u.exec(secret);
+    if (mask) masks.set(secret, {preview: mask[1]!, sha256: mask[2] ?? ''});
+  }
+  let snippet = redactUnknownSecrets(redactText(base, unique.filter(secret => !masks.has(secret)))).replace(/\s+/g, ' ').trim();
   const extras: string[] = [];
   for (const secret of unique) {
-    const preview = secretPreview(secret);
+    const preview = masks.get(secret) ?? secretPreview(secret);
     if (!snippet.includes(preview.sha256)) extras.push(`${preview.preview} (sha256:${preview.sha256})`);
   }
   const extra = extras.join(' ');

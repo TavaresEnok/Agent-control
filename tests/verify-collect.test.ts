@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {lstat, mkdtemp, readFile, rm, symlink, truncate, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -138,6 +139,46 @@ test('JSON de verdade cortado continua truncado, e sem o segredo no arquivo', as
     const tool = result.tools.find(item => item.name === 'gitleaks');
     assert.equal(tool?.state, 'truncada');
     assert.equal((await readFile(join(directory, 'gitleaks.json'), 'utf8')).includes(secret), false);
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('redacao de JSON: hash do achado, Match, numeros, chaves, __proto__, Author e tamanho', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'verify-collect-'));
+  const secret = 'Zq9xLm2PwR7tKv4BnY8c';
+  const sha = createHash('sha256').update(secret, 'utf8').digest('hex');
+  const github = `ghp_${'b'.repeat(24)}`;
+  try {
+    const row = {
+      RuleID: 'generic-api-key', File: 'a.go', StartLine: 4, Secret: secret, Match: `apiKey := "${secret}"`,
+      Author: 'Fulano de Tal', Email: '', Tags: ['keywords'], evaluated_keys: ['a'],
+    };
+    const raw = JSON.stringify([row, {RuleID: 'x', File: 'b.go', StartLine: 1, password: 12345678, [github]: 'valor', db: JSON.parse('{"__proto__": {"x": 1}, "y": 2}')}]);
+    await writeFile(join(directory, 'gitleaks.json'), raw);
+    await writeFile(join(directory, 'gitleaks.code'), '0\n');
+    await writeFile(join(directory, 'status.json'), '{}\n');
+    const result = await collectToolFindings(directory);
+    // 1. o hash do achado e o do segredo, nao o da mascara.
+    const first = result.findings.find(finding => finding.file?.endsWith("a.go"));
+    assert.ok(first?.snippet.includes(`sha256:${sha}`), JSON.stringify(result.findings));
+    const storedText = await readFile(join(directory, 'gitleaks.json'), 'utf8');
+    // 2. Match nao guarda o segredo, mesmo com nome de variavel que o padrao de texto nao pega.
+    assert.equal(storedText.includes(secret), false);
+    const stored = JSON.parse(storedText) as Record<string, unknown>[];
+    assert.match(String(stored[0]!.Match), /^apiKey := "Zq9x… \(sha256:[0-9a-f]{64}\)"$/);
+    // 3. numero sob chave de segredo e chave que parece segredo.
+    assert.notEqual(stored[1]!.password, 12345678);
+    assert.equal(storedText.includes('12345678'), false);
+    assert.equal(storedText.includes(github), false);
+    // 4. __proto__ sobrevive.
+    assert.deepEqual(Object.keys(stored[1]!.db as object), ['__proto__', 'y']);
+    // 5. campos que nao sao segredo ficam como estao.
+    assert.equal(stored[0]!.Author, 'Fulano de Tal');
+    assert.deepEqual(stored[0]!.evaluated_keys, ['a']);
+    assert.deepEqual(stored[0]!.Tags, ['keywords']);
+    // 6. sem indentacao: uma linha so, mais o fim de linha.
+    assert.equal(storedText.trim().includes('\n'), false);
   } finally {
     await rm(directory, {recursive: true, force: true});
   }
