@@ -24,6 +24,7 @@ export function labelPhase(phase: string): string {
 const count = z.number().int().nonnegative()
 const moduleSchema = z.object({
   modulo: z.string().min(1),
+  andamentoDisponivel: z.boolean(),
   atual: z.object({
     runId: z.string(),
     phase: z.string().nullable(),
@@ -100,6 +101,9 @@ function ModuleLine({ row }: { row: ModuleRow }) {
           {` · Altas: ${ultima.counts.alta} · Médias: ${ultima.counts.media} · Baixas: ${ultima.counts.baixa} · Informativas: ${ultima.counts.informativa}`}
           {ultima.toolFailures ? ` · Falhas de ferramentas: ${ultima.toolFailures}` : ''}
         </span>
+      ) : null}
+      {!atual && !row.andamentoDisponivel ? (
+        <span className="text-xs text-muted-foreground">Andamento ao vivo não disponível para este módulo.</span>
       ) : null}
     </li>
   )

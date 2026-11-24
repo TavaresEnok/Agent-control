@@ -10,7 +10,7 @@ const ORDER = ['seguranca', 'qa', 'arquitetura', 'dependencias', 'banco', 'pront
 
 function body(overrides: Record<string, unknown> = {}) {
   return {
-    modulos: ORDER.map((modulo) => ({ modulo, atual: null, ultima: null, ...(overrides[modulo] as object | undefined) })),
+    modulos: ORDER.map((modulo) => ({ modulo, andamentoDisponivel: modulo !== 'design', atual: null, ultima: null, ...(overrides[modulo] as object | undefined) })),
   }
 }
 
@@ -68,6 +68,8 @@ it('mostra uma linha por módulo, com barra, fase, chamadas e tempo, e a contage
   expect(line('qa').getByText(/Altas: 0 · Médias: 5 · Baixas: 0 · Informativas: 0 · Falhas de ferramentas: 2/)).toBeTruthy()
   expect(line('qa').getByText('com falhas de ferramenta')).toBeTruthy()
   expect(line('design').getByText('sem verificação')).toBeTruthy()
+  expect(line('design').getByText('Andamento ao vivo não disponível para este módulo.')).toBeTruthy()
+  expect(line('qa').queryByText('Andamento ao vivo não disponível para este módulo.')).toBeNull()
 })
 
 it('atualiza a cada 15 s, para com a aba oculta e volta a ler ao reaparecer', async () => {

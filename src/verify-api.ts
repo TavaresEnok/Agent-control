@@ -17,6 +17,7 @@ import {
 } from './verify-remediate.ts';
 import {readVerificationProgress} from './verify-command.ts';
 import {readModuleStatuses} from './verify-modules-status.ts';
+import {listDesignReports} from './design-report.ts';
 
 type ManagerAuthority = z.infer<typeof Authority>;
 type Panel = {dataDirectory: string; projectId: string; installationPath: string};
@@ -135,6 +136,7 @@ async function correctionRequest(c: {get(key: 'principal'): string; req: {param(
   return {principal, panel, runId, achadoIds: body.achadoIds, authority};
 }
 
+const PUBLISHED_CACHE_MS = 30_000;
 const functionalReportsPath = '/api/v1/ac/personal/verificacoes-funcionais';
 const functionalModule = z.enum(VERIFICATION_MODULES);
 const functionalCorrectionBody = achadoIdsBody.extend({achadoIds: z.array(achadoIdParam).min(1).max(20)});
@@ -150,7 +152,7 @@ async function functionalProject(c: {get(key: 'principal'): string}, deps: Verif
     const role = membership.rows[0]?.role;
     if (!role || (write && role === 'viewer')) throw new Refusal('PROJECT_FORBIDDEN', 403);
   }
-  return {principal, projectId, dataDirectory: panel.dataDirectory};
+  return {principal, projectId, dataDirectory: panel.dataDirectory, securityProjectId: panel.projectId};
 }
 
 function publishedModuleRuns(ledger: Ledger, projectId: string, module?: VerificationModule, runId?: string) {
@@ -163,6 +165,19 @@ function publishedModuleRuns(ledger: Ledger, projectId: string, module?: Verific
        AND r.report_dir NOT LIKE 'discarded:%'`,
     [projectId, module ? [module] : [...VERIFICATION_MODULES], runId ?? null],
   );
+}
+
+/** Relatórios de módulo publicados no banco e válidos no disco, do mais novo ao mais antigo. */
+async function publishedModuleSummaries(ledger: Ledger, dataDirectory: string, projectId: string, module?: VerificationModule): Promise<ModuleReportSummary[]> {
+  const {rows} = await publishedModuleRuns(ledger, projectId, module);
+  const runs = new Map(rows.map(run => [run.id, run]));
+  const reports = rows.length ? await listModuleReports(dataDirectory, projectId, module) : [];
+  const directory = reports.length ? join(await realpath(dataDirectory), 'verificacoes', projectId) : '';
+  return reports.filter(report => {
+    const run = runs.get(report.id);
+    return run?.module === report.module && run.commit_id === report.commit
+      && run.report_dir === join(directory, report.directoryName);
+  }).reverse();
 }
 
 function functionalSummary(report: ModuleReportSummary) {
@@ -232,15 +247,7 @@ function registerFunctionalReports(app: Hono<ApiEnv>, deps: VerificationRouteDep
     c.header('Cache-Control', 'no-store');
     const {projectId, dataDirectory} = await functionalProject(c, deps);
     const module = functionalModule.optional().parse(c.req.query('modulo'));
-    const {rows} = await publishedModuleRuns(deps.ledger, projectId, module);
-    const runs = new Map(rows.map(run => [run.id, run]));
-    const reports = rows.length ? await listModuleReports(dataDirectory, projectId, module) : [];
-    const directory = reports.length ? join(await realpath(dataDirectory), 'verificacoes', projectId) : '';
-    const verificacoes = reports.filter(report => {
-      const run = runs.get(report.id);
-      return run?.module === report.module && run.commit_id === report.commit
-        && run.report_dir === join(directory, report.directoryName);
-    }).reverse().map(functionalSummary);
+    const verificacoes = (await publishedModuleSummaries(deps.ledger, dataDirectory, projectId, module)).map(functionalSummary);
     return c.json({verificacoes});
   });
 
@@ -337,11 +344,38 @@ export function registerVerificationRoutes(app: Hono<ApiEnv>, deps: Verification
     return c.json({runs: listed});
   });
 
-  // Estado atual de cada módulo, só leitura, no projeto do gateway. Mesma autorização dos relatórios funcionais.
+  // A validação completa dos relatórios custa segundos e a rota é lida a cada 15 s: a lista de publicados
+  // vale por 30 s. O andamento (arquivos e linhas "running") nunca passa por este cache.
+  const publishedCache = new Map<string, {at: number; reports: Promise<ModuleReportSummary[]>}>();
+  function cachedPublishedModuleSummaries(dataDirectory: string, projectId: string): Promise<ModuleReportSummary[]> {
+    const key = `${dataDirectory}\0${projectId}`;
+    const hit = publishedCache.get(key);
+    if (hit && Date.now() - hit.at < PUBLISHED_CACHE_MS) return hit.reports;
+    const reports = publishedModuleSummaries(deps.ledger, dataDirectory, projectId);
+    publishedCache.set(key, {at: Date.now(), reports});
+    reports.catch(() => { if (publishedCache.get(key)?.reports === reports) publishedCache.delete(key); });
+    return reports;
+  }
+
+  // Estado atual de cada módulo, só leitura. Módulos 2 a 9 e design seguem o projeto do gateway (como os
+  // relatórios funcionais); a linha de segurança segue o projeto das rotas de segurança acima.
   app.get('/api/v1/ac/personal/verificacoes-modulos', async c => {
     c.header('Cache-Control', 'no-store');
-    const {projectId, dataDirectory} = await functionalProject(c, deps);
-    return c.json({modulos: await readModuleStatuses(deps.ledger, dataDirectory, projectId)});
+    const {projectId, dataDirectory, securityProjectId} = await functionalProject(c, deps);
+    let security: ReportSummary[] = [];
+    try {
+      const listed: unknown = await listReports(dataDirectory, securityProjectId);
+      if (!Array.isArray(listed)) throw new Error('VERIFY_REPORT_SHAPE');
+      security = listed.map(item => ReportSummary.parse(item));
+    } catch (error) {
+      if (!missingReport(error)) throw error;
+    }
+    const modulos = await readModuleStatuses(deps.ledger, {
+      dataDirectory, projectId, securityProjectId, security,
+      modules: await cachedPublishedModuleSummaries(dataDirectory, projectId),
+      design: await listDesignReports(dataDirectory, projectId),
+    });
+    return c.json({modulos});
   });
 
   app.get('/api/v1/ac/personal/verificacoes/:runId', async c => {
