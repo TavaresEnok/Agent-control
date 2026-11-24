@@ -213,3 +213,4 @@ Substitui a seção anterior na escolha de modelos e trabalhadores. Hoje só a c
   - cada resposta é gravada num diário assim que chega;
   - o registro é "revisão independente por outro provedor (Grok 4.7)", por fora do produto e sem recibo assinado.
 
+- **Trabalhadores Grok para as correções do ChatISP (titular, 24/11/2026 ~23:00 UTC).** Até **4** Grok CLI `grok-4.7`, esforço `medium` (ou outro arranjo que o supervisor julgar melhor), cada um no seu worktree do clone do ChatISP, com itens que não tocam os mesmos arquivos. Trailer: `Co-Authored-By: Grok 4.7 <noreply@x.ai>`. Revisão independente por Claude Opus 5.5 médio, só leitura. Nada é enviado sem o sim do titular.
