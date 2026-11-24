@@ -499,3 +499,29 @@ Ordem: `docs/ORDEM-CHATISP.md`. Equipe: `AGENTS.md`, seção "Equipe ChatISP". C
   - Na instalação viva, o ChatISP ficou com `designEffort: medium`, com backup do `installation.json`.
   - O login foi renovado.
   - O produto examina as 11 rotas uma de cada vez, com lotes, e não 4 ao mesmo tempo.
+- 24/11/2026 00:50 UTC — **Design: as duas primeiras tentativas falharam antes de qualquer chamada ao modelo.**
+  - **Causa, com o código já visível (`2a92f5ca`):** `PROVIDER_USAGE_LIMIT`. Às 16:36 de 23/11 o produto gravou na conta Enok Max uma pausa até 27/11 17:00, porque a janela semanal estava em 100%.
+  - **Situação atual:** a janela semanal está em 3%, com uso extra desligado na organização. A pausa estava velha e foi retirada pela função do produto (`releasePersonalAccount`).
+  - O design foi relançado com Opus médio.
+- 24/11/2026 01:42 UTC — **Design parado pelo produto: disco a 96% (`PERSONAL_DISK_FULL`).** Antes de parar, o exame já tinha usado 19 vagas de Opus médio: 1 de exame, 5 de crítica visual e 13 de revisão.
+  - A retenção automática e a liberação de `work/` não acharam nada elegível.
+  - Os 180 jobs que ainda têm `work/` e `review-artifact` ocupam cerca de 25 GB. Eles ficam fora por dois motivos: estado `failed` sem prova, ou contexto do ispagent ocupado.
+  - O espaço que dá para liberar é o do Docker: imagens órfãs e cache de build. Isso depende do sim do titular.
+- 24/11/2026 01:5x UTC — **Disco:** o titular autorizou e foi feito `docker builder prune -f`, que liberou 5 GB. O disco ficou em 94%, com 23 GB livres, e o design foi relançado às 01:47.
+  - A retenção automática recusa 125 cópias antigas (`not_passive_exam`). São jobs de programador, revisor e QA de 10 a 16/11, com cerca de 25 GB.
+  - Motivo provável: foram abertos por outro principal ou fluxo, antes do modo pessoal. Liberá-los exige decidir no produto se o dono do projeto pode retirar jobs de outro principal.
+  - A liberação manual de `work/` responde sempre "ocupado", porque o gateway mantém o contexto. Parar o gateway por alguns minutos não resolveu: o motivo das recusas é outro.
+- 24/11/2026 02:53 UTC — **Causa do disco cheio no design, corrigida.** Cada chamada do design deixava uma cópia de ~300 MB (`review-artifact/`) que a retenção preservava só para o design. Foram 19 chamadas, ~6 GB por rodada, e a própria rodada parava com `PERSONAL_DISK_FULL`.
+  - O commit `06ef8050` faz a retenção retirar essa cópia com as mesmas provas dos outros exames passivos. Há teste.
+  - Aplicado na instalação viva: 137 cópias retiradas, 19 GB liberados. O disco foi de 95% para 89%.
+  - O design foi relançado.
+- 24/11/2026 12:59 UTC — **Módulo 10 (design) terminou.** Execução `c77d8f08`, pasta `verificacoes/98c62210-…/20261124-025251-design`. Rodou das 02:52 às 12:57 UTC, cerca de 10 h.
+  - **Gasto:** 693 chamadas ao Opus 5.5 médio, 1,22 M tokens de saída e 75 M de cache (84% de acerto).
+  - **Achados:** 942 no relatório, dos quais 483 confirmados ou reabertos: 3 altos, 409 médios, 45 baixos e 26 informativos.
+  - **Crítica visual incompleta** em 3 telas: `/conversations-page`, `/password-reset-confirm-page` e `/` (provider-admin).
+  - **Defeitos de escopo do produto (ruído):**
+    - Os 3 altos estão em `load/k6-lab.js`, que é um script de carga e não uma tela.
+    - Arquivos `*.test.tsx`, rotas `/api/panel/...` e o `unknown-page` foram tratados como telas.
+    - Uma regra do css-analyzer contou 264 ocorrências duplicadas.
+    - As confirmações saem uma chamada por ponto (332 de 442 chamadas até as 09:36).
+  - **Disco:** fim em 89%. Nenhuma parada por cota.
