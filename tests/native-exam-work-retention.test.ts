@@ -135,7 +135,7 @@ test('finished passive exam work copies are released only with the full proof, o
   const design=await plant({workflow:'design-readonly-v1'});
   await db.pool.query("UPDATE ac_capacity_grants SET selection=jsonb_set(coalesce(selection,'{}'::jsonb),'{designPurpose}',to_jsonb('examiner'::text)) WHERE id=(SELECT grant_id FROM ac_native_execution_jobs WHERE id=$1)",[design.jobId]);
   assert.equal((await run(design,true)).state,'released');
-  await intact(design,true);
+  await intact(design);
   // An interrupted plan must not apply to a checkout that was subsequently replaced.
   const replaced=await plant();
   const previous=(await db.pool.query('SELECT receipt FROM ac_native_execution_jobs WHERE id=$1',[replaced.jobId])).rows[0].receipt;

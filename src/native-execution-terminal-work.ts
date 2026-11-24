@@ -10,9 +10,9 @@ import {readPrivateWorkerFile} from './native-worker-security.ts';
 import {Id,type ModuleExamWorkRelease,type TerminalWorkCategory,type TerminalWorkRefusal,type TerminalWorkRelease,type TerminalWorkObserver,type TerminalWorkOptions,type TerminalWorkJudgment,terminalWorkClass,terminalWorkLockKey,readonlyDesignExam,NativeExecutionRequest,type Input,Result,readonlySecurityExam} from './native-execution-shared.ts';
 import {NativeExecutionRetirement} from './native-execution-retirement.ts';
 export abstract class NativeExecutionTerminalWork extends NativeExecutionRetirement{
- /** Frees the `work` and `review-artifact` copies of one finished passive security/module exam (specialist, `security-verify-readonly-v1`), or only `work` for a passive design exam.
+ /** Frees the `work` and `review-artifact` copies of one finished passive security/module exam (specialist, `security-verify-readonly-v1`), and of a passive design exam (examiner, visual, reviewer).
   * The answer lives in output/execution-result.json and nothing reads those copies once the job is completed, its grant released and its
-  * terminal retirement signed as removed (containers and network gone). Design review-artifact, proofs, logs, output/, request.json and sibling jobs are never touched.
+  * terminal retirement signed as removed (containers and network gone). Programmer review-artifact, proofs, logs, output/, request.json and sibling jobs are never touched.
   * Runs under the context lease and the job row lock, so it serializes with reconcile and retirement. Idempotent: when already gone, returns `absent`.
   * `apply=false` only inspects. Programmer, unapproved design and any job without the full proof are refused. */
  async releaseModuleExamWork(principal:string,authority:Authority,jobId:string,apply:boolean):Promise<ModuleExamWorkRelease>{
@@ -183,7 +183,8 @@ export abstract class NativeExecutionTerminalWork extends NativeExecutionRetirem
     throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');
    }
   };
-  const retireReviewArtifact=(category==='passive-exam'||category==='readonly-evaluator')&&!readonlyDesignExam(row.workflow,row.role);
+  // The design review-artifact is only the read-only copy mounted as /work while the job runs; nothing reads it afterwards.
+  const retireReviewArtifact=category==='passive-exam'||category==='readonly-evaluator';
   return {category,terminalDigest:digest(receipt),retireReviewArtifact,checkOutput,...(checkWork?{checkWork}:{})};
  }
  protected async terminalWork(jobId:string,apply:boolean,o:TerminalWorkOptions):Promise<TerminalWorkRelease>{

@@ -333,7 +333,7 @@ export async function releaseExamWorkFromInstallation(config:Installation,select
    if(selection.projectId){
     const statChild=(name:string)=>lstat(join(boot.execution.hostRoot,row.id,name)).then(()=>true,(e:NodeJS.ErrnoException)=>e.code==='ENOENT'?false:null);
     const workPresent=await statChild('work');
-    const reviewPresent=workPresent===false&&!readonlyDesignExam(row.workflow,'specialist')?await statChild('review-artifact'):false;
+    const reviewPresent=workPresent===false?await statChild('review-artifact'):false;
     if(workPresent===null||reviewPresent===null){totals.failed++;lines.push(row.id+': não foi possível inspecionar work.');continue;}
     const present=workPresent||reviewPresent;
     if(!present && !(await ledger.pool.query("SELECT 1 FROM ac_audit p WHERE p.context_id=$1 AND p.detail->>'jobId'=$2 AND p.kind='native.exam_work_release_planned' AND NOT EXISTS(SELECT 1 FROM ac_audit q WHERE q.context_id=p.context_id AND q.detail->>'jobId'=p.detail->>'jobId' AND q.kind IN ('native.exam_work_released','native.exam_work_absent_after_plan') AND q.id>p.id) LIMIT 1",[row.context_id,row.id])).rowCount){totals.absent++;continue;}
@@ -382,7 +382,7 @@ const RETENTION_PAGE=100;
  * The inventory is one readdir of the job root plus one lstat per job; a persistent cursor makes consecutive runs walk the whole inventory
  * round-robin, so jobs that never become eligible cannot hold back the ones behind them. Without `apply` nothing is removed.
  * Orphaned passive exams are reconciled before inspecting terminal jobs.
- * Receipts, results, reports, programmer and design review artifacts, logs and the database are never touched. */
+ * Receipts, results, reports, programmer review artifacts, logs and the database are never touched. */
 export async function runPersonalJobRetention(config:Installation,apply:boolean,options:JobRetentionOptions={}):Promise<string[]>{
  if(typeof apply!=='boolean')throw new Refusal('MAINTENANCE_USAGE');
  const limit=options.limit??100,deadlineMs=options.deadlineMs??15*60*1000;

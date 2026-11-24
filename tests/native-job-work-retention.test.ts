@@ -335,7 +335,7 @@ test('automatic job retention frees only proven categories, with the gateway run
    const result=await retire(p,true);
    const [state,detail]=item.expect.split(':');
    assert.equal(result.state,state,item.label+' '+JSON.stringify(result));
-   const keepReview=result.state==='refused'||item.o.role==='programmer'||item.o.workflow==='design-readonly-v1';
+   const keepReview=result.state==='refused'||item.o.role==='programmer';
    if(result.state==='refused'){
     assert.equal(result.reason,detail,item.label);assert.ok(await exists(p.work),item.label+': work kept');
     assert.equal(preview.state,'refused',item.label);
