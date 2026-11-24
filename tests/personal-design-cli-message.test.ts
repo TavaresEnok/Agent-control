@@ -7,13 +7,17 @@ const leaked = 'secret-token-xyz /home/app/private';
 const redacted = 'O exame de design falhou.';
 
 test('erro desconhecido e recusa com código desconhecido saem numa frase fixa, sem segredo nem caminho', () => {
-  for (const error of [new Error(leaked), new Refusal(leaked), new Refusal('DESIGN_CODE_UNKNOWN')]) {
+  for (const error of [new Error(leaked), new Refusal(leaked), new Error('DESIGN_CODE_UNKNOWN')]) {
     const text = designCliFailureText(error);
     assert.equal(text, redacted);
     assert.equal(text.includes('secret-token-xyz'), false);
     assert.equal(text.includes('/home/app/private'), false);
     if (error instanceof Error && error.stack) assert.equal(text.includes(error.stack), false);
   }
+});
+
+test('recusa com código desconhecido mostra só o código, que não tem caminho nem segredo', () => {
+  assert.equal(designCliFailureText(new Refusal('DESIGN_CODE_UNKNOWN')), 'O exame de design falhou (código DESIGN_CODE_UNKNOWN).');
 });
 
 test('DESIGN_PREPARE_NO_CLAUDE diz que o projeto não tem conta Claude', () => {

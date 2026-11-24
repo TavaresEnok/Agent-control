@@ -79,7 +79,10 @@ export function designCliFailureText(error: unknown): string {
   if (error instanceof UnstartedExamRetirementPending) return `A retirada do job ${error.jobId} ficou pendente. Verifique o Docker e repita: npm run personal:maintenance -- <instalação.json> --abandonar-design ${error.jobId}`;
   if (error instanceof DesignCreateModelFailure) return `O modelo não devolveu as telas. Causa: ${error.causeCode}.`;
   const code = error instanceof Refusal ? error.code : error instanceof Error ? error.message : '';
-  return Object.hasOwn(messages, code) ? messages[code]! : 'O exame de design falhou.';
+  if (Object.hasOwn(messages, code)) return messages[code]!;
+  // Um código de recusa só tem letras maiúsculas e sublinhado: mostrá-lo não vaza caminho nem segredo e diz onde olhar.
+  if (error instanceof Refusal && /^[A-Z][A-Z0-9_]{2,63}$/.test(code)) return `O exame de design falhou (código ${code}).`;
+  return 'O exame de design falhou.';
 }
 
 /** The report is already on disk. A stale login or an incomplete visual exam still exits non-zero. */
