@@ -603,6 +603,136 @@ async function confirmFinding(
   }
 }
 
+/** Pontos de uma tela confirmados numa chamada só. Mais que isso vai em chamadas seguidas. */
+export const DESIGN_CONFIRM_BATCH_MAX = 10;
+
+/** Um pedido para vários pontos da mesma tela. O código e as capturas entram uma vez; cada ponto tem o seu número. */
+function confirmationBatchTask(
+  findings: readonly DesignExamFinding[],
+  code: string,
+  captures: readonly DesignScreenCapture[] | undefined,
+  references: DesignExamineInput['references'],
+): string {
+  return [
+    'Pedido de confirmação em lote.',
+    'Tente derrubar cada ponto, um a um e sem misturar. A resposta inteira é um único JSON {"kind":"confirmacao-lote","results":[...]} com um item por ponto: index (o número do ponto), status (confirmado, provavel ou descartado), reason e proof. Se não conseguir julgar um ponto, omita o item dele.',
+    `Arquivo: ${findings[0]?.file ?? ''}`,
+    'Código:',
+    code.slice(0, 20000),
+    ...captureBlock(captures),
+    ...referenceCaptureLines(references),
+    ...findings.flatMap((finding, index) => [
+      `=== Ponto ${index + 1} de ${findings.length} ===`,
+      `Linha: ${finding.line ?? 'não informada'}`,
+      `Título: ${oneLine(finding.title)}`,
+      `Regra: ${oneLine(finding.reference)}`,
+      ...(finding.measure ? [measureProof(finding.measure, finding.snippet)] : []),
+      `Trecho: ${oneLine(finding.snippet)}`,
+    ]),
+  ].join('\n').slice(0, 100000);
+}
+
+/** Itens da resposta em lote que valem: índice dentro do pedido, sem repetição, e veredito válido. */
+function confirmationBatchVerdicts(value: unknown, count: number): Map<number, DesignConfirmResult> {
+  const rows = value && typeof value === 'object' && Array.isArray((value as {results?: unknown}).results)
+    ? (value as {results: unknown[]}).results
+    : [];
+  const verdicts = new Map<number, DesignConfirmResult>();
+  const repeated = new Set<number>();
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const index = Number((row as {index?: unknown}).index);
+    if (!Number.isInteger(index) || index < 1 || index > count) continue;
+    if (verdicts.has(index) || repeated.has(index)) {
+      verdicts.delete(index);
+      repeated.add(index);
+      continue;
+    }
+    const parsed = DesignConfirmResult.safeParse(normalizeDesignConfirm({...row, kind: 'confirmacao'}));
+    if (parsed.success) verdicts.set(index, parsed.data);
+  }
+  return verdicts;
+}
+
+/**
+ * Confirma vários pontos da mesma tela numa chamada, com um veredito por ponto. O ponto sem veredito válido
+ * fica fora do mapa e o chamador o confirma sozinho. Falha do provedor que para o exame inteiro sobe como erro.
+ */
+async function confirmFindingsBatch(
+  input: DesignExamineInput,
+  findings: readonly DesignExamFinding[],
+  code: string,
+  captures: readonly DesignScreenCapture[] | undefined,
+  noteModel: (model: string) => void,
+  noteFailure: (code: string) => void,
+  avoid?: DesignReserveOptions,
+): Promise<{seat: DesignSeat; verdicts: Map<number, DesignConfirmResult>} | null> {
+  const seat = await input.reserve('reviewer', undefined, avoid);
+  try {
+    acceptClaudeExamSeat(seat);
+    noteModel(seat.model);
+    const call = DesignWorkerCall.parse({
+      designPurpose: 'reviewer',
+      role: seat.grantRole ?? 'reviewer',
+      provider: seat.provider,
+      accountId: seat.accountId,
+      profileId: seat.profileId,
+      model: seat.model,
+      grantId: seat.grantId,
+      intentId: input.intentId,
+      task: confirmationBatchTask(findings, code, captures, input.references),
+      repo: input.repo,
+      writePaths: [] as const,
+    });
+    const hit = await runModel(input.worker, call);
+    if (hit.failure) {
+      // O código do provedor fica na cobertura do revisor. Os pontos seguem para a confirmação sozinha, como sem lote.
+      noteFailure(hit.failure);
+      return null;
+    }
+    return {seat, verdicts: confirmationBatchVerdicts(parseJson(hit.output), findings.length)};
+  } catch (error) {
+    if (rethrowReviewer(error)) throw error;
+    noteFailure(error instanceof Refusal ? safeFailureCode(error.code) : 'EXECUTION_NATIVE_FAILED');
+    return null;
+  } finally {
+    await input.release(seat);
+  }
+}
+
+/** Vereditos por ponto, em chamadas de até DESIGN_CONFIRM_BATCH_MAX pontos. Sem lote configurado ou com um ponto só, nada. */
+async function confirmInBatches(
+  input: DesignExamineInput,
+  findings: readonly DesignExamFinding[],
+  code: string,
+  captures: readonly DesignScreenCapture[] | undefined,
+  noteModel: (model: string) => void,
+  noteFailure: (code: string) => void,
+  avoid: DesignReserveOptions,
+  notes: string[],
+): Promise<Map<DesignExamFinding, {seat: DesignSeat; confirm: DesignConfirmResult}>> {
+  const result = new Map<DesignExamFinding, {seat: DesignSeat; confirm: DesignConfirmResult}>();
+  if (!input.batch || input.batch.files < 2 || findings.length < 2) return result;
+  for (let start = 0; start < findings.length; start += DESIGN_CONFIRM_BATCH_MAX) {
+    const group = findings.slice(start, start + DESIGN_CONFIRM_BATCH_MAX);
+    if (group.length < 2) continue;
+    let failed: string | null = null;
+    const batch = await confirmFindingsBatch(input, group, code, captures, noteModel, failure => { failed ??= failure; noteFailure(failure); }, avoid);
+    if (!batch) {
+      notes.push(`A confirmação em lote de ${group[0]?.file ?? 'tela'} falhou com ${failed ?? 'EXECUTION_NATIVE_FAILED'}; os ${group.length} pontos foram confirmados um a um.`);
+      continue;
+    }
+    group.forEach((finding, at) => {
+      const confirm = batch.verdicts.get(at + 1);
+      if (confirm) result.set(finding, {seat: batch.seat, confirm});
+    });
+    if (batch.verdicts.size < group.length) {
+      notes.push(`A confirmação em lote de ${group[0]?.file ?? 'tela'} deixou ${group.length - batch.verdicts.size} ponto(s) sem veredito; eles foram confirmados um a um.`);
+    }
+  }
+  return result;
+}
+
 function soloJudged(hit: ModelHit, file: string, ids: string[]): boolean {
   if (hit.failure) return false;
   const parsed = DesignExamResult.safeParse(normalizeDesignExam(parseJson(hit.output), {file, checklist: ids}));
@@ -815,7 +945,14 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
       }
       let reviewerAsked = false;
       let reviewerJudged = false;
-      for (const finding of exam.data.findings) {
+      type Pending = {
+        original: (typeof exam.data.findings)[number];
+        clamped: DesignExamFinding;
+        source: DesignRawFinding | undefined;
+        measure: DesignMeasureValue | undefined;
+        basis: DesignBasis;
+      };
+      const pending: Pending[] = exam.data.findings.map(finding => {
         const source = examMeasurementSource(finding, input.rawFindings, screen.captures);
         const measure = source?.measure;
         const basis = designBasis(finding.basis, measure);
@@ -832,6 +969,23 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
           ...(measure === undefined ? {} : {measure}),
           basis,
         });
+        return {original: finding, clamped, source, measure, basis};
+      });
+      // Os pontos da tela que vão ao revisor e não são de gravidade alta seguem juntos numa chamada só (economy.batch).
+      const forReview = pending.filter(item => item.basis !== 'preferencia'
+        && !(item.measure !== undefined && item.original.severity !== 'alta')
+        && item.original.severity !== 'alta');
+      const batchedReview = await confirmInBatches(
+        input,
+        forReview.map(item => item.clamped),
+        screen.code,
+        screen.captures,
+        model => remember('reviewer', model),
+        code => noteFailure('reviewer', code),
+        reviewAvoid,
+        notes,
+      );
+      for (const {original: finding, clamped, source, measure, basis} of pending) {
         findings.push(clamped);
         if (basis === 'preferencia') {
           // Gosto não vai ao revisor: fica provável, sem verificador, e não conta como falha.
@@ -866,7 +1020,8 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
           reviewerAsked = true;
         }
         try {
-          const reviewed = await confirmFinding(
+          const inBatch = batchedReview.get(clamped);
+          const reviewed = inBatch ?? await confirmFinding(
             input,
             clamped,
             screen.code,
@@ -909,9 +1064,20 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
         const uncertain = uncertainVisualAxes(examinerVisual.scores, reviewerVisual.scores);
         visual.push({file: screen.file, route: screen.route, examiner: examinerVisual.scores, reviewer: reviewerVisual.scores, uncertain});
         if (uncertain.length > 0) notes.push(`Julgamento incerto em ${oneLine(screen.route)}: ${uncertain.join('; ')}.`.slice(0, 500));
-        for (const finding of visualExamFindings(screen.file, examinerVisual.scores)) {
+        const visualFindings = visualExamFindings(screen.file, examinerVisual.scores);
+        const batchedVisual = await confirmInBatches(
+          input,
+          visualFindings,
+          screen.code,
+          screen.captures,
+          model => remember('reviewer', model),
+          code => noteFailure('reviewer', code),
+          reviewAvoid,
+          notes,
+        );
+        for (const finding of visualFindings) {
           try {
-            const reviewed = await confirmFinding(
+            const reviewed = batchedVisual.get(finding) ?? await confirmFinding(
               input,
               finding,
               screen.code,

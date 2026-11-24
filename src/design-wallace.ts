@@ -1,4 +1,4 @@
-import {designRawFinding, type DesignRawFinding} from './design-types.ts';
+import {designRawFinding, type DesignOccurrences, type DesignRawFinding} from './design-types.ts';
 
 export const WALLACE_FONT_SIZES_MAX = 8; // > 8, como os tokens
 export const WALLACE_FONT_FAMILIES_MAX = 3; // > 3, como os tokens
@@ -125,4 +125,93 @@ export function wallaceFindings(file: string, report: unknown): DesignRawFinding
   }
 
   return findings;
+}
+
+const COMPUTED_FILE = /^computado (\S+) (.+)$/;
+const MAX_LOCATIONS = 60;
+const MAX_ROUTES = 200;
+
+type Capture = {finding: DesignRawFinding; rest: string; value: number};
+type RouteGroup = {tool: string; rule: string; metric: string; route: string; captures: Capture[]; top: Capture};
+
+function wallaceValue(finding: DesignRawFinding): number {
+  return finding.measure?.kind === 'wallace' ? finding.measure.value : 0;
+}
+
+function groupedFinding(top: DesignRawFinding, file: string, occurrences: DesignOccurrences): DesignRawFinding {
+  const measure = top.measure;
+  if (measure?.kind !== 'wallace') throw new Error('medida do css-analyzer ausente');
+  const grouped = designRawFinding({tool: top.tool, rule: top.rule, file, severity: top.severity, snippet: top.snippet, measure});
+  return {...grouped, occurrences};
+}
+
+/**
+ * Dois passos sobre as medidas do css-analyzer feitas em capturas (`computado <rota> <largura> <tema> <estado>`):
+ * 1. a mesma regra na mesma rota, em várias larguras, temas e estados, é um ponto só, com o maior valor;
+ * 2. a mesma regra com o mesmo valor em rotas diferentes (a folha global medida em cada rota) é um achado só,
+ *    com a lista das rotas.
+ * Cada achado agrupado leva a contagem de capturas e os locais. O que foi medido uma vez não muda.
+ */
+export function groupWallaceFindings(findings: readonly DesignRawFinding[]): DesignRawFinding[] {
+  const byRoute = new Map<string, RouteGroup>();
+  const slots: (DesignRawFinding | RouteGroup)[] = [];
+  for (const finding of findings) {
+    const parts = finding.measure?.kind === 'wallace' ? COMPUTED_FILE.exec(finding.file) : null;
+    if (!parts) {
+      slots.push(finding);
+      continue;
+    }
+    const metric = finding.measure?.kind === 'wallace' ? finding.measure.metric : '';
+    const capture: Capture = {finding, rest: parts[2] ?? '', value: wallaceValue(finding)};
+    const key = [finding.tool, finding.rule, metric, parts[1]].join('\u001f');
+    const group = byRoute.get(key);
+    if (group) {
+      group.captures.push(capture);
+      if (capture.value > group.top.value) group.top = capture;
+    } else {
+      const created: RouteGroup = {tool: finding.tool, rule: finding.rule, metric, route: parts[1] ?? '', captures: [capture], top: capture};
+      byRoute.set(key, created);
+      slots.push(created);
+    }
+  }
+  const byValue = new Map<string, RouteGroup[]>();
+  const merged: (DesignRawFinding | RouteGroup[])[] = [];
+  for (const slot of slots) {
+    if (!('captures' in slot)) {
+      merged.push(slot);
+      continue;
+    }
+    const key = [slot.tool, slot.rule, slot.metric, slot.top.value].join('\u001f');
+    const same = byValue.get(key);
+    if (same) {
+      same.push(slot);
+    } else {
+      const created = [slot];
+      byValue.set(key, created);
+      merged.push(created);
+    }
+  }
+  return merged.map(entry => {
+    if (!Array.isArray(entry)) return entry;
+    const [first] = entry;
+    if (!first) throw new Error('grupo do css-analyzer vazio');
+    if (entry.length === 1) {
+      if (first.captures.length === 1) return first.top.finding;
+      const locations = first.captures.slice(0, MAX_LOCATIONS).map(item => `${item.rest}: ${item.value}`.slice(0, 160));
+      return groupedFinding(first.top.finding, `computado ${first.route}`, {count: first.captures.length, locations});
+    }
+    const routes = entry.map(group => group.route);
+    const locations = entry.slice(0, MAX_LOCATIONS).map(group => `${group.route} (${group.captures.length} capturas): ${group.top.value}`.slice(0, 160));
+    const count = entry.reduce((sum, group) => sum + group.captures.length, 0);
+    return groupedFinding(first.top.finding, `computado ${first.route} e mais ${entry.length - 1} rotas`, {count, locations, routes: routes.slice(0, MAX_ROUTES)});
+  });
+}
+
+/** Arquivos `computado <rota>` que um achado do css-analyzer cobre. O delta compara por rota, antes e depois do agrupamento. */
+export function wallaceDeltaFiles(finding: Pick<DesignRawFinding, 'file' | 'occurrences'>): string[] {
+  if (!finding.file.startsWith('computado ')) return [finding.file];
+  const routes = finding.occurrences?.routes;
+  if (routes && routes.length > 0) return routes.map(route => `computado ${route}`);
+  const route = finding.file.split(' ')[1];
+  return [route ? `computado ${route}` : finding.file];
 }

@@ -49,6 +49,14 @@ export const DesignMeasure = z.discriminatedUnion('kind', [
 ]);
 export type DesignMeasure = z.infer<typeof DesignMeasure>;
 
+export const DesignOccurrences = z.object({
+  count: z.number().int().min(2).max(1_000_000),
+  locations: z.array(z.string().min(1).max(160)).max(60),
+  /** Só no achado que juntou rotas diferentes com o mesmo valor: todas as rotas cobertas. */
+  routes: z.array(z.string().min(1).max(200)).max(200).optional(),
+}).strict();
+export type DesignOccurrences = z.infer<typeof DesignOccurrences>;
+
 export const DesignRawFinding = z.object({
   tool: z.string().min(1).max(40),
   rule: z.string().min(1).max(200),
@@ -59,6 +67,8 @@ export const DesignRawFinding = z.object({
   snippet: z.string().max(240),
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
   measure: DesignMeasure.optional(),
+  /** Mesma regra no mesmo ponto, medida em várias capturas: um achado só, com a contagem e os locais. */
+  occurrences: DesignOccurrences.optional(),
 }).strict();
 export type DesignRawFinding = z.infer<typeof DesignRawFinding>;
 
