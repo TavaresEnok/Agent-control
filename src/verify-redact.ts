@@ -100,6 +100,40 @@ export function redactUnknownSecrets(text: string, mask: (secret: string) => str
   return out;
 }
 
+const SECRET_KEY = new RegExp(`(?:${ASSIGN_NAME})\\w*`, 'i');
+
+function redactJsonValue(value: unknown, key: string | null): unknown {
+  if (typeof value === 'string') {
+    if (key !== null && value.length > 0 && SECRET_KEY.test(key) && !/^(?:null|true|false)$/.test(value)) return masked(value);
+    return redactUnknownSecrets(value);
+  }
+  if (Array.isArray(value)) return value.map(item => redactJsonValue(item, key));
+  if (value !== null && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [name, item] of Object.entries(value)) out[name] = redactJsonValue(item, name);
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Redacts a JSON document value by value, so the result is still valid JSON. Running the text patterns over the raw
+ * document eats quotes and commas around a match (`"Secret": "x",` becomes `"Secr… (sha256:…),`) and breaks the file.
+ * A string under a secret-looking key is masked whole; every other string goes through redactUnknownSecrets.
+ * Returns null when the text is not JSON, so the caller can fall back to the text patterns.
+ */
+export function redactJsonDocument(text: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text) as unknown;
+  } catch {
+    return null;
+  }
+  const redacted = redactJsonValue(parsed, null);
+  if (JSON.stringify(redacted) === JSON.stringify(parsed)) return text;
+  return `${JSON.stringify(redacted, null, 2)}\n`;
+}
+
 /** True when text still contains a live known secret. A mask from secretPreview does not count. */
 export function hasKnownSecret(text: string): boolean {
   return UNKNOWN_PATTERNS.some(pattern => pattern === AWS_SECRET_KEY
