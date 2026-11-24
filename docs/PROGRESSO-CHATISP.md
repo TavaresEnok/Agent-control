@@ -535,3 +535,14 @@ Ordem: `docs/ORDEM-CHATISP.md`. Equipe: `AGENTS.md`, seção "Equipe ChatISP". C
     - Os testes passaram: `security-exam-journal` (4) e todos os `verify-*`/`exam-*`.
   - **Execução `6370f6fc`, lançada às 14:56:** chegou à confirmação com 696 de 697 arquivos julgados e só 2 chamadas ao modelo, o mapa e 1 exame ao vivo. Faltam cerca de 223 confirmações: cerca de 197 achados do examinador e 26 das ferramentas. Elas ficam gravadas no diário, e se a rodada cair a próxima retoma.
   - O servidor reiniciou por volta das 14:24. O gateway voltou sozinho. O banco de testes (porta 54333) foi recriado num contêiner descartável `ac-test-db-journal`.
+- 24/11/2026 16:45 UTC — **Supervisor, a pedido do titular: confirmações da segurança com 4 Sonnet 5.5 médio em paralelo, no lugar de 1 Opus 5.5 por vez.**
+  - **Produto (`93cdaa6a`):**
+    - `economy.securityConfirmations` (1 a 4): número de confirmações ao mesmo tempo. Cada uma usa uma faixa própria da fila de capacidade.
+    - `economy.securityReviewer`: modelo e esforço do revisor dos achados que não são altos. O achado alto segue com o Opus e a sessão comprovada.
+    - Nova opção `personal:combo … avaliadores <1-4>`.
+    - O executor acompanha todos os jobs em andamento.
+    - Os testes passaram.
+  - **Instalação viva:**
+    - O ChatISP ficou com `securityConfirmations: 4` e `securityReviewer: claude-sonnet-5-5 medium`. Backup em `installation.json.bak-20261124-162307`.
+    - A política do projeto subiu para a revisão 4, com 4 avaliadores por contexto.
+  - **Troca de rodada:** a execução `6370f6fc` foi parada às 16:28, com 98 confirmações do Opus no diário. A execução `3ee8ab82` (16:30) reaproveitou o exame e essas 98 confirmações. Às 16:42 rodava 4 confirmações Sonnet médio ao mesmo tempo, a cerca de 4 por minuto.
