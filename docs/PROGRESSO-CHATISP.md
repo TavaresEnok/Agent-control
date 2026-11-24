@@ -546,3 +546,32 @@ Ordem: `docs/ORDEM-CHATISP.md`. Equipe: `AGENTS.md`, seção "Equipe ChatISP". C
     - O ChatISP ficou com `securityConfirmations: 4` e `securityReviewer: claude-sonnet-5-5 medium`. Backup em `installation.json.bak-20261124-162307`.
     - A política do projeto subiu para a revisão 4, com 4 avaliadores por contexto.
   - **Troca de rodada:** a execução `6370f6fc` foi parada às 16:28, com 98 confirmações do Opus no diário. A execução `3ee8ab82` (16:30) reaproveitou o exame e essas 98 confirmações. Às 16:42 rodava 4 confirmações Sonnet médio ao mesmo tempo, a cerca de 4 por minuto.
+- 24/11/2026 20:50 UTC — **Supervisor: módulo 1 (segurança) do ChatISP concluído pelo produto.**
+  - **Duas quedas por Docker:**
+    - A execução `3ee8ab82` caiu às 16:51 e a `2752fa74` às 20:27, as duas com `DOCKER_UNCERTAIN`.
+    - Com 4 jobs subindo ao mesmo tempo, a criação de contêiner passou do limite de 10 s. O contêiner foi criado, mas a resposta se perdeu, e o job ficou incerto (`c6bf13dc`).
+    - A queda das 16:51 só foi vista às 20:08: a espera do supervisor casava com a própria linha de comando.
+    - Nenhum trabalho se perdeu: o diário passou de 146 para 189 confirmações entre as quedas.
+  - **Correção no produto (`f51264aa`):**
+    - As chamadas ao Docker esperam até 60 s.
+    - A leitura de inspeção (GET) tenta de novo até 3 vezes quando há demora ou resposta 5xx. Um 4xx continua incerto na hora.
+    - Os testes passaram.
+  - **Execução `c3403b26`, das 20:30 às 20:49:**
+    - Concluída, com 37 chamadas ao modelo e 697 de 697 arquivos julgados.
+    - O relatório está em `verificacoes/98c62210-…/20261124-203731-c3403b26-seguranca/`.
+    - O diário tem 224 confirmações.
+  - **Resultado (224 achados):**
+
+    | Gravidade | Confirmados | Prováveis | Descartados |
+    |---|---|---|---|
+    | Alta | 0 | 2 | 1 |
+    | Média | 15 | 19 | 13 |
+    | Baixa | 35 | 20 | 43 |
+    | Informativa | 11 | 14 | 51 |
+
+    - Nota de falha: ressalva por gravidade média.
+    - O gitleaks e o checkov saíram com JSON truncado, então não foram verificados.
+  - **Conferência dos altos pelo supervisor:**
+    - **ACH-206** (brotli v1.2.6, GO-2026-6888): a dependência é indireta. Só entra pelo ClickHouse do driver do `goose` no vendor. O código do ChatISP não usa ClickHouse, então o ponto não é alcançável. A correção é subir para a v1.2.7 na fase de correção.
+    - **ACH-207** (`golang.org/x/net` v0.61.0, GO-2026-6860): o pacote `html` não está no vendor nem é importado, então o ponto não é alcançável (o mesmo vale para o ACH-222, já descartado). A correção é atualizar a dependência.
+    - Nenhum alto exige correção urgente.
