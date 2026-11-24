@@ -78,6 +78,7 @@
   "design-login-decision.test.ts",
   "design-trust.test.ts",
   "design-wallace.test.ts",
+  "design-ruido.test.ts",
   "diagnostics.test.ts",
   "disk-admission.test.ts",
   "docker-create-refused.test.ts",

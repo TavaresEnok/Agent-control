@@ -126,3 +126,58 @@ export function wallaceFindings(file: string, report: unknown): DesignRawFinding
 
   return findings;
 }
+
+const COMPUTED_FILE = /^computado (\S+) (.+)$/;
+const MAX_LOCATIONS = 60;
+
+/**
+ * A mesma regra do css-analyzer medida na mesma rota em várias capturas (largura, tema, estado) é um ponto só.
+ * Vira um achado com o maior valor, a contagem e a lista de capturas. Rota medida uma vez não muda.
+ */
+export function groupWallaceFindings(findings: readonly DesignRawFinding[]): DesignRawFinding[] {
+  const groups = new Map<string, {first: number; items: {finding: DesignRawFinding; rest: string}[]; route: string}>();
+  const out: (DesignRawFinding | string)[] = [];
+  for (const finding of findings) {
+    const parts = finding.measure?.kind === 'wallace' ? COMPUTED_FILE.exec(finding.file) : null;
+    if (!parts || !finding.measure || finding.measure.kind !== 'wallace') {
+      out.push(finding);
+      continue;
+    }
+    const key = [finding.tool, finding.rule, finding.measure.metric, parts[1]].join('\u001f');
+    const group = groups.get(key);
+    if (group) {
+      group.items.push({finding, rest: parts[2] ?? ''});
+    } else {
+      groups.set(key, {first: out.length, items: [{finding, rest: parts[2] ?? ''}], route: parts[1] ?? ''});
+      out.push(key);
+    }
+  }
+  return out.map(entry => {
+    if (typeof entry !== 'string') return entry;
+    const group = groups.get(entry);
+    if (!group) throw new Error('grupo do css-analyzer ausente');
+    const [only] = group.items;
+    if (group.items.length === 1 && only) return only.finding;
+    let top = group.items[0]!;
+    for (const item of group.items) {
+      const value = item.finding.measure?.kind === 'wallace' ? item.finding.measure.value : 0;
+      const best = top.finding.measure?.kind === 'wallace' ? top.finding.measure.value : 0;
+      if (value > best) top = item;
+    }
+    const measure = top.finding.measure;
+    if (measure?.kind !== 'wallace') throw new Error('medida do css-analyzer ausente');
+    const grouped = designRawFinding({
+      tool: top.finding.tool,
+      rule: top.finding.rule,
+      file: `computado ${group.route}`,
+      severity: top.finding.severity,
+      snippet: top.finding.snippet,
+      measure,
+    });
+    const locations = group.items.slice(0, MAX_LOCATIONS).map(item => {
+      const value = item.finding.measure?.kind === 'wallace' ? item.finding.measure.value : 0;
+      return `${item.rest}: ${value}`.slice(0, 160);
+    });
+    return {...grouped, occurrences: {count: group.items.length, locations}};
+  });
+}

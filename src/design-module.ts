@@ -12,7 +12,7 @@ import {writeDesignLoginState} from './design-browser.ts';
 import {readDesignCaptureStageNote, writeDesignExamCaptures} from './design-capture-stage.ts';
 import {captureScreens, planCaptures, type DesignCaptureDriver, type DesignEmptyStateRecord} from './design-capture.ts';
 import {collectDesignFindings, designRawDocument, type DesignSourceFile, type DesignToolReports} from './design-collect.ts';
-import {discoverRoutesFromSource, dynamicRoutesMissingExample, screenCoverageMarkdown, sourceHasEmptyState, type DesignLogin, type DiscoveredRoute, type ScreenCoverageRow} from './design-discover.ts';
+import {discoverRoutesFromSource, dynamicRoutesMissingExample, isApiRoute, isNonScreenFile, screenCoverageMarkdown, sourceHasEmptyState, type DesignLogin, type DiscoveredRoute, type ScreenCoverageRow} from './design-discover.ts';
 import {examineDesignScreens, type DesignExamineInput, type DesignScreenCapture, type DesignSeat} from './design-examine.ts';
 import {takeExamStripNote} from './exam-strip-note.ts';
 import {assertDesignTarget} from './design-image.ts';
@@ -529,14 +529,23 @@ function measuredRawAchado(index: number, finding: DesignRawFinding): DesignAcha
     verifier: null,
     reference: finding.rule.slice(0, 200),
     where: {file: finding.file.slice(0, 400), line: finding.line},
-    scenario: `Medido por ${finding.tool}. ${finding.snippet}`.slice(0, 2000),
-    proof: `Medido: ${detail}. ${finding.snippet}`.replace(/\s+/g, ' ').trim().slice(0, 2000),
+    scenario: `Medido por ${finding.tool}. ${finding.snippet}${repeatedText(finding)}`.slice(0, 2000),
+    proof: `Medido: ${detail}. ${finding.snippet}${repeatedText(finding)}`.replace(/\s+/g, ' ').trim().slice(0, 2000),
     suggestion: suggestionFor(finding.rule),
     acceptance: DESIGN_ACCEPTANCE,
     sources: ['medida', finding.tool],
     secretPreview: null,
     basis: 'medido',
   });
+}
+
+/** Contagem e locais de um achado que agrupa a mesma medida em várias capturas. */
+function repeatedText(finding: DesignRawFinding): string {
+  const occurrences = finding.occurrences;
+  if (occurrences === undefined) return '';
+  const shown = occurrences.locations.join('; ');
+  const more = occurrences.count > occurrences.locations.length ? `; e mais ${occurrences.count - occurrences.locations.length}` : '';
+  return ` Mesma regra em ${occurrences.count} capturas (maior valor): ${shown}${more}.`;
 }
 
 function routeDownAchado(index: number, finding: DesignRawFinding): DesignAchadoValue {
@@ -683,10 +692,10 @@ export function screenRoutesForExam(
   const usedIds = new Set(discovered.map(item => item.id));
   const extra: DiscoveredRoute[] = [];
   for (const item of served) {
-    if (usedRoutes.has(item.route) || item.route.length < 1 || item.route.length > 200) continue;
+    if (usedRoutes.has(item.route) || item.route.length < 1 || item.route.length > 200 || isApiRoute(item.route)) continue;
     const relative = item.route === '/' ? 'index.html' : item.route.replace(/^\//, '');
     const file = files.find(candidate => candidate.path === relative || candidate.path.endsWith(`/${relative}`));
-    if (file === undefined) continue;
+    if (file === undefined || isNonScreenFile(file.path)) continue;
     let id = `servido-${relative.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'raiz'}`;
     while (usedIds.has(id)) id = `${id}-2`;
     usedIds.add(id);
@@ -707,7 +716,7 @@ function chooseScreens(
     if (!routeOf.has(key)) routeOf.set(key, route.route);
   }
   const hot = new Set(findings.filter(item => item.severity === 'alta' || item.severity === 'media').map(item => item.file));
-  const candidates = files.filter(file => /\.(?:html?|tsx|jsx|vue|css)$/i.test(file.path));
+  const candidates = files.filter(file => /\.(?:html?|tsx|jsx|vue|css)$/i.test(file.path) && !isNonScreenFile(file.path));
   const ranked = [...candidates].sort((left, right) => {
     const score = (file: DesignSourceFile) => {
       const key = file.path.slice(0, 400);
