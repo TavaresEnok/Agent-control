@@ -16,6 +16,7 @@ import {
   VERIFY_RECHECK_NEW_EXAM_REQUIRED,
 } from './verify-remediate.ts';
 import {readVerificationProgress} from './verify-command.ts';
+import {readModuleStatuses} from './verify-modules-status.ts';
 
 type ManagerAuthority = z.infer<typeof Authority>;
 type Panel = {dataDirectory: string; projectId: string; installationPath: string};
@@ -334,6 +335,13 @@ export function registerVerificationRoutes(app: Hono<ApiEnv>, deps: Verification
     const listed = await readVerificationProgress(panel.dataDirectory, panel.projectId);
     if (!Array.isArray(listed)) throw new Error('VERIFY_REPORT_SHAPE');
     return c.json({runs: listed});
+  });
+
+  // Estado atual de cada módulo, só leitura, no projeto do gateway. Mesma autorização dos relatórios funcionais.
+  app.get('/api/v1/ac/personal/verificacoes-modulos', async c => {
+    c.header('Cache-Control', 'no-store');
+    const {projectId, dataDirectory} = await functionalProject(c, deps);
+    return c.json({modulos: await readModuleStatuses(deps.ledger, dataDirectory, projectId)});
   });
 
   app.get('/api/v1/ac/personal/verificacoes/:runId', async c => {

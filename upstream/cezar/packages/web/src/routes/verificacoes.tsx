@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { Link } from '@/lib/project-router'
 import { AchadoCorrecao } from './verificacao-achado'
 import { agentControlFetch } from './settings/agent-control-fetch'
+import { labelPhase, ModulosAndamento } from './verificacoes-modulos'
 
 const summarySchema = z.object({
   id: z.string().uuid(),
@@ -79,25 +80,11 @@ const statusLabel: Record<Achado['status'], string> = {
   fechado: 'fechado',
   reaberto: 'reaberto',
 }
-const phaseLabel: Record<string, string> = {
-  ferramentas: 'ferramentas',
-  mapa: 'mapa',
-  exame: 'exame',
-  confirmacao: 'confirmação',
-  relatorio: 'relatório',
-  done: 'concluída',
-  failed: 'falhou',
-}
-
 const runStatusLabel: Record<string, string> = {
   running: 'em andamento',
   done: 'concluída',
   incomplete: 'incompleta: arquivos ficaram sem julgamento',
   failed: 'falhou',
-}
-
-function labelPhase(phase: string): string {
-  return phaseLabel[phase] ?? phase
 }
 
 function when(createdAt: string, directoryName: string): string {
@@ -288,6 +275,7 @@ function VerificacoesLista({ projectId }: { projectId?: string }) {
   return (
     <div data-route="verificacoes" className="flex flex-col gap-4 px-3 py-4 text-sm">
       <h1 className="text-lg font-medium">Verificações</h1>
+      <ModulosAndamento key={projectId} projectId={projectId} />
       <h2 className="font-semibold">Segurança da instalação</h2>
       <button
         type="button"
