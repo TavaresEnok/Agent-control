@@ -29,7 +29,7 @@ const companion=['node','-e','setInterval(() => {}, 60_000)'];
 type Body=Record<string,any>;
 type Fake={containers:Map<string,Body>;networks:Map<string,Body>;mutations:string[];forbidden:string[];unavailable:boolean;failNetworkDelete:number;failContainerDelete:boolean;beforeNetworkDelete?:(id:string)=>Promise<void>};
 
-/** A Docker that only answers inspects and DELETE of a container or network. Anything that could create or start is recorded as forbidden. */
+/** A Docker that only answers inspects, POST stop and DELETE of a container or network. Anything that could create or start is recorded as forbidden. */
 async function fakeDocker(socket:string,state:Fake){
  const server=createServer((req:IncomingMessage,res:ServerResponse)=>{
   const url=req.url??'',method=req.method??'GET';
@@ -53,6 +53,14 @@ async function fakeDocker(socket:string,state:Fake){
    const ref=decodeURIComponent(url.slice('/v1.44/networks/'.length));
    const found=state.networks.get(ref)??[...state.networks.values()].find(item=>item.Name===ref);
    res.statusCode=found?200:404;res.end(JSON.stringify(found??{message:'no such network'}));return;
+  }
+  if(method==='POST'&&url.startsWith('/v1.44/containers/')&&url.includes('/stop')){
+   const id=url.slice('/v1.44/containers/'.length).split('/')[0];
+   const found=container(id);
+   if(!found){res.statusCode=404;res.end(JSON.stringify({message:'no such container'}));return;}
+   state.mutations.push('POST stop '+found.Id);
+   found.State={Status:'exited',Running:false,Pid:0,ExitCode:0,FinishedAt:new Date().toISOString(),StartedAt:found.State.StartedAt};
+   res.statusCode=204;res.end();return;
   }
   if(method==='DELETE'&&url.startsWith('/v1.44/containers/')){
    if(state.failContainerDelete){res.statusCode=500;res.end(JSON.stringify({message:'boom'}));return;}
@@ -993,6 +1001,56 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
    }
    assert.equal(await recover(orphan,false),'eligible');
    assert.deepEqual(docker.mutations,[]);
+  });
+  /** A verify orphan whose worker exited while its tools companion is still running. */
+  const plantIdleCompanion=async()=>{
+   const workerId=hex();
+   const orphan=await plantOrphan({module:'verify',context:mainContext,tools:'absent',state:'running',grantState:'running',plainRequest:true,
+    workerId,launchDigest:hex(),siblings:0});
+   await writeResult(orphan);
+   const {worker,tools}=await plantStoppedContainers(orphan,workerId);
+   tools.State={Status:'running',Running:true,ExitCode:0,FinishedAt:ZERO,StartedAt:'2026-11-20T00:00:00Z',Pid:4242};
+   return {orphan,workerId,worker,tools,before:await snapshot(orphan.jobId,orphan.grantId,orphan.intentId)};
+  };
+
+  await t.test('com o worker parado e o companheiro ligado ao job, a prévia só informa e o aplicar o para e remove',async()=>{
+   reset();
+   const {orphan,workerId,tools,before}=await plantIdleCompanion();
+   assert.equal(await recover(orphan,false),'eligible');
+   assert.deepEqual(docker.mutations,[]);
+   assert.equal(tools.State.Running,true);
+   assert.deepEqual(await snapshot(orphan.jobId,orphan.grantId,orphan.intentId),before);
+   assert.equal(await recover(orphan),'recovered');
+   assert.deepEqual(docker.mutations,['POST stop '+orphan.toolsId,'DELETE container '+workerId,'DELETE container '+orphan.toolsId,'DELETE network '+orphan.networkId]);
+   assert.deepEqual(docker.forbidden,[]);
+   assert.equal(docker.containers.has(orphan.toolsName),false);
+   assert.equal(docker.containers.has('ac-native-worker-'+orphan.jobId),false);
+   const after=await snapshot(orphan.jobId,orphan.grantId,orphan.intentId);
+   assert.equal(after.job.state,'failed');
+   assert.equal(after.grant.state,'released');
+   assert.equal(after.journal.state,'removed');
+   assert.equal(await recover(orphan),'already_recovered');
+  });
+
+  await t.test('o companheiro ligado de outro job, de outra imagem ou com o worker ligado continua recusado e nada é parado',async t=>{
+   for(const [description,change] of [
+    ['rótulo de outro job',(c:Awaited<ReturnType<typeof plantIdleCompanion>>)=>{c.tools.Config={...c.tools.Config,Labels:{...c.tools.Config.Labels,'agent-control.job':randomUUID()}};}],
+    ['imagem diferente',(c:Awaited<ReturnType<typeof plantIdleCompanion>>)=>{c.tools.Image='sha256:'+'9'.repeat(64);}],
+    ['worker ainda ligado',(c:Awaited<ReturnType<typeof plantIdleCompanion>>)=>{c.worker.State={Status:'running',Running:true,ExitCode:0,FinishedAt:ZERO,StartedAt:'2026-11-20T00:00:00Z',Pid:123};}],
+   ] as const){
+    await t.test(description,async()=>{
+     reset();
+     const idle=await plantIdleCompanion();
+     change(idle);
+     const {orphan,tools,before}=idle;
+     await assert.rejects(recover(orphan,false),{code:'NATIVE_ORPHAN_CONTAINER_PRESENT'});
+     await assert.rejects(recover(orphan),{code:'NATIVE_ORPHAN_CONTAINER_PRESENT'});
+     assert.deepEqual(docker.mutations,[]);
+     assert.deepEqual(docker.forbidden,[]);
+     assert.equal(tools.State.Running,true);
+     assert.deepEqual(await snapshot(orphan.jobId,orphan.grantId,orphan.intentId),before);
+    });
+   }
   });
  }finally{
   for(const close of closers)await close().catch(()=>undefined);
