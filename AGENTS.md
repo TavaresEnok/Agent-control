@@ -205,3 +205,11 @@ Substitui a seção anterior na escolha de modelos e trabalhadores. Hoje só a c
 - **Medição:** antes de abrir cada fase, o gerente roda `npm run personal:tokens -- <instalação> --desde <início da fase anterior>` e registra no progresso. Gerente mais revisor não podem passar do que gastam os trabalhadores e o examinador somados.
 - **Regra de mudança mínima:** todo trabalhador segue a regra de `docs/ORDEM-CHATISP.md`. Antes de escrever, reaproveita o que o projeto, a biblioteca padrão e os recursos nativos já oferecem, sem criar dependência nem abstração que a tarefa não peça, e sem retirar validação, segurança ou testes.
 - **Design com Opus médio (titular, 23/11/2026).** No ChatISP, o exame e a crítica visual do módulo 10 usam Claude Opus 5.5 com esforço `medium`, por experiência e para economizar cota. Isso substitui, para esse projeto, o esforço `high` da regra de 20/11. A opção do produto é `economy.designEffort` por projeto, com padrão `high`. A criação (`criar`) continua em `high`.
+- **Conferência dos achados dos módulos 2 a 9 com o Grok (titular, 24/11/2026 ~21:30 UTC).** Os achados "prováveis" de gravidade alta, média e baixa dos módulos 2 a 9 do ChatISP são conferidos pelo Grok CLI `grok-4.7` como revisor de outro provedor:
+  - esforço `high` nos achados altos e `medium` nos demais;
+  - até **6** ao mesmo tempo, numa fila única agrupada por arquivo;
+  - só leitura, numa cópia sem escrita do commit examinado, sem rede além do provedor;
+  - o revisor recebe o código e o achado, nunca a conclusão do examinador;
+  - cada resposta é gravada num diário assim que chega;
+  - o registro é "revisão independente por outro provedor (Grok 4.7)", por fora do produto e sem recibo assinado.
+
