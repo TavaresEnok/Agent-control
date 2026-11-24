@@ -83,7 +83,7 @@ async function main(){
  const input=await readSignedWorkerLaunch(Launch,'agent-control:native-execution-launch:v1','/input/launch.json','/runner/execution-public-key.pem');
  if(input.expiresAt<Date.now()||input.expiresAt>Date.now()+60000)throw Error('INVALID_WORKER_SCOPE');
  if(input.moduleExam){
-  if((input.provider!=='codex'&&input.provider!=='claude')||input.synthetic||input.role!=='specialist'||input.writePaths.length)
+  if((input.provider!=='codex'&&input.provider!=='claude'&&input.provider!=='grok')||input.synthetic||input.role!=='specialist'||input.writePaths.length)
    throw Error('MODULE_EXAM_SCOPE_MISMATCH');
   await runModuleExamWorker({...input,provider:input.provider});
   return;

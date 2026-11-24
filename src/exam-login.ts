@@ -56,6 +56,19 @@ export function claudeAccessExpiresAt(raw: unknown): number | null {
   return raw < 1e12 ? raw * 1000 : raw;
 }
 
+/** Earliest `expires_at` of the Grok CLI login entries (`~/.grok/auth.json`). Unreadable or empty means unknown. */
+export function grokAccessExpiresAt(raw: unknown): number | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  let earliest: number | null = null;
+  for (const entry of Object.values(raw)) {
+    const value = entry && typeof entry === 'object' ? (entry as {expires_at?: unknown}).expires_at : undefined;
+    const at = typeof value === 'string' ? Date.parse(value) : NaN;
+    if (!Number.isFinite(at)) return null;
+    earliest = earliest === null ? at : Math.min(earliest, at);
+  }
+  return earliest;
+}
+
 /** True when the access token is missing, unreadable, or expires within `examMaxMs + 10 min`. */
 export function examLoginNeedsRefresh(expiresAt: number | null, now: number, examMaxMs = DEFAULT_EXAM_MAX_MS): boolean {
   if (expiresAt === null || !Number.isFinite(expiresAt)) return true;

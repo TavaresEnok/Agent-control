@@ -2,7 +2,8 @@ import {lookup} from 'node:dns/promises';
 import {BlockList, createConnection, createServer, type Server, type Socket} from 'node:net';
 import {Refusal} from './contracts.ts';
 
-export const moduleExamProviders = ['claude', 'codex'] as const;
+/** Claude examines; Codex or Grok may be the reviewer of another provider. */
+export const moduleExamProviders = ['claude', 'codex', 'grok'] as const;
 export type ModuleExamProvider = typeof moduleExamProviders[number];
 export const moduleExamSocket = '/runner/module-exam-egress.sock';
 const proxyPort = 19493;
@@ -11,6 +12,8 @@ const lifetimeAck = 'READY';
 const destinations: Record<ModuleExamProvider, readonly string[]> = {
   claude: ['api.anthropic.com'],
   codex: ['chatgpt.com'],
+  // Grok 1.0.70 answers through this host alone; telemetry, grok.com and the login refresh hosts stay closed.
+  grok: ['cli-chat-proxy.grok.com'],
 };
 
 const reserved = new BlockList();

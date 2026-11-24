@@ -12,7 +12,7 @@ import {requireProjectEnvironmentLaunch} from './project-environments.ts';
 import {pinNativeProtocolForNewAttempt} from './native-protocol-compatibility.ts';
 import {requireRecoveryInventory} from './recovery-inventory.ts';
 import {cancelPreparedNativeResources,admitNativeResources} from './native-resource-envelope.ts';
-import {mkdir,lstat,realpath,writeFile,rename,cp,rm} from 'node:fs/promises';
+import {mkdir,lstat,realpath,readFile,writeFile,rename,cp,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {sign,createHmac,randomBytes} from 'node:crypto';
 import {z} from 'zod';
@@ -29,7 +29,7 @@ import {replaceSecretClassFiles} from './verify-redact.ts';
 import {rememberExamStripNote} from './exam-strip-note.ts';
 import {reviewDiffDocument} from './review-diff.ts';
 import {describeBind,examAccountMount,examWorkerEnv,formatExamStripNote,stripExamHostileConfig} from './verify-exam-isolation.ts';
-import {postgresAccountLoginLock,prepareClaudeExamAccessToken,renewClaudeLoginInPlace,safeFailureCode} from './exam-login.ts';
+import {examLoginNeedsRefresh,grokAccessExpiresAt,postgresAccountLoginLock,prepareClaudeExamAccessToken,renewClaudeLoginInPlace,safeFailureCode} from './exam-login.ts';
 import {nativeReviewMapScope,nativeTaskWithRepoMap} from './native-repo-map.ts';
 import {Id,PreLaunchExamReason,withGrantLaunchLock,UnstartedExamRetirementPending,readonlyDesignExam,NativeExecutionRequest,toolsEntrypoint,moduleExamCompanion,workerEntrypoint,retireNativePrivateNetwork,readonlySecurityExam,readonlyExamIsolation,stageDesignExamCaptures} from './native-execution-shared.ts';
 import {NativeExecutionTerminalWork} from './native-execution-terminal-work.ts';
@@ -137,7 +137,14 @@ export class NativeExecutionSupervisor extends NativeExecutionTerminalWork{
    examWorkflowEarly=(await this.ledger.pool.query('SELECT command FROM ac_intents WHERE id=$1',[input.intentId])).rows[0]?.command?.payload?.workflow;
    claudeExam=!synthetic&&readonlyExamIsolation(personal,examWorkflowEarly,input.role)&&this.config.provider==='claude';
    if(!claudeExam){
-    if(input.moduleExam){
+    if(input.moduleExam&&this.config.provider==='grok'){
+     // The Grok reviewer gets a read-only copy of the login and cannot refresh it: a login near expiry is stale here.
+     const grokHome=join(accountRoot,'.grok'), info=await lstat(grokHome);
+     if(!info.isDirectory()||info.isSymbolicLink()||await realpath(grokHome)!==grokHome)throw new Refusal('EXAM_LOGIN_STALE');
+     accountSecrets=await readMountedCredentialSecrets('grok',accountRoot);
+     if(examLoginNeedsRefresh(grokAccessExpiresAt(JSON.parse(await readFile(join(grokHome,'auth.json'),'utf8'))),Date.now(),input.timeoutMs))throw new Refusal('EXAM_LOGIN_STALE');
+    }
+    else if(input.moduleExam){
      const codexHome=join(accountRoot,'.codex'), info=await lstat(codexHome);
      if(!info.isDirectory()||info.isSymbolicLink()||await realpath(codexHome)!==codexHome)throw new Refusal('EXAM_LOGIN_STALE');
      accountSecrets=(await assertCodexSubscriptionIdentity(this.subjects.get(g.account_id)!,accountRoot)).secrets;
@@ -268,7 +275,7 @@ export class NativeExecutionSupervisor extends NativeExecutionTerminalWork{
    toolsMounts=[{source:toolsWork,destination:'/work',writable:input.role==='programmer'},{source:p.toolsToken,destination:'/runner/exec-token',writable:false}];
    if(input.moduleExam){
     const provider=this.config.provider;
-    if(provider!=='claude'&&provider!=='codex')throw new Refusal('MODULE_EXAM_PROVIDER_UNAVAILABLE');
+    if(provider!=='claude'&&provider!=='codex'&&provider!=='grok')throw new Refusal('MODULE_EXAM_PROVIDER_UNAVAILABLE');
     const socket=join(p.root,'egress.sock');
     this.moduleExamEgress.set(input.jobId,await startModuleExamEgress(socket,provider));
     checkAbort();
@@ -276,6 +283,7 @@ export class NativeExecutionSupervisor extends NativeExecutionTerminalWork{
     workerMounts=workerMounts.filter(m=>m.destination!=='/account'&&m.destination!=='/work'&&m.destination!=='/runner/exec-token');
     workerMounts.push({source:socket,destination:moduleExamSocket,writable:false});
     if(provider==='codex')workerMounts.push({source:join(accountRoot,'.codex','auth.json'),destination:'/account/.codex/auth.json',writable:false});
+    if(provider==='grok')workerMounts.push({source:join(accountRoot,'.grok','auth.json'),destination:'/account/.grok/auth.json',writable:false});
     toolsMounts=[];
    }
   }catch(error){
