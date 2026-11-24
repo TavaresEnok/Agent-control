@@ -575,3 +575,18 @@ Ordem: `docs/ORDEM-CHATISP.md`. Equipe: `AGENTS.md`, seção "Equipe ChatISP". C
     - **ACH-206** (brotli v1.2.6, GO-2026-6888): a dependência é indireta. Só entra pelo ClickHouse do driver do `goose` no vendor. O código do ChatISP não usa ClickHouse, então o ponto não é alcançável. A correção é subir para a v1.2.7 na fase de correção.
     - **ACH-207** (`golang.org/x/net` v0.61.0, GO-2026-6860): o pacote `html` não está no vendor nem é importado, então o ponto não é alcançável (o mesmo vale para o ACH-222, já descartado). A correção é atualizar a dependência.
     - Nenhum alto exige correção urgente.
+- 24/11/2026 22:46 UTC — **Supervisor: conferência dos achados dos módulos 2 a 9 pelo Grok 4.7 (AC-22, por fora do produto), autorizada pelo titular.**
+  - **Como foi feita:**
+    - 816 achados prováveis (8 altos, 245 médios e 563 baixos) em 393 lotes, agrupados por arquivo.
+    - 6 Grok em paralelo, das 21:24 às 22:46: esforço alto nos altos e médio nos demais.
+    - Cópia só-leitura do commit 3d036bca, sem web, com diário.
+    - Os 1.188 informativos ficaram de fora.
+  - **Paradas por falso alarme de cota:** às 21:42 e às 22:02 a palavra "quota", que aparece no código do ChatISP, foi lida como falta de cota. A detecção foi corrigida e as duas rodadas retomaram do diário.
+  - **Resultado:**
+    - 585 confirmados, 211 descartados e 20 inconclusivos.
+    - Pela gravidade que o Grok julgou, os confirmados são 2 altos, 104 médios, 449 baixos e 30 informativos.
+    - Por módulo: banco teve 72 descartados de 205, conformidade 66 de 108, QA 20 de 65, arquitetura 20 de 194 e desempenho 13 de 162.
+  - **Altos confirmados:**
+    - **desempenho ACH-095:** N+1 na listagem do diretório de contatos (`contactdirectory/service.go:345`).
+    - **prontidão ACH-027:** FROM sem digest numa sonda histórica em `docs/medicoes`. Na prática é baixo, porque nenhum serviço usa essa sonda.
+  - **Evidência:** `/home/app/.agent-control/ispagent/verificacoes/98c62210-1fa3-4760-a16c-9ba38d694d63/conferencia-grok/RESULTADO.md` e `achados-conferidos.json`. É revisão independente por outro provedor, sem recibo assinado.
