@@ -525,3 +525,13 @@ Ordem: `docs/ORDEM-CHATISP.md`. Equipe: `AGENTS.md`, seção "Equipe ChatISP". C
     - Uma regra do css-analyzer contou 264 ocorrências duplicadas.
     - As confirmações saem uma chamada por ponto (332 de 442 chamadas até as 09:36).
   - **Disco:** fim em 89%. Nenhuma parada por cota.
+- 24/11/2026 15:10 UTC — **Supervisor: segurança retomada pelo produto, sem reexaminar.**
+  - **Correção do registro de 23/11 22:16:** a informação de que as rodadas do produto não tinham "trabalho aproveitável" estava errada. As pastas do relatório estavam vazias, mas os julgamentos estavam nos jobs nativos (`output/execution-result.json`), com recibo assinado no banco. Os 697 arquivos tinham sido julgados duas vezes: pelas execuções `dca139f0`, em 22/11, e `6e405337`, em 23/11. As duas caíram na confirmação, por cota e por relançamento, e o produto guardava o exame só na memória.
+  - **Correção no produto (`4f25234a`):**
+    - Diário do exame de segurança em `verificacoes/<projeto>/diario/seguranca-<commit>.jsonl`, com cada chamada do examinador e cada confirmação.
+    - Reaproveitamento só com o mesmo commit, o mesmo SHA-256 do arquivo e os mesmos itens.
+    - Os jobs antigos entram pelo recibo assinado e pelo hash da saída.
+    - O achado alto continua sempre ao vivo.
+    - Os testes passaram: `security-exam-journal` (4) e todos os `verify-*`/`exam-*`.
+  - **Execução `6370f6fc`, lançada às 14:56:** chegou à confirmação com 696 de 697 arquivos julgados e só 2 chamadas ao modelo, o mapa e 1 exame ao vivo. Faltam cerca de 223 confirmações: cerca de 197 achados do examinador e 26 das ferramentas. Elas ficam gravadas no diário, e se a rodada cair a próxima retoma.
+  - O servidor reiniciou por volta das 14:24. O gateway voltou sozinho. O banco de testes (porta 54333) foi recriado num contêiner descartável `ac-test-db-journal`.
