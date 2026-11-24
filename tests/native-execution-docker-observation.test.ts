@@ -31,3 +31,33 @@ test('a lost docker read stays uncertain and does not invent isolation facts',as
  f.worker.State={Status:'running',Running:true};await assert.rejects(()=>inspectNativeExecutionPair(f.read,ids,f.expected,f.rules),/NATIVE_EXECUTION_ISOLATION_MISMATCH|NATIVE_EXECUTION_INSPECTION_MISMATCH/);
  await assert.rejects(()=>dockerReadOnly('/tmp/ac-no-docker.sock')(`/v1.44/containers/${'ab'.repeat(32)}/json`),/DOCKER_UNCERTAIN/);
 });
+test('a busy docker read is asked again; a missing object is not',async()=>{
+ const {createServer}=await import('node:http');const {mkdtemp,rm}=await import('node:fs/promises');const {tmpdir}=await import('node:os');const {join}=await import('node:path');
+ const dir=await mkdtemp(join(tmpdir(),'ac-docker-read-'));const socket=join(dir,'d.sock');
+ let calls=0;const plan:string[]=[];
+ const server=createServer((req,res)=>{calls+=1;const step=plan.shift()??'ok';
+  if(step==='hang')return;/* never answers: the client times out */
+  if(step==='500'){res.statusCode=500;res.end('busy');return;}
+  if(step==='404'){res.statusCode=404;res.end('{}');return;}
+  res.setHeader('content-type','application/json');res.end(JSON.stringify({Id:'x'}));});
+ await new Promise<void>(ok=>server.listen(socket,ok));
+ try{
+  const read=dockerReadOnly(socket,{timeoutMs:200,attempts:3,pauseMs:1});const path=`/v1.44/containers/${'ab'.repeat(32)}/json`;
+  plan.push('hang','500');calls=0;assert.deepEqual(await read(path),{Id:'x'});assert.equal(calls,3);
+  plan.push('500','500','500');calls=0;await assert.rejects(()=>read(path),/DOCKER_UNCERTAIN/);assert.equal(calls,3);
+  plan.push('404');calls=0;await assert.rejects(()=>read(path),/DOCKER_UNCERTAIN/);assert.equal(calls,1);
+  await assert.rejects(()=>read('/v1.44/containers/x/stop'),/DOCKER_READ_FORBIDDEN/);
+ }finally{server.closeAllConnections();await new Promise(ok=>server.close(ok));await rm(dir,{recursive:true,force:true});}
+});
+test('a slow docker create is waited for up to the call limit',async()=>{
+ const {DockerDaemon,DOCKER_CALL_TIMEOUT_MS}=await import('../src/sandbox-broker.ts');
+ const {createServer}=await import('node:http');const {mkdtemp,rm}=await import('node:fs/promises');const {tmpdir}=await import('node:os');const {join}=await import('node:path');
+ assert.ok(DOCKER_CALL_TIMEOUT_MS>=60000);
+ const dir=await mkdtemp(join(tmpdir(),'ac-docker-slow-'));const socket=join(dir,'d.sock');const id='cd'.repeat(32);
+ const server=createServer((req,res)=>{req.resume();setTimeout(()=>{res.statusCode=201;res.setHeader('content-type','application/json');res.end(JSON.stringify({Id:id}));},150);});
+ await new Promise<void>(ok=>server.listen(socket,ok));
+ try{
+  assert.equal(await new DockerDaemon(socket,1000).create('ac-native-tools-x',{}),id);
+  await assert.rejects(()=>new DockerDaemon(socket,50).create('ac-native-tools-x',{}),/DOCKER_UNCERTAIN/);
+ }finally{server.closeAllConnections();await new Promise(ok=>server.close(ok));await rm(dir,{recursive:true,force:true});}
+});

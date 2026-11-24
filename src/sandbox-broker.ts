@@ -57,12 +57,15 @@ type Inspected=z.infer<typeof Inspect>;
 const InspectPrivateNetwork=z.object({Id:z.string().regex(/^[a-f0-9]{64}$/),Name:z.string().min(1),Internal:z.boolean(),
  Labels:z.record(z.string(),z.string()).nullish(),Containers:z.record(z.string(),z.object({IPv4Address:z.string().optional()}).passthrough()).nullish()}).passthrough();
 /** Fixed Docker API operations. No caller-controlled URL, image, shell or mount is accepted. */
+/** How long one Docker call may take. Under load (several jobs starting at once) a create or network call can pass 10 s; a lost
+ * answer to a create leaves the job uncertain and stops the whole exam, so waiting longer is the safe side. */
+export const DOCKER_CALL_TIMEOUT_MS=60000;
 export class DockerDaemon{
- constructor(private readonly socket=process.env.AC_DOCKER_SOCKET??'/var/run/docker.sock'){}
+ constructor(private readonly socket=process.env.AC_DOCKER_SOCKET??'/var/run/docker.sock',private readonly timeoutMs=DOCKER_CALL_TIMEOUT_MS){}
  private call(method:string,path:string,body?:unknown):Promise<{status:number;body:Buffer}>{
   return new Promise((ok,fail)=>{
    const payload=body===undefined?undefined:Buffer.from(JSON.stringify(body));
-   const request=httpRequest({socketPath:this.socket,method,path,headers:payload?{'content-type':'application/json','content-length':payload.length}:undefined,timeout:10000},response=>{
+   const request=httpRequest({socketPath:this.socket,method,path,headers:payload?{'content-type':'application/json','content-length':payload.length}:undefined,timeout:this.timeoutMs},response=>{
     const chunks:Buffer[]=[];let size=0;
     response.on('data',(chunk:Buffer)=>{size+=chunk.length;if(size>1024*1024){request.destroy();fail(new Refusal('DOCKER_RESPONSE_TOO_LARGE'));}else chunks.push(chunk);});
     response.on('end',()=>ok({status:response.statusCode??0,body:Buffer.concat(chunks)}));response.on('error',()=>fail(new Refusal('DOCKER_UNCERTAIN')));

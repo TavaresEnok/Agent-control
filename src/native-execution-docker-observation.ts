@@ -72,17 +72,28 @@ export async function inspectNativeExecutionPair(read:(path:string)=>Promise<unk
  assertNativeExecutionIsolation(facts,expected);
  return facts;
 }
-/** Unix socket access is read-only and limited to fixed Docker GET routes. */
-export function dockerReadOnly(socketPath:string){
+/** Unix socket access is read-only and limited to fixed Docker GET routes. A GET is idempotent, so a transient failure (timeout,
+ * lost socket, 5xx while the daemon is busy starting other jobs) is asked again, a few times, before it stays uncertain.
+ * A 4xx (missing container or network) is never retried. */
+export function dockerReadOnly(socketPath:string,options:{timeoutMs?:number;attempts?:number;pauseMs?:number}={}){
  if(!socketPath.startsWith('/')||socketPath.includes('\0'))throw new Refusal('DOCKER_SOCKET_INVALID');
- return (path:string)=>new Promise<unknown>((ok,fail)=>{
-  if(!/^\/v1\.44\/(?:containers\/[a-f0-9]{64}\/json|networks\/[a-f0-9]{64})$/.test(path)){fail(new Refusal('DOCKER_READ_FORBIDDEN'));return;}
-  const req=request({socketPath,method:'GET',path,timeout:5000},res=>{
+ const timeoutMs=options.timeoutMs??15000,attempts=Math.max(1,options.attempts??3),pauseMs=options.pauseMs??1000;
+ const once=(path:string)=>new Promise<{value?:unknown;transient?:boolean}>((ok,fail)=>{
+  const req=request({socketPath,method:'GET',path,timeout:timeoutMs},res=>{
    const chunks:Buffer[]=[];let size=0;
    res.on('data',(chunk:Buffer)=>{size+=chunk.length;if(size>1048576){req.destroy();fail(new Refusal('DOCKER_RESPONSE_TOO_LARGE'));}else chunks.push(chunk);});
-   res.on('end',()=>{if(res.statusCode!==200){fail(new Refusal('DOCKER_UNCERTAIN'));return;}try{ok(JSON.parse(Buffer.concat(chunks).toString('utf8')));}catch{fail(new Refusal('DOCKER_RESPONSE_INVALID'));}});
-   res.on('error',()=>fail(new Refusal('DOCKER_UNCERTAIN')));
+   res.on('end',()=>{const status=res.statusCode??0;if(status>=500){ok({transient:true});return;}if(status!==200){fail(new Refusal('DOCKER_UNCERTAIN'));return;}try{ok({value:JSON.parse(Buffer.concat(chunks).toString('utf8'))});}catch{fail(new Refusal('DOCKER_RESPONSE_INVALID'));}});
+   res.on('error',()=>ok({transient:true}));
   });
-  req.on('timeout',()=>req.destroy());req.on('error',()=>fail(new Refusal('DOCKER_UNCERTAIN')));req.end();
+  req.on('timeout',()=>req.destroy());req.on('error',()=>ok({transient:true}));req.end();
  });
+ return async(path:string):Promise<unknown>=>{
+  if(!/^\/v1\.44\/(?:containers\/[a-f0-9]{64}\/json|networks\/[a-f0-9]{64})$/.test(path))throw new Refusal('DOCKER_READ_FORBIDDEN');
+  for(let attempt=1;;attempt+=1){
+   const answer=await once(path);
+   if(!answer.transient)return answer.value;
+   if(attempt>=attempts)throw new Refusal('DOCKER_UNCERTAIN');
+   await new Promise(resolve=>setTimeout(resolve,pauseMs*attempt));
+  }
+ };
 }
