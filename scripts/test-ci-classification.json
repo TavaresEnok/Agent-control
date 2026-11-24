@@ -302,6 +302,7 @@
   "sandbox-retirement-terminal.test.ts",
   "sandbox.test.ts",
   "security-exam-journal.test.ts",
+  "personal-verify-retry.test.ts",
   "session-link.test.ts",
   "sessions.test.ts",
   "slo-evaluation.test.ts",

@@ -47,9 +47,17 @@ export function verifyCliFailureText(error:unknown):string{
  return messages[code]??(code||'A verificação falhou.');
 }
 
+/** Failures that a new attempt usually clears: the Docker daemon was too busy to answer. The exam journal keeps the work done. */
+export const TRANSIENT_VERIFY_CODES=new Set(['DOCKER_UNCERTAIN','DOCKER_CREATE_UNCERTAIN','DOCKER_START_UNCERTAIN','DOCKER_NETWORK_UNCERTAIN']);
+/** Exit status for a transient failure (EX_TEMPFAIL); `npm run personal:verify` starts a new attempt on it. */
+export const VERIFY_TRANSIENT_EXIT=75;
+export function verifyCliExitCode(error:unknown):number{
+ return error instanceof Refusal&&TRANSIENT_VERIFY_CODES.has(error.code)?VERIFY_TRANSIENT_EXIT:1;
+}
+
 function fail(error:unknown):never{
  console.error(verifyCliFailureText(error));
- process.exit(1);
+ process.exit(verifyCliExitCode(error));
  throw error instanceof Error?error:new Error('A verificação falhou.');
 }
 
