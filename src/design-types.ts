@@ -52,6 +52,8 @@ export type DesignMeasure = z.infer<typeof DesignMeasure>;
 export const DesignOccurrences = z.object({
   count: z.number().int().min(2).max(1_000_000),
   locations: z.array(z.string().min(1).max(160)).max(60),
+  /** Só no achado que juntou rotas diferentes com o mesmo valor: todas as rotas cobertas. */
+  routes: z.array(z.string().min(1).max(200)).max(200).optional(),
 }).strict();
 export type DesignOccurrences = z.infer<typeof DesignOccurrences>;
 

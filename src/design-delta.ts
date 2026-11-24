@@ -1,4 +1,5 @@
 import {designFingerprint, type DesignRawFinding} from './design-types.ts';
+import {wallaceDeltaFiles} from './design-wallace.ts';
 
 /** Só ferramentas que dão o mesmo resultado na mesma tela. O modelo fica de fora. */
 export const DESIGN_DELTA_TOOLS: readonly string[] = [
@@ -39,8 +40,11 @@ function byKey(findings: readonly DesignRawFinding[], tools: ReadonlySet<string>
   const map = new Map<string, DesignDeltaItem>();
   for (const finding of findings) {
     if (!tools.has(finding.tool)) continue;
-    const key = deltaKey(finding);
-    if (!map.has(key)) map.set(key, {tool: finding.tool, rule: finding.rule, file: finding.file, line: finding.line});
+    // O achado do css-analyzer agrupado vale por cada rota que cobre, como as medições soltas de antes.
+    for (const file of wallaceDeltaFiles(finding)) {
+      const key = deltaKey({...finding, file});
+      if (!map.has(key)) map.set(key, {tool: finding.tool, rule: finding.rule, file, line: finding.line});
+    }
   }
   return map;
 }

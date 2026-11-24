@@ -544,8 +544,10 @@ function repeatedText(finding: DesignRawFinding): string {
   const occurrences = finding.occurrences;
   if (occurrences === undefined) return '';
   const shown = occurrences.locations.join('; ');
-  const more = occurrences.count > occurrences.locations.length ? `; e mais ${occurrences.count - occurrences.locations.length}` : '';
-  return ` Mesma regra em ${occurrences.count} capturas (maior valor): ${shown}${more}.`;
+  const total = occurrences.routes?.length ?? occurrences.count;
+  const more = total > occurrences.locations.length ? `; e mais ${total - occurrences.locations.length}` : '';
+  const scope = occurrences.routes ? `${occurrences.routes.length} rotas e ${occurrences.count} capturas, com o mesmo valor` : `${occurrences.count} capturas (maior valor)`;
+  return ` Mesma regra em ${scope}: ${shown}${more}.`;
 }
 
 function routeDownAchado(index: number, finding: DesignRawFinding): DesignAchadoValue {

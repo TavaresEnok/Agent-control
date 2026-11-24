@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {test} from 'node:test';
+import {Refusal} from '../src/contracts.ts';
 import {collectDesignFindings} from '../src/design-collect.ts';
 import {loadDesignChecklist} from '../src/design-checklist.ts';
-import {discoverRoutesFromSource, isApiRoute, isNonScreenFile} from '../src/design-discover.ts';
+import {compareDesignRuns} from '../src/design-delta.ts';
+import {discoverRoutesFromSource, dynamicRoutesMissingExample, isApiRoute, isNonScreenFile} from '../src/design-discover.ts';
 import {DESIGN_CONFIRM_BATCH_MAX, examineDesignScreens, type DesignSeat} from '../src/design-examine.ts';
 import {assembleAchados, screenRoutesForExam} from '../src/design-module.ts';
 import type {DesignWorker} from '../src/design-types.ts';
@@ -31,6 +33,7 @@ test('arquivo de teste, especificação, história, mock e página de rota desco
     'index.html',
     'src/testimonials.tsx',
     'src/pages/found.tsx',
+    'public/500.html',
     'tests/fixtures/design-lab/src/App.tsx',
   ]) assert.equal(isNonScreenFile(path), false, path);
 });
@@ -59,6 +62,14 @@ test('rota servida de /api ou de página que não é tela não entra no exame', 
   ];
   const routes = screenRoutesForExam(files, [{route: '/unknown-page'}, {route: '/contatos'}, {route: '/api/panel'}]);
   assert.deepEqual(routes.map(item => item.route), ['/contatos']);
+});
+
+test('rota dinâmica de /api ou de arquivo de teste não aparece como dinâmica sem exemplo', () => {
+  const skipped = dynamicRoutesMissingExample([
+    {path: 'web/src/routes.tsx', text: '<Route path="/contatos/:id" element={<A />} />\n<Route path="/api/x/:id" element={<B />} />'},
+    {path: 'web/src/a.test.tsx', text: '<Route path="/so-teste/:id" element={<C />} />'},
+  ]);
+  assert.deepEqual(skipped, ['/contatos/:id']);
 });
 
 test('arquivo de teste não gera achado estático de tela', () => {
@@ -117,6 +128,42 @@ test('rota medida uma vez e regras diferentes não se juntam', () => {
   const fonts = findings.find(item => item.rule === 'DESIGN-WALLACE-FONTES')!;
   assert.equal(fonts.occurrences?.count, 2);
   assert.equal(fonts.measure?.kind === 'wallace' ? fonts.measure.value : 0, 10);
+});
+
+test('a mesma folha medida em várias rotas, com o mesmo valor, é um achado só com a lista das rotas', () => {
+  const entries = [] as {file: string; report: unknown}[];
+  for (const route of ['/a', '/b', '/c']) {
+    for (const viewport of [375, 768]) entries.push({file: computed(route, viewport, 'claro', 'padrao'), report: REPORT(87)});
+  }
+  entries.push({file: computed('/d', 375, 'claro', 'padrao'), report: REPORT(87)});
+  entries.push({file: computed('/e', 375, 'claro', 'padrao'), report: REPORT(40)});
+  const findings = collectDesignFindings([], {cssAnalyzer: entries});
+  assert.equal(findings.length, 2);
+  const shared = findings.find(item => item.occurrences?.routes !== undefined)!;
+  assert.deepEqual(shared.occurrences?.routes, ['/a', '/b', '/c', '/d']);
+  assert.equal(shared.occurrences?.count, 7);
+  assert.equal(shared.file, 'computado /a e mais 3 rotas');
+  assert.ok(shared.occurrences?.locations.includes('/b (2 capturas): 87'));
+  assert.equal(findings.find(item => item.file === computed('/e', 375, 'claro', 'padrao'))?.occurrences, undefined);
+  const achado = assembleAchados(findings, [])[0]!;
+  assert.match(achado.proof, /Mesma regra em 4 rotas e 7 capturas, com o mesmo valor/);
+});
+
+test('o delta não vê achado novo nem ausente só porque o css-analyzer passou a vir agrupado', () => {
+  const entries = [] as {file: string; report: unknown}[];
+  for (const route of ['/a', '/b']) {
+    for (const viewport of [375, 768]) entries.push({file: computed(route, viewport, 'claro', 'padrao'), report: REPORT(87)});
+  }
+  const grouped = collectDesignFindings([], {cssAnalyzer: entries});
+  const oldStyle = entries.flatMap(entry => wallaceFindings(entry.file, entry.report));
+  assert.equal(oldStyle.length, 4);
+  assert.equal(grouped.length, 1);
+  const delta = compareDesignRuns({findings: oldStyle}, {findings: grouped});
+  assert.equal(delta.novos.length, 0);
+  assert.equal(delta.ausentes.length, 0);
+  assert.equal(delta.mantidos.length, 2);
+  const back = compareDesignRuns({findings: grouped}, {findings: grouped});
+  assert.equal(back.mantidos.length, 2);
 });
 
 test('arquivo que não é captura não é agrupado', () => {
@@ -283,4 +330,37 @@ test('mais pontos que o limite vão em chamadas seguidas', async () => {
   assert.equal(tasks.filter(task => task.startsWith('Pedido de confirmação em lote.')).length, 2);
   assert.equal(tasks.filter(task => task.startsWith('Pedido de confirmação.')).length, 0);
   assert.equal(result.confirmations.length, total);
+});
+
+test('falha do provedor no lote entra na cobertura do revisor e os pontos seguem um a um', async () => {
+  const k = seats();
+  const tasks: string[] = [];
+  const inner = confirmWorker(tasks, 2);
+  const worker: DesignWorker = {
+    async run(call) {
+      if (call.task.startsWith('Pedido de confirmação em lote.')) {
+        tasks.push(call.task);
+        throw new Error('rede caiu');
+      }
+      return inner.run(call);
+    },
+  };
+  const result = await examineDesignScreens({...base, intentId: randomUUID(), screens: oneScreen, batch: BATCH, worker, reserve: k.reserve, release: k.release});
+  assert.equal(result.modelCoverage.reviewer.failure, 'EXECUTION_NATIVE_FAILED');
+  assert.ok(result.notes.some(note => note.includes('confirmação em lote') && note.includes('EXECUTION_NATIVE_FAILED') && note.includes('um a um')));
+  assert.equal(result.confirmations.length, 2);
+  assert.equal(tasks.filter(task => task.startsWith('Pedido de confirmação.')).length, 2);
+});
+
+test('login vencido no lote para o exame, sem chamadas individuais', async () => {
+  const k = seats();
+  const worker: DesignWorker = {
+    async run(call) {
+      if (call.task.startsWith('Pedido de confirmação em lote.')) throw new Refusal('EXAM_LOGIN_STALE', 409);
+      return confirmWorker([], 2).run(call);
+    },
+  };
+  const result = await examineDesignScreens({...base, intentId: randomUUID(), screens: oneScreen, batch: BATCH, worker, reserve: k.reserve, release: k.release});
+  assert.equal(result.loginStale, true);
+  assert.equal(result.confirmations.length, 0);
 });

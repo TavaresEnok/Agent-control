@@ -664,6 +664,7 @@ async function confirmFindingsBatch(
   code: string,
   captures: readonly DesignScreenCapture[] | undefined,
   noteModel: (model: string) => void,
+  noteFailure: (code: string) => void,
   avoid?: DesignReserveOptions,
 ): Promise<{seat: DesignSeat; verdicts: Map<number, DesignConfirmResult>} | null> {
   const seat = await input.reserve('reviewer', undefined, avoid);
@@ -684,10 +685,15 @@ async function confirmFindingsBatch(
       writePaths: [] as const,
     });
     const hit = await runModel(input.worker, call);
-    if (hit.failure) return null;
+    if (hit.failure) {
+      // O código do provedor fica na cobertura do revisor. Os pontos seguem para a confirmação sozinha, como sem lote.
+      noteFailure(hit.failure);
+      return null;
+    }
     return {seat, verdicts: confirmationBatchVerdicts(parseJson(hit.output), findings.length)};
   } catch (error) {
     if (rethrowReviewer(error)) throw error;
+    noteFailure(error instanceof Refusal ? safeFailureCode(error.code) : 'EXECUTION_NATIVE_FAILED');
     return null;
   } finally {
     await input.release(seat);
@@ -701,6 +707,7 @@ async function confirmInBatches(
   code: string,
   captures: readonly DesignScreenCapture[] | undefined,
   noteModel: (model: string) => void,
+  noteFailure: (code: string) => void,
   avoid: DesignReserveOptions,
   notes: string[],
 ): Promise<Map<DesignExamFinding, {seat: DesignSeat; confirm: DesignConfirmResult}>> {
@@ -709,8 +716,12 @@ async function confirmInBatches(
   for (let start = 0; start < findings.length; start += DESIGN_CONFIRM_BATCH_MAX) {
     const group = findings.slice(start, start + DESIGN_CONFIRM_BATCH_MAX);
     if (group.length < 2) continue;
-    const batch = await confirmFindingsBatch(input, group, code, captures, noteModel, avoid);
-    if (!batch) continue;
+    let failed: string | null = null;
+    const batch = await confirmFindingsBatch(input, group, code, captures, noteModel, failure => { failed ??= failure; noteFailure(failure); }, avoid);
+    if (!batch) {
+      notes.push(`A confirmação em lote de ${group[0]?.file ?? 'tela'} falhou com ${failed ?? 'EXECUTION_NATIVE_FAILED'}; os ${group.length} pontos foram confirmados um a um.`);
+      continue;
+    }
     group.forEach((finding, at) => {
       const confirm = batch.verdicts.get(at + 1);
       if (confirm) result.set(finding, {seat: batch.seat, confirm});
@@ -970,6 +981,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
         screen.code,
         screen.captures,
         model => remember('reviewer', model),
+        code => noteFailure('reviewer', code),
         reviewAvoid,
         notes,
       );
@@ -1059,6 +1071,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
           screen.code,
           screen.captures,
           model => remember('reviewer', model),
+          code => noteFailure('reviewer', code),
           reviewAvoid,
           notes,
         );

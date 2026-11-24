@@ -47,7 +47,7 @@ type RouteHit = {
 
 const TEST_FILE = /\.(?:test|spec|stories|story)\.[cm]?[jt]sx?$|\.d\.ts$/i;
 const TEST_DIRECTORY = /^(?:__tests__|__mocks__|__fixtures__|e2e|cypress)$/i;
-const NOT_A_SCREEN_PAGE = /(?:^|[-_.])(?:unknown|not-?found|404|500)(?:[-_.]?page)?$/i;
+const NOT_A_SCREEN_PAGE = /(?:^|[-_.])(?:unknown|not-?found|404)(?:[-_.]?page)?$/i;
 const PAGE_FILE = /^page\.(tsx|ts|jsx|js)$/;
 const SOURCE_FILE = /\.(tsx|ts|jsx|js)$/;
 const LIST_MARKER = /<ul\b|<ol\b|data-list(?![A-Za-z0-9-])|role\s*=\s*(?:\{\s*)?(["'])list\1|role\s*=\s*list\b/;
@@ -55,7 +55,7 @@ const EMPTY_MARKER = /data-empty(?![A-Za-z0-9-])|Nenhum item|empty-state|length\
 
 /**
  * Arquivo que não é tela: teste, especificação, história de componente, mock, fixture, declaração de tipos
- * ou página de rota desconhecida (`unknown-page`, `not-found`, `404`). O exame de telas não lê esses arquivos.
+ * ou página de rota desconhecida (`unknown-page`, `not-found`, `404`; a `500` é página que o usuário vê e continua tela). O exame de telas não lê esses arquivos.
  */
 export function isNonScreenFile(path: string): boolean {
   const parts = path.replace(/\\/g, '/').split('/').filter(part => part.length > 0);
@@ -80,8 +80,9 @@ export function isApiRoute(route: string): boolean {
 export function dynamicRoutesMissingExample(files: readonly {path: string; text: string}[]): string[] {
   const skipped = new Set<string>();
   for (const file of files) {
+    if (isNonScreenFile(file.path)) continue;
     const next = nextRoute(file.path);
-    if (next !== null && isDynamicRoute(next)) skipped.add((next.split(/[?#]/)[0] ?? next));
+    if (next !== null && isDynamicRoute(next) && !isApiRoute(next)) skipped.add((next.split(/[?#]/)[0] ?? next));
     const masked = maskComments(file.text);
     const opener = /<Route(?![A-Za-z0-9_])/g;
     let found: RegExpExecArray | null;
@@ -93,7 +94,7 @@ export function dynamicRoutesMissingExample(files: readonly {path: string; text:
       const raw = pathMatch?.[2];
       if (!raw) continue;
       const route = normalizeRoute(raw);
-      if (route === null || !isDynamicRoute(route) || declaredExample(tag) !== null) continue;
+      if (route === null || !isDynamicRoute(route) || isApiRoute(route) || declaredExample(tag) !== null) continue;
       skipped.add(route.split(/[?#]/)[0] ?? route);
     }
   }
