@@ -12,6 +12,25 @@ import {Id,retireNativePrivateNetwork} from './native-execution-shared.ts';
 import {fenceInstallationContext} from './installation-authority-fence.ts';
 import {NativeExecutionReconciler} from './native-execution-reconcile.ts';
 export abstract class NativeExecutionRetirement extends NativeExecutionReconciler{
+ /**
+  * The tools companion of a job whose worker already exited (an exam run that stopped mid-way leaves it up). Returns its id
+  * only when the worker is confirmed stopped and the companion is bound to this job by name, recorded id, labels (job, contract,
+  * launch) and pinned image; anything else returns undefined and the normal checks decide.
+  */
+ protected async idleRunningCompanion(row:Record<string,any>):Promise<string|undefined>{
+  if(!row.worker_id||!row.tools_id||row.executor_digest!==this.executorDigest)return undefined;
+  try{
+   const [worker,tools,toolsByName]=await Promise.all([this.docker.inspect(row.worker_id),this.docker.inspect(row.tools_id),this.docker.inspect('ac-native-tools-'+row.id)]);
+   if(!worker||!tools||!toolsByName||tools.Id!==row.tools_id||toolsByName.Id!==row.tools_id)return undefined;
+   if(worker.State.Running||worker.Name!=='/ac-native-worker-'+row.id||worker.Config.Labels['agent-control.job']!==row.id)return undefined;
+   const labels=tools.Config.Labels;
+   if(!tools.State.Running||tools.Name!=='/ac-native-tools-'+row.id||tools.Image!==this.config.toolsImage||labels['agent-control.job']!==row.id||
+    labels['agent-control.contract']!=='native-execution-v1'||labels['agent-control.launch']!==row.input_digest)return undefined;
+   return row.tools_id;
+  }catch{
+   return undefined;
+  }
+ }
  protected async stoppedNativeContainers(row:Record<string,any>,refusal:string){
   try{
    const ids:string[]=[];

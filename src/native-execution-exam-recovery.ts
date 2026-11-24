@@ -17,6 +17,7 @@ import {NativeExecutionSupervisorCore} from './native-execution-core.ts';
 export abstract class NativeExecutionExamRecovery extends NativeExecutionSupervisorCore{
  protected abstract stoppedNativeContainers(row:Record<string,any>,refusal:string):Promise<string[]>;
  protected abstract removeStoppedNativeContainers(row:Record<string,any>,ids:string[],refusal:string):Promise<void>;
+ protected abstract idleRunningCompanion(row:Record<string,any>):Promise<string|undefined>;
  protected validPreLaunchExamReceipt(physical:unknown,jobId:string,synthetic:boolean){
   const parsed=PreLaunchExamPhysicalReceipt.safeParse(physical);
   return parsed.success&&parsed.data.jobId===jobId&&parsed.data.synthetic===synthetic;
@@ -265,7 +266,10 @@ export abstract class NativeExecutionExamRecovery extends NativeExecutionSupervi
    const result=await this.orphanedExamResult(jobId);
    if(result&&row.physical_receipt?.executionStarted===false)throw new Refusal('NATIVE_EXECUTION_RECEIPT_MISMATCH');
    const containerRefusal='NATIVE_ORPHAN_CONTAINER_PRESENT';
-   const stopped=await this.stoppedNativeContainers(row,containerRefusal);
+   // The worker finished but its tools companion is still up: stop it on apply; the preview only reports it.
+   const idleCompanion=await this.idleRunningCompanion(row);
+   if(idleCompanion&&apply)await this.docker.stop(idleCompanion);
+   const stopped=idleCompanion&&!apply?[]:await this.stoppedNativeContainers(row,containerRefusal);
    // A recorded worker could have started even if it never wrote a result.
    const executionStarted=Boolean(result||(row.worker_id&&row.physical_receipt?.executionStarted!==false));
    if(!executionStarted){
