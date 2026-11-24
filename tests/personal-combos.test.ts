@@ -7,7 +7,7 @@ import {test} from 'node:test';
 import {Capacity} from '../src/capacity.ts';
 import {Refusal} from '../src/contracts.ts';
 import {Ledger} from '../src/ledger.ts';
-import {applyPersonalCombo,builtinCombos,findPersonalCombo,readOwnerCombos,writeOwnerCombo} from '../src/personal-combos.ts';
+import {applyPersonalCombo,builtinCombos,findPersonalCombo,readOwnerCombos,setPersonalEvaluators,writeOwnerCombo} from '../src/personal-combos.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
 test('complexo keeps Opus regular, Sol emergency and four programmers',()=>{
@@ -113,6 +113,15 @@ test('complexo refuses without Codex and publishes Opus regular, Sol emergency a
   assert.equal(snapshot.roles.programmer.regular.length,4);
   assert.deepEqual(snapshot.roles.programmer.regular,[...applied.programmerStandard,...applied.programmerBasic]);
   assert.equal(Number((await db.pool.query('SELECT capacity_policy_revision FROM ac_contexts WHERE id=$1',[context])).rows[0].capacity_policy_revision),applied.revision);
+  // Only the evaluator limit changes; roles and the rest of the policy stay, and the open context moves to the new revision.
+  await assert.rejects(setPersonalEvaluators(db,principal,project,5),(error:unknown)=>error instanceof Refusal&&error.code==='COMBO_USAGE');
+  await assert.rejects(setPersonalEvaluators(db,'outro',project,4),(error:unknown)=>error instanceof Refusal&&error.code==='PROJECT_OWNER_REQUIRED');
+  const set=await setPersonalEvaluators(db,principal,project,4);
+  assert.equal(set.revision,applied.revision+1);
+  const after=(await db.pool.query('SELECT snapshot FROM ac_policy_revisions WHERE project_id=$1 AND revision=$2',[project,set.revision])).rows[0].snapshot;
+  assert.equal(after.maxEvaluatorsPerContext,4);
+  assert.deepEqual({...after,maxEvaluatorsPerContext:snapshot.maxEvaluatorsPerContext},snapshot);
+  assert.equal(Number((await db.pool.query('SELECT capacity_policy_revision FROM ac_contexts WHERE id=$1',[context])).rows[0].capacity_policy_revision),set.revision);
  }finally{await db.close();await database.close();await rm(dir,{recursive:true,force:true});}
 });
 

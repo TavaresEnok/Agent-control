@@ -83,8 +83,10 @@ export async function reserveWithCapacityQueue(input: {
   authority: Authority;
   request: Omit<z.input<typeof GrantRequest>, 'attemptId'>;
   capacityWait?: ExamCapacityWaitOptions;
+  /** Parallel reservations of one intent each keep their own wait under a distinct lane. Absent is the single lane. */
+  lane?: string;
 }): Promise<ReservedSeatGrant> {
-  const scopeKey = `${input.authority.contextId}:${input.request.intentId}`;
+  const scopeKey = `${input.authority.contextId}:${input.request.intentId}${input.lane ? `:${input.lane}` : ''}`;
   const requestKey = digest({epoch: input.authority.epoch, ...input.request});
   const previous = pendingWaitsByScope.get(scopeKey);
   let attemptId: string;
@@ -477,6 +479,8 @@ export async function reserveSpecialistExamSeat(input: {
   preferEmergencyFirst?: boolean;
   unavailableCode?: string;
   capacityWait?: ExamCapacityWaitOptions;
+  /** See reserveWithCapacityQueue: one lane per parallel reservation of the same intent. */
+  lane?: string;
   releaseGrant: (grantId: string) => Promise<void>;
 }): Promise<SpecialistExamSeat> {
   const avoidProfiles = uniqueReservationIds(input.avoidProfileId, input.avoidProfileIds);
@@ -562,6 +566,7 @@ export async function reserveSpecialistExamSeat(input: {
         principal: input.principal,
         authority: input.authority,
         ...(input.capacityWait ? {capacityWait: input.capacityWait} : {}),
+        ...(input.lane ? {lane: input.lane} : {}),
         request: {
           intentId: input.intentId,
           contextId: input.authority.contextId,
@@ -623,6 +628,7 @@ export async function reserveSpecialistExamSeat(input: {
         principal: input.principal,
         authority: input.authority,
         ...(input.capacityWait ? {capacityWait: input.capacityWait} : {}),
+        ...(input.lane ? {lane: input.lane} : {}),
         request: {
           intentId: input.intentId,
           contextId: input.authority.contextId,

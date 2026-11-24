@@ -42,6 +42,14 @@ const ARCHIVE_TIMEOUT_MS = 60_000;
 
 /** Economy options of a project that shape one exam. The panel and the CLI both build them here, so the same project and inventory give the same map, tasks and slices. */
 export type ExamRunOptions = {mapEnabled: boolean; batch: SecurityBatch; pollBackoff: boolean; productionOnly: boolean};
+/** Module 1 confirmations: how many at once and which reviewer confirms the findings that are not high. */
+export function securityConfirmOptions(economy: {securityConfirmations?: number; securityReviewer?: {model: string; effort: string}} | undefined):
+  {confirmConcurrency: number; reviewer?: {model: string; effort: string}} {
+  return {
+    confirmConcurrency: economy?.securityConfirmations ?? 1,
+    ...(economy?.securityReviewer ? {reviewer: {...economy.securityReviewer}} : {}),
+  };
+}
 export function examRunOptions(economy: {map?: boolean; batch?: boolean; batchTokens?: number; batchFiles?: number; managerDiscipline?: boolean;
   securityProductionOnly?: boolean} | undefined): ExamRunOptions {
   return {
@@ -82,6 +90,8 @@ export type PersonalVerificationInput = {
   batch?: SecurityBatch;
   pollBackoff?: boolean;
   productionOnly?: boolean;
+  confirmConcurrency?: number;
+  reviewer?: {model: string; effort: string};
   wait?: (ms: number, signal?: AbortSignal) => Promise<void>;
   accountRoot?: string;
   allowedAccountIds?: readonly string[];
@@ -179,6 +189,8 @@ type ReadyVerification = {
   batch?: SecurityBatch;
   pollBackoff?: boolean;
   productionOnly?: boolean;
+  confirmConcurrency?: number;
+  reviewer?: {model: string; effort: string};
   importExamJobs?: () => Promise<readonly ImportedExamJob[]>;
   wait?: (ms: number, signal?: AbortSignal) => Promise<void>;
   accountRoot?: string;
@@ -238,6 +250,8 @@ function requireReady(input: PersonalVerificationInput): ReadyVerification {
     batch: input.batch,
     pollBackoff: input.pollBackoff,
     productionOnly: input.productionOnly,
+    ...(input.confirmConcurrency !== undefined ? {confirmConcurrency: input.confirmConcurrency} : {}),
+    ...(input.reviewer ? {reviewer: {...input.reviewer}} : {}),
     ...(input.importExamJobs ? {importExamJobs: input.importExamJobs} : {}),
     ...(input.wait ? {wait: input.wait} : {}),
     modelCallBudget: typeof input.modelCallBudget === 'number' ? input.modelCallBudget : undefined,
@@ -631,6 +645,8 @@ async function runJob(input: {
         batch: ready.batch,
         pollBackoff: ready.pollBackoff,
         productionOnly: ready.productionOnly,
+        ...(ready.confirmConcurrency !== undefined ? {confirmConcurrency: ready.confirmConcurrency} : {}),
+        ...(ready.reviewer ? {reviewer: ready.reviewer} : {}),
         // Every examiner call and confirmation is kept as it returns: a run that stops resumes where it stopped.
         ...(ready.staticPolicy ? {journalPath: securityJournalPath(ready.dataDirectory, ready.projectId, ready.commit)} : {}),
         ...(ready.staticPolicy && ready.importExamJobs ? {importExamJobs: ready.importExamJobs} : {}),
@@ -972,6 +988,7 @@ export async function resolvePersonalVerification(
         batch: examRunOptions(project.economy).batch,
         pollBackoff: examRunOptions(project.economy).pollBackoff,
         productionOnly: examRunOptions(project.economy).productionOnly,
+        ...securityConfirmOptions(project.economy),
         url: parsed.url,
         dataDirectory: config.dataDirectory,
         accountRoot: personalAccountRoot(config),

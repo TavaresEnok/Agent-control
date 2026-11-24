@@ -3,10 +3,10 @@ import {pathToFileURL} from 'node:url';
 import {Refusal} from './contracts.ts';
 import {loadInstallation,type Installation} from './installation.ts';
 import {Ledger} from './ledger.ts';
-import {applyPersonalCombo,describeAppliedCombo,listPersonalCombos,projectComboName,type PersonalCombo} from './personal-combos.ts';
+import {applyPersonalCombo,setPersonalEvaluators,describeAppliedCombo,listPersonalCombos,projectComboName,type PersonalCombo} from './personal-combos.ts';
 import {personalComboRefusal} from './personal-conversation.ts';
 
-const usage='Uso: npm run personal:combo -- <instalação.json> <projeto> list|apply <nome>';
+const usage='Uso: npm run personal:combo -- <instalação.json> <projeto> list|apply <nome>|avaliadores <1-4>';
 
 function project(config:Installation,token:string){
  const hits=[config.project,...config.projects].filter(item=>item.id===token||item.label===token);
@@ -36,7 +36,8 @@ export function formatListedCombo(combo:PersonalCombo,current:boolean){
 export async function runPersonalComboCli(argv:string[]){
  const [file,token,action,name]=argv;
  const trimmed=name?.trim()??'';
- if(!file||!token||!action||file.startsWith('--')||token.startsWith('--')||!['list','apply'].includes(action))throw new Refusal('COMBO_USAGE');
+ if(!file||!token||!action||file.startsWith('--')||token.startsWith('--')||!['list','apply','avaliadores'].includes(action))throw new Refusal('COMBO_USAGE');
+ if(action==='avaliadores'&&(argv.length!==4||!/^[1-4]$/.test(trimmed)))throw new Refusal('COMBO_USAGE');
  if(action==='list'&&argv.length!==3)throw new Refusal('COMBO_USAGE');
  if(action==='apply'&&(argv.length!==4||!trimmed||trimmed.length>80||trimmed.startsWith('--')))throw new Refusal('COMBO_USAGE');
  const config=await loadInstallation(file),selected=project(config,token);
@@ -48,6 +49,10 @@ export async function runPersonalComboCli(argv:string[]){
    const lines=[`Combo atual: ${current??'nenhum'}`];
    for(const combo of listed.combos){lines.push('');lines.push(formatListedCombo(combo,combo.name===current));}
    return lines;
+  }
+  if(action==='avaliadores'){
+   const set=await setPersonalEvaluators(ledger,selected.owner,selected.id,Number(trimmed));
+   return [`Avaliadores por contexto: ${set.maxEvaluatorsPerContext} (política ${set.revision}).`];
   }
   return [describeAppliedCombo(await applyPersonalCombo(ledger,selected.owner,selected.id,trimmed,config.dataDirectory))];
  }finally{await ledger.close();}

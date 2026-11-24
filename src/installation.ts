@@ -34,7 +34,11 @@ export const ProjectEconomy=z.object({map:z.boolean().default(true),measurement:
  /** Módulos 2 a 9: cada módulo examina só os arquivos do seu escopo. false volta a mandar tudo. */
  scope:z.boolean().default(true),
  /** Módulo 1: testes, documentação e gerados ficam fora do modelo (as ferramentas seguem lendo). false volta a mandar tudo. */
- securityProductionOnly:z.boolean().default(true),designEffort:z.enum(['medium','high']).default('high')}).strict();
+ securityProductionOnly:z.boolean().default(true),designEffort:z.enum(['medium','high']).default('high'),
+ /** Módulo 1: confirmações ao mesmo tempo (1 a 4). O limite de avaliadores da política continua valendo. */
+ securityConfirmations:z.number().int().min(1).max(4).default(1),
+ /** Módulo 1: modelo e esforço do revisor dos achados que não são altos. Ausente mantém a cadeia. O alto segue com o Opus. */
+ securityReviewer:z.object({model:z.string().min(1).max(100),effort:z.enum(['low','medium','high'])}).strict().optional()}).strict();
 const projectDefinition=z.object({economy:ProjectEconomy.optional(),allowedAccountIds:z.array(z.uuid()).min(1).max(8).refine(ids=>new Set(ids).size===ids.length,'Duplicate allowed account').optional(),id:z.uuid(),label:z.string().min(1).max(200),repo:absolute,owner:z.string().min(1).max(200),publishedOrigin:httpsOrigin().optional(),publishedOrigins:z.array(httpsOrigin()).max(16).optional()}).strict();
 export const InstallationObject=z.object({schemaVersion:z.literal(1),mode:z.literal('administration-only'),
  activation:z.enum(['locked','personal']).default('locked'),

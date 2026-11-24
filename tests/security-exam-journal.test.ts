@@ -93,7 +93,7 @@ test('jobs antigos: só entra o job com recibo assinado, saída íntegra e as me
   } finally { await rm(host, {recursive: true, force: true}); }
 });
 
-async function bootVerify(label: string) {
+async function bootVerify(label: string, evaluators = 1) {
   const url = process.env.AC_TEST_DATABASE_URL;
   assert.ok(url);
   const database = await isolatedDatabase(url, label);
@@ -125,7 +125,7 @@ async function bootVerify(label: string) {
     await collectors.bind(principal, project, {accountId: accounts[i], adapterId: adapters[i].manifest.id, expectedRevision: 0, minimumIntervalSeconds: 1});
   }
   const revision = await capacity.publish(principal, project, 0, {
-    schemaVersion: 1, maxProgrammersPerContext: 1, maxEvaluatorsPerContext: 1,
+    schemaVersion: 1, maxProgrammersPerContext: 1, maxEvaluatorsPerContext: evaluators,
     roles: {specialist: {regular: specialistProfiles, emergency: []}, reviewer: {regular: reviewerProfiles, emergency: []}},
   });
   const context = await db.createContext(principal, project, randomUUID());
@@ -207,5 +207,33 @@ test('rodada que cai na confirmação não perde o exame: a seguinte reaproveita
     assert.equal(count(fourth, 'Pedido de exame.'), 0);
     assert.equal(imported.coverage.length, 3);
     assert.equal((await loadSecurityJournal(fresh, COMMIT)).exams.length, 2);
+  } finally { await ready.close(); }
+});
+
+test('confirmações em paralelo pelo revisor escolhido no projeto, relatório na ordem original e tudo no diário', async () => {
+  const ready = await bootVerify('sej_parallel', 3);
+  try {
+    await mkdir(join(ready.repo, 'src'), {recursive: true});
+    for (const name of ['a', 'b', 'c', 'd', 'e', 'f']) await writeFile(join(ready.repo, 'src', `${name}.ts`), `export const ${name} = 1;\n`);
+    const journalPath = securityJournalPath(ready.dataDirectory, ready.project, COMMIT);
+    let inFlight = 0, peak = 0;
+    const calls: {task: string; output: string}[] = [];
+    const base = worker(calls, {failConfirm: false});
+    const slow: VerifyWorker = {async run(call) {
+      if (!call.task.startsWith('Pedido de confirmação.')) return base.run(call);
+      inFlight += 1; peak = Math.max(peak, inFlight);
+      try { await new Promise(done => setTimeout(done, 150)); return await base.run(call); } finally { inFlight -= 1; }
+    }};
+    const run = (extra: Record<string, unknown>) => runSecurityVerification({ledger: ready.db, principal: ready.principal, authority: ready.authority,
+      projectId: ready.project, repoPath: ready.repo, dataDirectory: ready.dataDirectory, commit: COMMIT, policyRevision: 1, worker: slow, journalPath, ...extra});
+    await assert.rejects(run({confirmConcurrency: 2, reviewer: {model: 'outro-modelo', effort: 'medium'}}),
+      (error: unknown) => (error as {code?: string}).code === 'VERIFY_REVIEWER_UNAVAILABLE');
+    const result = await run({confirmConcurrency: 2, reviewer: {model: 'fixture-model', effort: 'medium'}});
+    assert.equal(peak, 2, 'duas confirmações ao mesmo tempo');
+    assert.equal(count(calls, 'Pedido de confirmação.'), 6);
+    assert.deepEqual(result.achados.map(item => item.where.file), ['src/a.ts', 'src/b.ts', 'src/c.ts', 'src/d.ts', 'src/e.ts', 'src/f.ts']);
+    assert.deepEqual(result.achados.map(item => item.id), ['ACH-001', 'ACH-002', 'ACH-003', 'ACH-004', 'ACH-005', 'ACH-006']);
+    assert.ok(result.achados.every(item => item.verifier?.model === 'fixture-model'));
+    assert.equal((await loadSecurityJournal(journalPath, COMMIT)).confirms.size, 6);
   } finally { await ready.close(); }
 });

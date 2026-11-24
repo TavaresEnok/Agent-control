@@ -304,3 +304,25 @@ export async function applyPersonalCombo(ledger:Ledger,owner:string,projectId:st
   return {name:combo.name,revision,maxProgrammersPerContext:programmerCount,qaModel:Boolean(combo.roles.qa),manager,reviewer,programmerStandard,programmerBasic,qa,combo};
  });
 }
+
+/**
+ * Changes only how many evaluators (examiner, reviewers, confirmations) one context may hold at once, keeping the rest of the
+ * project's current policy. Every open context of the project moves to the new revision. The account limit still applies.
+ */
+export async function setPersonalEvaluators(ledger:Ledger,owner:string,projectId:string,count:number):Promise<{revision:number;maxEvaluatorsPerContext:number}>{
+ Id.parse(projectId);
+ if(!Number.isInteger(count)||count<1||count>4)throw new Refusal('COMBO_USAGE');
+ return ledger.tx(async c=>{
+  const capacity=new Capacity(ledger,c);
+  await c.query('SELECT id FROM ac_projects WHERE id=$1 FOR UPDATE',[projectId]);
+  const membership=await c.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'",[projectId,owner]);
+  if(!membership.rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+  const latest=(await c.query('SELECT revision,snapshot FROM ac_policy_revisions WHERE project_id=$1 ORDER BY revision DESC LIMIT 1',[projectId])).rows[0];
+  if(!latest)throw new Refusal('POLICY_REQUIRED',409);
+  const policy=CapacityPolicy.parse({...latest.snapshot,maxEvaluatorsPerContext:count});
+  const revision=await capacity.publish(owner,projectId,Number(latest.revision),policy);
+  const contexts=(await c.query('SELECT id FROM ac_contexts WHERE project_id=$1 AND NOT archived ORDER BY id',[projectId])).rows;
+  for(const row of contexts)await capacity.assignPolicy(owner,String(row.id),revision);
+  return {revision,maxEvaluatorsPerContext:count};
+ });
+}

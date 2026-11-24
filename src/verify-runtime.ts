@@ -80,6 +80,10 @@ export type SecurityVerificationInput = {
   productionOnly?: boolean;
   /** Durable journal of examiner calls and confirmations for this project and commit. Absent keeps the work in memory only. */
   journalPath?: string;
+  /** Confirmations running at once (economy.securityConfirmations). Absent is one at a time. */
+  confirmConcurrency?: number;
+  /** Model and effort of the reviewer that confirms the findings that are not high (economy.securityReviewer). Absent keeps the chain. */
+  reviewer?: {model: string; effort: string};
   /** Completed examiner jobs of earlier runs of this project at this commit, already checked against their signed receipts. */
   importExamJobs?: () => Promise<readonly ImportedExamJob[]>;
   /** Round start timestamp in ms (defaults to Date.now()). */
@@ -509,13 +513,87 @@ async function examine(
   const achados: Achado[] = [];
   let reusedConfirms = 0;
   if (input.onPhase) await input.onPhase('confirmacao');
+  // Each finding is planned in order first: reused from the journal, left unreviewed for lack of budget, or a live call.
+  // The live calls may run several at once (confirmConcurrency); the report is built in the original order either way.
+  type ConfirmPlan = {finding: OpenFinding; high: boolean; key: string | null; outcome?: {confirm: ConfirmResult; verifier: {model: string; provider: string}}};
+  const plans: (ConfirmPlan | {finding: OpenFinding; unreviewed: true})[] = [];
+  let plannedCalls = 0;
   for (const finding of open) {
-    if (achados.length >= 999) throw new Refusal('VERIFY_FINDING_LIMIT');
+    if (plans.length >= 999) throw new Refusal('VERIFY_FINDING_LIMIT');
+    const high = Boolean(staticPolicy && finding.examinerProvider !== null && finding.severity === 'alta');
+    const key = journal ? confirmationKey(finding, await shaOf(finding.file)) : null;
+    const saved = key ? journal!.confirms.get(key) : undefined;
+    // A saved confirmation counts only under the same examiner. A high finding of the static exam is always reviewed live.
+    if (saved && !high && saved.examinerAccountId === finding.examinerAccountId) {
+      reusedConfirms += 1;
+      plans.push({finding, high, key, outcome: {confirm: saved.confirm, verifier: {model: saved.verifier.model, provider: saved.verifier.provider}}});
+      continue;
+    }
+    if (budgetLeft() - plannedCalls < 1) {
+      stopAt('confirmacao', `no achado ${plans.length + 1} de ${open.length}`);
+      plans.push({finding, unreviewed: true});
+      continue;
+    }
+    plannedCalls += 1;
+    plans.push({finding, high, key});
+  }
+  const live = plans.filter((plan): plan is ConfirmPlan => !('unreviewed' in plan) && !plan.outcome);
+  const width = Math.max(1, Math.min(Math.floor(input.confirmConcurrency ?? 1) || 1, 8));
+  const lanes = width > 1 ? Array.from({length: width}, (_, index) => `confirmacao-${index + 1}`) : [];
+  await orderedPool(live, width, async plan => {
+    const finding = plan.finding;
+    const highExaminerFinding = plan.high;
+    const key = plan.key;
     const avoid = finding.examinerAccountId ?? mapAccountId;
     const avoidProfile = finding.examinerProfileId ?? mapProfileId;
-    if (budgetLeft() < 1) {
+    const lane = lanes.shift();
+    try {
+      const content = await readRepoText(root, finding.file, finding.line, allowedFiles);
+      const reviewed = await reserveAndRun(
+        input,
+        capacity,
+        intent.id,
+        'reviewer',
+        confirmationTask(finding, content.text, content.missing, history),
+        'verify-confirm',
+        modelCallBudget,
+        trackedCalls,
+        avoid ? [avoid] : undefined,
+        avoidProfile ? [avoidProfile] : undefined,
+        highExaminerFinding
+          ? {
+              examinerAccountId: finding.examinerAccountId,
+              examinerProfileId: finding.examinerProfileId,
+              examinerGrantId: finding.examinerGrantId,
+              examinerSessionId: finding.examinerSessionId,
+            }
+          : undefined,
+        staticPolicy,
+        lane,
+      );
+      let confirm;
+      try {
+        confirm = ConfirmResult.parse(coerceConfirmResult(parseJson(reviewed.output)));
+      } catch {
+        throw new Refusal('VERIFY_CONFIRMATION_INVALID');
+      }
+      // Kept as soon as it returns: a run that stops later does not pay for this confirmation again.
+      if (journal && key) {
+        await appendSecurityJournal(journal, {
+          kind: 'confirmacao', schemaVersion: 1, commit: journal.commit, key, confirm,
+          verifier: {provider: reviewed.seat.provider, model: reviewed.seat.model, accountId: reviewed.seat.accountId, profileId: reviewed.seat.profileId, grantId: reviewed.seat.grantId},
+          examinerAccountId: finding.examinerAccountId,
+        });
+      }
+      return {confirm, verifier: {model: reviewed.seat.model, provider: reviewed.seat.provider}};
+    } finally {
+      if (lane) lanes.push(lane);
+    }
+  }, async (plan, outcome) => { plan.outcome = outcome; });
+  for (const plan of plans) {
+    const finding = plan.finding;
+    if ('unreviewed' in plan || !plan.outcome) {
       // Out of calls: the finding is kept as it came, never promoted. It is "provavel", without a verifier, and listed as unreviewed.
-      stopAt('confirmacao', `no achado ${achados.length + 1} de ${open.length}`);
       const title = clipSecret(finding.title, 200) || 'Achado';
       const snippet = clipSecret(finding.snippet, 240);
       const where = `${finding.file}:${finding.line ?? '-'}`;
@@ -537,56 +615,8 @@ async function examine(
       }));
       continue;
     }
-    const highExaminerFinding = Boolean(
-      staticPolicy && finding.examinerProvider !== null && finding.severity === 'alta',
-    );
-    const key = journal ? confirmationKey(finding, await shaOf(finding.file)) : null;
-    const saved = key ? journal!.confirms.get(key) : undefined;
-    // A saved confirmation counts only under the same examiner. A high finding of the static exam is always reviewed live.
-    const usable = saved && !highExaminerFinding && saved.examinerAccountId === finding.examinerAccountId;
-    if (saved && usable) {
-      reusedConfirms += 1;
-      confirms.push(saved.confirm);
-      achados.push(confirmedAchado(finding, saved.confirm, {model: saved.verifier.model, provider: saved.verifier.provider}, achados.length));
-      continue;
-    }
-    const content = await readRepoText(root, finding.file, finding.line, allowedFiles);
-    const reviewed = await reserveAndRun(
-      input,
-      capacity,
-      intent.id,
-      'reviewer',
-      confirmationTask(finding, content.text, content.missing, history),
-      'verify-confirm',
-      modelCallBudget,
-      trackedCalls,
-      avoid ? [avoid] : undefined,
-      avoidProfile ? [avoidProfile] : undefined,
-      highExaminerFinding
-        ? {
-            examinerAccountId: finding.examinerAccountId,
-            examinerProfileId: finding.examinerProfileId,
-            examinerGrantId: finding.examinerGrantId,
-            examinerSessionId: finding.examinerSessionId,
-          }
-        : undefined,
-      staticPolicy,
-    );
-    let confirm;
-    try {
-      confirm = ConfirmResult.parse(coerceConfirmResult(parseJson(reviewed.output)));
-    } catch {
-      throw new Refusal('VERIFY_CONFIRMATION_INVALID');
-    }
-    confirms.push(confirm);
-    if (journal && key) {
-      await appendSecurityJournal(journal, {
-        kind: 'confirmacao', schemaVersion: 1, commit: journal.commit, key, confirm,
-        verifier: {provider: reviewed.seat.provider, model: reviewed.seat.model, accountId: reviewed.seat.accountId, profileId: reviewed.seat.profileId, grantId: reviewed.seat.grantId},
-        examinerAccountId: finding.examinerAccountId,
-      });
-    }
-    achados.push(confirmedAchado(finding, confirm, {model: reviewed.seat.model, provider: reviewed.seat.provider}, achados.length));
+    confirms.push(plan.outcome.confirm);
+    achados.push(confirmedAchado(finding, plan.outcome.confirm, plan.outcome.verifier, achados.length));
   }
   if (reusedConfirms) notes.push(`${reusedConfirms} confirmações reaproveitadas do diário.`);
 
@@ -724,12 +754,14 @@ async function reserveAndRun(
   avoidProfiles?: readonly string[],
   highReview?: HighReviewCheck,
   staticPolicy?: StaticCliPolicy,
+  lane?: string,
 ): Promise<{seat: Seat; output: string; sessionId: string | null}> {
   if (trackedCalls.count >= modelCallBudget) throw new Error('VERIFY_MODEL_BUDGET');
   const releaseGrant = (grantId: string) =>
     capacity.transition(input.principal, grantId, input.authority, 'released', {processId, state: 'not_started'});
   const staticExaminer = Boolean(staticPolicy && purpose === 'examiner');
   const staticHighReviewer = Boolean(staticPolicy && purpose === 'reviewer' && highReview);
+  const chosenReviewer = purpose === 'reviewer' && !staticHighReviewer ? input.reviewer : undefined;
   const nativePoll = readNativeWorkerCapacityPoll(input.worker);
   const pollBackoff = input.pollBackoff ?? nativePoll?.pollBackoff ?? true;
   const signal = input.signal ?? nativePoll?.signal;
@@ -762,9 +794,18 @@ async function reserveAndRun(
             preferEmergencyFirst: true,
             unavailableCode: 'MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE',
           }
-        : {
-            avoidAccountId: avoidAccounts?.[0],
-          }),
+        : chosenReviewer
+          ? {
+              // The project chose the reviewer: that model and effort, never the examiner's own profile.
+              requiredModel: chosenReviewer.model,
+              requiredEffort: chosenReviewer.effort,
+              allowSameAccount: true,
+              unavailableCode: 'VERIFY_REVIEWER_UNAVAILABLE',
+            }
+          : {
+              avoidAccountId: avoidAccounts?.[0],
+            }),
+    ...(lane ? {lane} : {}),
     capacityWait: {
       enabled: true,
       pollBackoff,

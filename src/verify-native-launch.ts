@@ -243,14 +243,15 @@ export function createCapacityNativeWorker(input: {
   const poll = input.pollBackoff === false ? LEGACY_POLL : BACKOFF_POLL;
   const completedByCall = new WeakMap<object, NativeCompletedSession>();
   const stopController = new AbortController();
-  let active: {supervisor: SecurityExamSupervisor; request: SecurityExamRequest} | null = null;
+  // Every job in flight: the confirmations of module 1 may run several at once, and stop must reach all of them.
+  const active = new Set<{supervisor: SecurityExamSupervisor; request: SecurityExamRequest}>();
   const worker: VerifyWorker = {
     async stop() {
       stopController.abort();
-      const current = active;
-      const stop = current?.supervisor.stop?.bind(current.supervisor);
-      if (!current || !stop) return;
-      await stop(principal, authority, current.request);
+      await Promise.all([...active].map(async current => {
+        const stop = current.supervisor.stop?.bind(current.supervisor);
+        if (stop) await stop(principal, authority, current.request);
+      }));
     },
     async run(call) {
       completedByCall.delete(call);
@@ -267,7 +268,8 @@ export function createCapacityNativeWorker(input: {
         task: parsed.task,
         artifactId: randomUUID(),
       });
-      active = {supervisor, request};
+      const entry = {supervisor, request};
+      active.add(entry);
       try {
         const completed = await finishExam(
           supervisor, principal, authority, request, releaseGrant, parsed.grantId, wait,
@@ -285,7 +287,7 @@ export function createCapacityNativeWorker(input: {
         }
         return completed.output;
       } finally {
-        if (active?.request === request) active = null;
+        active.delete(entry);
       }
     },
   };

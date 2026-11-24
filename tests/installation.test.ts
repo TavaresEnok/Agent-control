@@ -54,9 +54,12 @@ test('private installation initializes without fixtures, manager or worker; keys
 });
 
 test('project economy options are independent and validated', () => {
- assert.deepEqual(ProjectEconomy.parse({map:false,measurement:false,batch:false}),{map:false,measurement:false,batch:false,imageRetention:true,batchTokens:40000,managerDiscipline:true,managerContextTokens:2500,scope:true,securityProductionOnly:true,designEffort:"high"});
- assert.deepEqual(ProjectEconomy.parse({}),{map:true,measurement:true,batch:true,imageRetention:true,batchTokens:40000,managerDiscipline:true,managerContextTokens:2500,scope:true,securityProductionOnly:true,designEffort:"high"});
+ assert.deepEqual(ProjectEconomy.parse({map:false,measurement:false,batch:false}),{map:false,measurement:false,batch:false,imageRetention:true,batchTokens:40000,managerDiscipline:true,managerContextTokens:2500,scope:true,securityProductionOnly:true,designEffort:"high",securityConfirmations:1});
+ assert.deepEqual(ProjectEconomy.parse({}),{map:true,measurement:true,batch:true,imageRetention:true,batchTokens:40000,managerDiscipline:true,managerContextTokens:2500,scope:true,securityProductionOnly:true,designEffort:"high",securityConfirmations:1});
  assert.equal(ProjectEconomy.parse({managerDiscipline:false}).managerDiscipline,false);
+ assert.deepEqual(ProjectEconomy.parse({securityConfirmations:4,securityReviewer:{model:'claude-sonnet-5-5',effort:'medium'}}).securityReviewer,{model:'claude-sonnet-5-5',effort:'medium'});
+ assert.equal(ProjectEconomy.safeParse({securityConfirmations:5}).success,false);
+ assert.equal(ProjectEconomy.safeParse({securityReviewer:{model:'x',effort:'ultra'}}).success,false);
  assert.equal(ProjectEconomy.safeParse({managerContextTokens:100}).success,false);
  assert.equal(ProjectEconomy.safeParse({map:'false'}).success,false);
  assert.equal(ProjectEconomy.parse({imageRetention:false}).imageRetention,false);
