@@ -935,6 +935,13 @@ async function loadReports(project: string): Promise<{directory: string; summary
   return found;
 }
 
+/** Resumos dos relatórios de design do projeto, sem ler os achados. Recusa symlink como os demais leitores. */
+export async function listDesignReports(dataDirectory: string, projectId: string): Promise<DesignReportSummary[]> {
+  assertSafeSegment(projectId);
+  const project = await resolveProject(dataDirectory, projectId);
+  return project ? (await loadReports(project)).map(item => item.summary) : [];
+}
+
 async function findReport(dataDirectory: string, projectId: string, runId: string): Promise<{directory: string; summary: DesignReportSummary}> {
   assertSafeSegment(projectId);
   assertSafeSegment(runId);
