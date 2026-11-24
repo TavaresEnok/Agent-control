@@ -301,6 +301,7 @@
   "safe-git-metadata-race.test.ts",
   "sandbox-retirement-terminal.test.ts",
   "sandbox.test.ts",
+  "security-exam-journal.test.ts",
   "session-link.test.ts",
   "sessions.test.ts",
   "slo-evaluation.test.ts",

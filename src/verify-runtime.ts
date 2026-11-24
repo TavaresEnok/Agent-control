@@ -20,6 +20,7 @@ import {examFileSha256, examFileTokens, listExamFiles, planSecuritySlices, singl
 import {vendoredDigest, vendoredNote} from './vendored-dirs.ts';
 import {batchCallReceipt, type BatchCallReceipt} from './exam-batch-proof.ts';
 import {generateRepoMapSafe} from './repo-map.ts';
+import {appendSecurityJournal, confirmationKey, journaledJudgment, loadSecurityJournal, parseExamTask, type ImportedExamJob, type JournalExam, type SecurityExamJournal} from './security-exam-journal.ts';
 import {
   Achado,
   ConfirmResult,
@@ -77,6 +78,10 @@ export type SecurityVerificationInput = {
   concurrency?: number;
   /** Tests, documentation and generated files stay out of the examiner (default true); the tools and the confirmation still read them. `false` sends them as before. */
   productionOnly?: boolean;
+  /** Durable journal of examiner calls and confirmations for this project and commit. Absent keeps the work in memory only. */
+  journalPath?: string;
+  /** Completed examiner jobs of earlier runs of this project at this commit, already checked against their signed receipts. */
+  importExamJobs?: () => Promise<readonly ImportedExamJob[]>;
   /** Round start timestamp in ms (defaults to Date.now()). */
   startedMs?: number;
   /** Round ceiling / capacity queue wait deadline in ms (defaults to EXAM_TIME_LIMIT_MS = 6h). */
@@ -277,6 +282,17 @@ async function examine(
   if (compactMap && !compactMap.map) notes.push('Mapa compacto do repositório indisponível.');
   const history = await deletedHistoryExcerpt(input.repoPath, input.examRoot ? input.commit : undefined);
   const coverage = new Map<string, CoverageRow>();
+  const journal = input.journalPath ? await loadSecurityJournal(input.journalPath, input.commit) : null;
+  const shaCache = new Map<string, Promise<string | null>>();
+  const shaOf = (file: string) => {
+    let known = shaCache.get(file);
+    if (!known) { known = examFileSha256(root, file); shaCache.set(file, known); }
+    return known;
+  };
+  if (journal && input.importExamJobs) {
+    const imported = await importJournalJobs(journal, input, shaOf);
+    if (imported) notes.push(`${imported} chamadas do examinador de rodadas anteriores entraram no diário, pelos recibos assinados.`);
+  }
   const open: OpenFinding[] = [];
   const exams: unknown[] = [];
   let map: MapResult = minimalMap(files);
@@ -343,8 +359,25 @@ async function examine(
       if (!exam.success) notes.push(`A fatia ${slice.id} não devolveu exame válido.`);
       else if (unjudged.length) notes.push(`O examinador não marcou como lido: ${unjudged.join(', ')}.`);
       if (!exam.success) return unjudged;
+      if (journal) {
+        await appendSecurityJournal(journal, {
+          kind: 'exame', schemaVersion: 1, commit: journal.commit, intentId: intent.id, jobId: null, sliceId: slice.id,
+          checklist: [...slice.checklist], declared: [...exam.data.checklist],
+          files: slice.files.map((file, index) => ({file, sha256: hashes[index] ?? null, judged: read.has(file)})),
+          findings: exam.data.findings,
+          seat: {provider: examined.seat.provider, model: examined.seat.model, accountId: examined.seat.accountId, profileId: examined.seat.profileId, grantId: examined.seat.grantId},
+          sessionId: examined.sessionId,
+        });
+      }
       for (const finding of exam.data.findings) {
         if (retry && open.some(item => item.file === finding.file && item.line === finding.line && item.title === clipSecret(replaceSecretTokens(finding.title), 200))) continue;
+        pushExamFinding(finding, examined.seat, examined.sessionId, slice.id);
+      }
+      return unjudged;
+    };
+    /** One examiner finding into the open list, cleaned the same way whether it came from a call now or from the journal. */
+    const pushExamFinding = (finding: ExamResult['findings'][number], seat: Seat, sessionId: string | null, sliceId: string) => {
+      {
         const titleText = replaceSecretTokens(finding.title);
         const snippetText = replaceSecretTokens(finding.snippet);
         const tokenRemoved = titleText !== finding.title
@@ -364,20 +397,56 @@ async function examine(
           scenario: clipSecret(finding.scenario, 2000) || title,
           suggestion: clipSecret(finding.suggestion, 2000) || 'Rever o ponto.',
           reference,
-          sources: [`examinador ${examined.seat.provider}`, `fatia ${slice.id}`, finding.reference].map(source => clipSecret(source, 200)).filter(source => source.length > 0).slice(0, 20),
-          examinerProvider: examined.seat.provider,
-          examinerAccountId: examined.seat.accountId,
-          examinerProfileId: examined.seat.profileId,
-          examinerGrantId: examined.seat.grantId,
-          examinerSessionId: examined.sessionId,
+          sources: [`examinador ${seat.provider}`, `fatia ${sliceId}`, finding.reference].map(source => clipSecret(source, 200)).filter(source => source.length > 0).slice(0, 20),
+          examinerProvider: seat.provider,
+          examinerAccountId: seat.accountId,
+          examinerProfileId: seat.profileId,
+          examinerGrantId: seat.grantId,
+          examinerSessionId: sessionId,
         });
       }
-      return unjudged;
+    };
+    /** A file whose judgment is in the journal with the same content: coverage, receipt and findings come from that call. */
+    const reusedReceipts = new Set<string>();
+    let reusedFiles = 0;
+    const reuseJudgment = (entry: JournalExam, file: string, requested: readonly string[]) => {
+      const seat: Seat = {...entry.seat};
+      const receipt = batchCallReceipt({
+        scope: 'seguranca', callId: entry.sliceId, intentId: entry.intentId,
+        provider: seat.provider, model: seat.model, accountId: seat.accountId, profileId: seat.profileId, grantId: seat.grantId,
+        sessionId: entry.sessionId, files: entry.files.map(item => ({...item})),
+      });
+      if (!reusedReceipts.has(receipt.digest)) {
+        reusedReceipts.add(receipt.digest);
+        receipts.push(receipt);
+        exams.push({kind: 'exame', reusedFrom: entry.intentId, slice: entry.sliceId, checklist: entry.declared, findings: entry.findings});
+      }
+      addCoverage(coverage, file, seat, requested, entry.declared);
+      judgedSoFar.add(file);
+      reusedFiles += 1;
+      for (const finding of entry.findings) if (finding.file === file) pushExamFinding(finding, seat, entry.sessionId, entry.sliceId);
     };
     // Mandatory phase first: every slice, applied in order. Each call costs exactly one model call, so the slices the budget
     // pays for are known before any starts, as in the serial run. A file a batch did not judge is queued for a single-file retry, which is optional.
     const retryQueue: {file: string; sliceId: string}[] = [];
-    const runnable = slices.filter(slice => slice.files.length);
+    const toExamine: Slice[] = [];
+    for (const slice of slices) {
+      if (!journal) { toExamine.push(slice); continue; }
+      const left: string[] = [];
+      for (const file of slice.files) {
+        const entry = journaledJudgment(journal, file, await shaOf(file), slice.checklist);
+        // A high finding of the static exam always goes through a live examiner and reviewer session in this run.
+        const high = Boolean(staticPolicy && entry?.findings.some(finding => finding.file === file && finding.severity === 'alta'));
+        if (entry && !high) reuseJudgment(entry, file, slice.checklist);
+        else left.push(file);
+      }
+      toExamine.push({...slice, files: left});
+    }
+    if (reusedFiles) {
+      notes.push(`${reusedFiles} arquivos reaproveitaram o julgamento gravado no diário, com o mesmo commit e o mesmo conteúdo.`);
+      await reportProgress();
+    }
+    const runnable = toExamine.filter(slice => slice.files.length);
     const affordable = runnable.slice(0, Math.max(0, Math.floor(budgetLeft())));
     for (const slice of runnable.slice(affordable.length)) {
       stopAt('exame', `antes da fatia ${slice.id}`);
@@ -438,6 +507,7 @@ async function examine(
 
   const confirms: unknown[] = [];
   const achados: Achado[] = [];
+  let reusedConfirms = 0;
   if (input.onPhase) await input.onPhase('confirmacao');
   for (const finding of open) {
     if (achados.length >= 999) throw new Refusal('VERIFY_FINDING_LIMIT');
@@ -470,6 +540,16 @@ async function examine(
     const highExaminerFinding = Boolean(
       staticPolicy && finding.examinerProvider !== null && finding.severity === 'alta',
     );
+    const key = journal ? confirmationKey(finding, await shaOf(finding.file)) : null;
+    const saved = key ? journal!.confirms.get(key) : undefined;
+    // A saved confirmation counts only under the same examiner. A high finding of the static exam is always reviewed live.
+    const usable = saved && !highExaminerFinding && saved.examinerAccountId === finding.examinerAccountId;
+    if (saved && usable) {
+      reusedConfirms += 1;
+      confirms.push(saved.confirm);
+      achados.push(confirmedAchado(finding, saved.confirm, {model: saved.verifier.model, provider: saved.verifier.provider}, achados.length));
+      continue;
+    }
     const content = await readRepoText(root, finding.file, finding.line, allowedFiles);
     const reviewed = await reserveAndRun(
       input,
@@ -499,25 +579,16 @@ async function examine(
       throw new Refusal('VERIFY_CONFIRMATION_INVALID');
     }
     confirms.push(confirm);
-    const title = clipSecret(finding.title, 200) || 'Achado';
-    const proof = clipSecret([confirm.proof, confirm.reason].filter((part, index, all) => part && all.indexOf(part) === index).join('\n'), 2000);
-    const snippet = clipSecret(finding.snippet, 240);
-    achados.push(Achado.parse({
-      id: `ACH-${String(achados.length + 1).padStart(3, '0')}`,
-      title,
-      severity: finding.severity,
-      status: confirm.status,
-      verifier: {model: reviewed.seat.model, provider: reviewed.seat.provider},
-      reference: clipSecret(finding.reference, 200) || title,
-      where: {file: finding.file, line: finding.line},
-      scenario: clipSecret(finding.scenario, 2000) || title,
-      proof,
-      suggestion: clipSecret(finding.suggestion, 2000) || 'Rever o ponto.',
-      acceptance: REMEDIATION_ACCEPTANCE,
-      sources: finding.sources.map(source => clipSecret(source, 200)).filter(source => source.length > 0).slice(0, 20),
-      secretPreview: previewOf(snippet),
-    }));
+    if (journal && key) {
+      await appendSecurityJournal(journal, {
+        kind: 'confirmacao', schemaVersion: 1, commit: journal.commit, key, confirm,
+        verifier: {provider: reviewed.seat.provider, model: reviewed.seat.model, accountId: reviewed.seat.accountId, profileId: reviewed.seat.profileId, grantId: reviewed.seat.grantId},
+        examinerAccountId: finding.examinerAccountId,
+      });
+    }
+    achados.push(confirmedAchado(finding, confirm, {model: reviewed.seat.model, provider: reviewed.seat.provider}, achados.length));
   }
+  if (reusedConfirms) notes.push(`${reusedConfirms} confirmações reaproveitadas do diário.`);
 
   const rows = orderedCoverage(files, coverage);
   const strip = takeExamStripNote(intent.id);
@@ -1111,6 +1182,57 @@ export function coerceConfirmResult(value: unknown): unknown {
     reason,
     proof,
   };
+}
+
+/** The report entry of a reviewed finding. */
+function confirmedAchado(finding: OpenFinding, confirm: ConfirmResult, verifier: {model: string; provider: string}, index: number): Achado {
+  const title = clipSecret(finding.title, 200) || 'Achado';
+  const proof = clipSecret([confirm.proof, confirm.reason].filter((part, at, all) => part && all.indexOf(part) === at).join('\n'), 2000);
+  const snippet = clipSecret(finding.snippet, 240);
+  return Achado.parse({
+    id: `ACH-${String(index + 1).padStart(3, '0')}`,
+    title,
+    severity: finding.severity,
+    status: confirm.status,
+    verifier,
+    reference: clipSecret(finding.reference, 200) || title,
+    where: {file: finding.file, line: finding.line},
+    scenario: clipSecret(finding.scenario, 2000) || title,
+    proof,
+    suggestion: clipSecret(finding.suggestion, 2000) || 'Rever o ponto.',
+    acceptance: REMEDIATION_ACCEPTANCE,
+    sources: finding.sources.map(source => clipSecret(source, 200)).filter(source => source.length > 0).slice(0, 20),
+    secretPreview: previewOf(snippet),
+  });
+}
+
+/**
+ * Brings completed examiner jobs of earlier runs into the journal. The caller already matched each job to its signed receipt,
+ * project and commit; here the answer is cleaned and parsed exactly as a live call, and each file gets its content hash now.
+ * A job whose slice is already journaled, or whose task or answer does not parse, is skipped.
+ */
+async function importJournalJobs(journal: SecurityExamJournal, input: SecurityVerificationInput, shaOf: (file: string) => Promise<string | null>): Promise<number> {
+  let jobs: readonly ImportedExamJob[];
+  try { jobs = await input.importExamJobs!(); } catch { return 0; }
+  let imported = 0;
+  for (const job of jobs) {
+    if (journal.jobIds.has(job.jobId)) continue;
+    const task = parseExamTask(job.task);
+    if (!task) continue;
+    if (journal.exams.some(entry => entry.intentId === job.intentId && entry.sliceId === task.sliceId)) continue;
+    const secrets = await reservedAccountSecrets(input.accountRoot, job.seat.accountId, input.accountSecrets);
+    let exam;
+    try { exam = ExamResult.safeParse(coerceExamResult(parseJson(redactText(job.output, secrets)))); } catch { continue; }
+    if (!exam.success) continue;
+    const read = new Set(exam.data.filesRead);
+    const files = await Promise.all(task.files.map(async file => ({file, sha256: await shaOf(file), judged: read.has(file)})));
+    const saved = await appendSecurityJournal(journal, {
+      kind: 'exame', schemaVersion: 1, commit: journal.commit, intentId: job.intentId, jobId: job.jobId, sliceId: task.sliceId,
+      checklist: task.checklist, declared: exam.data.checklist, files, findings: exam.data.findings, seat: job.seat, sessionId: job.sessionId,
+    });
+    if (saved) imported += 1;
+  }
+  return imported;
 }
 
 function parseJson(text: string): unknown {

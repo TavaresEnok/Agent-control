@@ -26,6 +26,8 @@ import {
 } from './verify-runtime.ts';
 import type {VerifyWorker} from './verify-types.ts';
 import type {SecurityBatch} from './verify-slices.ts';
+import {securityJournalPath, type ImportedExamJob} from './security-exam-journal.ts';
+import {securityExamJobsFromStore} from './security-exam-journal-jobs.ts';
 
 export const HOMOLOGATION_NOTE = 'Homologação declarada e não varrida: a imagem não tem ZAP, Nuclei nem Schemathesis.';
 
@@ -85,6 +87,8 @@ export type PersonalVerificationInput = {
   allowedAccountIds?: readonly string[];
   timeLimitMs?: number;
   networkRunner?: NetworkRunner;
+  /** Completed examiner jobs of earlier runs at this commit (the static exam only). Their judgments enter the journal. */
+  importExamJobs?: () => Promise<readonly ImportedExamJob[]>;
 };
 
 /**
@@ -175,6 +179,7 @@ type ReadyVerification = {
   batch?: SecurityBatch;
   pollBackoff?: boolean;
   productionOnly?: boolean;
+  importExamJobs?: () => Promise<readonly ImportedExamJob[]>;
   wait?: (ms: number, signal?: AbortSignal) => Promise<void>;
   accountRoot?: string;
   allowedAccountIds?: readonly string[];
@@ -233,6 +238,7 @@ function requireReady(input: PersonalVerificationInput): ReadyVerification {
     batch: input.batch,
     pollBackoff: input.pollBackoff,
     productionOnly: input.productionOnly,
+    ...(input.importExamJobs ? {importExamJobs: input.importExamJobs} : {}),
     ...(input.wait ? {wait: input.wait} : {}),
     modelCallBudget: typeof input.modelCallBudget === 'number' ? input.modelCallBudget : undefined,
     accountRoot: typeof input.accountRoot === 'string' && input.accountRoot.length > 0 ? input.accountRoot : undefined,
@@ -625,6 +631,9 @@ async function runJob(input: {
         batch: ready.batch,
         pollBackoff: ready.pollBackoff,
         productionOnly: ready.productionOnly,
+        // Every examiner call and confirmation is kept as it returns: a run that stops resumes where it stopped.
+        ...(ready.staticPolicy ? {journalPath: securityJournalPath(ready.dataDirectory, ready.projectId, ready.commit)} : {}),
+        ...(ready.staticPolicy && ready.importExamJobs ? {importExamJobs: ready.importExamJobs} : {}),
         // One slice at a time: concurrent reservations of the same intent share one attempt in reserveWithCapacityQueue
         // (pendingWaitsByScope), and the native worker tracks a single active job. The modules run side by side, each in
         // its own slot, so the wall time still fits; the pool (orderedPool) stays ready for when the queue keys by lane.
@@ -945,6 +954,16 @@ export async function resolvePersonalVerification(
     if (parsed.url === undefined) {
       issueStaticCliPolicy({nativeWorker: worker, projectId: project.id, contextId: exam.contextId, commit});
     }
+    const boot = config.nativeBootstrap;
+    const importExamJobs = parsed.url === undefined && boot?.state === 'active'
+      ? async () => securityExamJobsFromStore({
+        pool: ledger.pool,
+        hostRoot: boot.execution.hostRoot,
+        signingKeyPem: (await readPrivateFile(boot.execution.signingKeyFile)).toString('utf8'),
+        projectId: project.id,
+        commit,
+      })
+      : undefined;
     return {
       input: {
         installationPath: resolve(parsed.installationPath),
@@ -967,6 +986,7 @@ export async function resolvePersonalVerification(
         databasesDirectory: databases.directory,
         image,
         modelCalls: {count: 0},
+        ...(importExamJobs ? {importExamJobs} : {}),
       },
       close: async () => {
         await ledger.releaseLease(authority!).catch(() => undefined /* an unreleased lease expires by itself */);
