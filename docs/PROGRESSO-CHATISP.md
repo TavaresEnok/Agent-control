@@ -590,3 +590,16 @@ Ordem: `docs/ORDEM-CHATISP.md`. Equipe: `AGENTS.md`, seção "Equipe ChatISP". C
     - **desempenho ACH-095:** N+1 na listagem do diretório de contatos (`contactdirectory/service.go:345`).
     - **prontidão ACH-027:** FROM sem digest numa sonda histórica em `docs/medicoes`. Na prática é baixo, porque nenhum serviço usa essa sonda.
   - **Evidência:** `/home/app/.agent-control/ispagent/verificacoes/98c62210-1fa3-4760-a16c-9ba38d694d63/conferencia-grok/RESULTADO.md` e `achados-conferidos.json`. É revisão independente por outro provedor, sem recibo assinado.
+- 25/11/2026 01:25 UTC — **Supervisor: correções do ChatISP e ferramentas da segurança.**
+  - **Agent Control aplicado na instalação viva:**
+    - Juntados os ramos de barras por módulo, redação de JSON das ferramentas, ruído do design, teste do órfão e Grok revisor (este último ainda desligado). A suíte completa passou: 345 arquivos e 1.946 testes, mais 24 de recuperação no laboratório.
+    - Feito o backup e reiniciado o gateway.
+    - O primeiro build do painel saiu sem `VITE_AGENT_CONTROL_MANAGED=1` e ficou alguns minutos no ar sem a página de Verificações. O painel anterior foi restaurado e o build certo, aplicado. Para isso não se repetir, criei o `npm run personal:painel` (`ba1cec53`).
+  - **Segurança refeita (`0a5d4dfa`):**
+    - A primeira tentativa, `81e9bec4`, caiu às 00:36 com `VERIFY_LEASE_LOST`. A queda coincidiu com uma passagem de 80 s do vigia, com o disco a 91%. É defeito provável do produto, a investigar.
+    - A `0a5d4dfa` concluiu com 28 chamadas. O gitleaks (18 achados, todos descartados) e o checkov (15 achados) passaram a verificar de fato. Os confirmados ficaram em 0 altos, 20 médios (15 + 5 do checkov), 35 baixos e 11 informativos.
+  - **Correções do ChatISP:**
+    - A segurança (Opus) fechou as 8 ressalvas da revisão. O ACH-011/056 foi fechado com a migração 00059 e com o comando de operador.
+    - Os 5 Grok médio corrigiram os 106 confirmados dos módulos 2 a 9 (85 na primeira onda e 21 na segunda, sobre o ramo de segurança).
+    - Revisão independente (Opus médio): os ramos 1 e 3 saíram aprovados com ressalvas e os 2, 4 e 5 reprovados. Os motivos foram uma corrida no upload, mídia que para após 60 s, uma corrida que apaga a mídia de outro worker, o Down da 00048 com leitura ampla e o SQL da fila sem medição. Cada Grok recebeu de volta só o backend.
+  - **Regra nova do titular:** front-end só por Opus ou Fable. Os Grok 1, 2 e 3 mexeram em `web/`. O Opus desfaz essa parte e refaz as correções de front-end depois que o Grok de cada ramo termina o backend. A base do front ficou verde: typecheck limpo, 65 arquivos e 335 testes.
