@@ -654,3 +654,32 @@ Ordem: `docs/ORDEM-CHATISP.md`. Equipe: `AGENTS.md`, seção "Equipe ChatISP". C
     - Os ramos continuam.
     - Os relatórios dos trabalhadores estão em `ordens-correcao/relatorios-ramos/`.
   - Nada foi enviado (push). O ramo para entregar é `agent-control/integracao-20261125`.
+- 25/11/2026 ~19:30 UTC — **Supervisor: primeira onda das pendências integrada.**
+  - **Pend-paginacao (Opus 5.5 médio):**
+    - a lista HTTP de conversas é paginada por cursor (`limit`, `after_created_at`/`after_id`, `has_more`, `next_page`);
+    - o `FOR SHARE` passa a valer só para a página, e o 503 acima de 500 conversas deixou de existir;
+    - o `ListMessages` é paginado (ACH-061), e o front usa `useInfiniteQuery` com o botão "Carregar mensagens anteriores";
+    - a migração 00086 cria o índice com `CONCURRENTLY`.
+  - **Pend-erp (Grok 4.7 alto):**
+    - R3 já estava resolvido na base;
+    - a 00065 não constrói mais o índice dentro do goose; `jobs.Migrate` cria o índice `CONCURRENTLY` e recria um índice inválido;
+    - ACH-017: o `ReceiveRemote` grava fora da transação da reserva.
+  - **Pend-checkov (Grok médio):**
+    - ACH-244/248 suprimidos com justificativa e teste;
+    - `security` global e `maxItems` nos dois OpenAPI;
+    - `schema.ts` sem diferença.
+  - **Pend-dreno (Grok médio):**
+    - testes de rodízio, da fila, do periódico e do prazo;
+    - `DeleteExcept` apaga a versão antiga sem tocar a viva;
+    - métrica `attachment_cleanup`;
+    - runbook de deploy sem rolling e do Down da 00076.
+  - **Revisões independentes (Opus 5.5 médio, só leitura):**
+    - todas aprovadas com ressalvas, com 2 médias: o teste de rodízio não provava o rodízio, e o índice da 00086 não usava `CONCURRENTLY`;
+    - as correções foram revistas: ERP, checkov e dreno aprovados; paginação aprovada com 2 baixos de front;
+    - os 2 baixos são o limite de 5 páginas, que esconde mensagens além de 500, e o corte por `ingested_at` em vez de `trusted_at`;
+    - esses dois baixos vão para o Opus do lote de front.
+  - **Integração (`462b5e7`):** Go passou nos 68 pacotes; no front, tsc ficou limpo, passaram 71 arquivos e 375 testes, e o lint não apontou nada.
+  - **Segunda onda iniciada:** os 449 baixos, em 5 lotes, em worktrees `baixos-*`:
+    - b1 a b4 com Grok médio, migrações 00090 a 00109;
+    - front com Opus médio.
+  - Nada foi enviado (push).
