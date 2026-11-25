@@ -250,7 +250,11 @@ export function moduleExamReviewEvidence(module: VerificationModule, finding: Mo
   return evidence;
 }
 
-function unavailableText(code: string) {
+const providerNames: Record<string, string> = {claude: 'Claude', codex: 'Codex', grok: 'Grok'};
+
+/** `provider` names the seat that failed; the examiner, always Claude, is the default. */
+function unavailableText(code: string, provider = 'claude') {
+  const name = providerNames[provider] ?? provider;
   if (code === 'MODULE_EXAM_EXAMINER_UNAVAILABLE') return 'Examinador indisponível para o contexto.';
   if (code === 'MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE') {
     return 'Revisor de achado alto (claude-opus-5-5) indisponível para o contexto.';
@@ -262,8 +266,8 @@ function unavailableText(code: string) {
     return 'Revisor de outro provedor indisponível para o contexto.';
   }
   if (code === 'MODULE_EXAM_RUNTIME_UNAVAILABLE') return 'Runtime de exame indisponível.';
-  if (code === 'EXAM_LOGIN_STALE') return 'Login da conta Claude da instalação vencido; renove e rode de novo.';
-  if (code === 'EXAM_LOGIN_BUSY') return 'Login da conta Claude da instalação ocupado; renove e rode de novo.';
+  if (code === 'EXAM_LOGIN_STALE') return `Login da conta ${name} da instalação vencido; renove e rode de novo.`;
+  if (code === 'EXAM_LOGIN_BUSY') return `Login da conta ${name} da instalação ocupado; renove e rode de novo.`;
   if (code === 'PROJECT_ACCOUNTS_UNAVAILABLE') return 'Nenhuma conta permitida para este projeto está disponível para o papel solicitado.';
   return `Exame ou confirmação indisponível. Código ${code}.`;
 }
@@ -681,9 +685,9 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
     const reviewCall = async (members: Subject[], high: boolean, prepare: (seat: ModuleExamSeat) => ReviewCall,
       onOutput: (output: string, seat: ModuleExamSeat, call: ReviewCall) => Promise<void>) => {
       const lead = members[0]!;
-      const fail = (code: string) => {
+      const fail = (code: string, provider?: string) => {
         for (const s of members) { s.finding.failure = code; s.finding.reason = `Confirmação indisponível. Código ${code}.`; }
-        notes.add(unavailableText(code));
+        notes.add(unavailableText(code, provider));
       };
       for (;;) {
         checkAbort(input.signal);
@@ -715,11 +719,13 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
           } else if (code === 'PROVIDER_USAGE_LIMIT' && input.waitForClaudeQuota && (!seat || seat.provider === 'claude')) {
             waiting = true;
           } else {
-            fail(code);
+            fail(code, seat?.provider);
             if (code === 'PROVIDER_USAGE_LIMIT' || capacityRefusal(code) || (launched && !exited)) stopReview = code;
             else if (high && code === 'MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE') stopHighReview = code;
-            else if (!high && (code === 'MODULE_EXAM_REVIEWER_UNAVAILABLE'
-              || code === 'MODULE_EXAM_PROVIDER_NOT_DISTINCT')) stopStandardReview = code;
+            // A stale or refused reviewer login fails every later call the same way: stop the standard lane
+            // instead of reserving, preparing and releasing a job for each remaining finding.
+            else if (!high && (code === 'MODULE_EXAM_REVIEWER_UNAVAILABLE' || code === 'MODULE_EXAM_PROVIDER_NOT_DISTINCT'
+              || code === 'EXAM_LOGIN_STALE' || code === 'PROVIDER_AUTH_FAILED')) stopStandardReview = code;
             return;
           }
         } finally {

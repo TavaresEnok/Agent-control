@@ -249,3 +249,31 @@ test('o supervisor monta só o login do Grok, só leitura, sem rede, e recusa lo
     await db.pool.end(); await fixture.close(); await rm(area, {recursive: true, force: true});
   }
 });
+
+test('login do revisor Grok vencido para a fila comum na primeira recusa e a nota nomeia o Grok', async () => {
+  const {examineFunctionalModule, examJobExited} = await import('../src/module-exam.ts');
+  const {qaStaticFinding} = await import('./fixtures/module-exam-review.ts');
+  const skipped = (n: number) => `test.skip("caso ${n}", () => {})`;
+  const files = Array.from({length: 6}, (_, f) => ({file: `src/g${f}.test.ts`, reason: null, code: skipped(f) + ';\n'}));
+  const findings = files.map(({file}, f) => qaStaticFinding(file, 1, skipped(f) + ';'));
+  const seat = (provider: string) => ({provider, model: provider === 'grok' ? 'grok-4.7' : 'claude-sonnet-5-5', accountId: randomUUID(), profileId: randomUUID(), grantId: randomUUID()});
+  const examiner = seat('claude');
+  let reviewerSeats = 0, reviewerCalls = 0;
+  const result = await examineFunctionalModule({module: 'qa', intentId: randomUUID(), commit: 'a'.repeat(40), map: {files, routes: []}, findings,
+    reviewTriage: false,
+    reserve: async purpose => { if (purpose === 'examiner') return examiner; reviewerSeats++; return seat('grok'); },
+    release: async () => {},
+    worker: {async run(call) {
+      const task = JSON.parse(call.task);
+      if (task.checklist) return JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: ['qa'], routesReviewed: [], findings: []});
+      reviewerCalls++;
+      // The supervisor refused before launch, and the native worker reconciled the job as terminal.
+      throw examJobExited(new Refusal('EXAM_LOGIN_STALE'));
+    }}});
+  assert.equal(reviewerSeats, 1);
+  assert.equal(reviewerCalls, 1);
+  assert.equal(result.findings.length, 6);
+  assert.ok(result.findings.every(finding => finding.failure === 'EXAM_LOGIN_STALE' && finding.status === 'provavel'));
+  assert.ok(result.notes.includes('Login da conta Grok da instalação vencido; renove e rode de novo.'), JSON.stringify(result.notes));
+  assert.ok(!result.notes.some(note => note.includes('conta Claude')));
+});
