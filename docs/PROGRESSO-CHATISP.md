@@ -683,3 +683,41 @@ Ordem: `docs/ORDEM-CHATISP.md`. Equipe: `AGENTS.md`, seção "Equipe ChatISP". C
     - b1 a b4 com Grok médio, migrações 00090 a 00109;
     - front com Opus médio.
   - Nada foi enviado (push).
+- 25/11/2026 ~23:30 UTC — **Supervisor: os 449 baixos tratados e integrados.**
+  - **Lotes e trabalhadores** (cada um no seu worktree, a partir da integração `462b5e7`):
+    - b1, atendimento (83 achados), Grok 4.7 médio, migrações 00090 a 00092;
+    - b2, plataforma, migrações e comandos (79), Grok médio e alto na correção de segurança, migrações 00096 a 00099;
+    - b3, canais, webhooks, API pública, ERP e anexos (95), Grok médio;
+    - b4, resto do backend, documentação e deploy (115), Grok médio;
+    - front (77), Opus 5.5 médio.
+  - **Como cada achado foi tratado:** primeiro conferido no código atual, depois classificado em corrigido, já resolvido, não se sustenta ou aceito sem mudança.
+    - "Aceito" é para refatorações amplas sem defeito funcional, sempre com justificativa.
+    - As tabelas completas estão em `ordens-correcao/relatorios-ramos/baixos-*.md`.
+  - **Revisões independentes (Opus 5.5 médio, só leitura), em três voltas.**
+    - **b2, segurança:** a primeira volta achou uma falha média. A migração 00095 dava a `chatisp_platform` uma função `SECURITY DEFINER` capaz de promover qualquer usuário a superadmin, e a única barreira era um GUC que a própria sessão pode definir.
+      - A 00095 foi retirada.
+      - O bootstrap passou a promover na conexão `owner`, em transação e sob advisory lock.
+      - Um teste prova a recusa, mesmo com `app.access_scope='platform'`.
+      - A segunda revisão confirmou que não sobra caminho para isso.
+    - **Front, média:** um evento qualquer da caixa recolhia o histórico aberto. Também havia um limite de 5 páginas que escondia as mensagens além das 500 mais recentes.
+      - Agora as páginas antigas ficam, e só a página mais nova é renovada.
+      - O `signal` passou a ser repassado aos pedidos, e o histórico não é mais recarregado quando a rede volta.
+      - O foco de teclado volta ao lugar certo no painel externo.
+      - O corte dos eventos usa `trusted_at`.
+    - **Demais ressalvas:** baixas, todas corrigidas, entre elas:
+      - teste da autorização da despedida e teto de 500 na capacidade;
+      - de volta o 503 na API pública e a trava no download;
+      - logs pelo logger do processo;
+      - CHECK `NOT VALID` seguido de `VALIDATE`;
+      - testes que agora distinguem o código antigo do novo.
+  - **Integração (`87a0149`):**
+    - Go: build, vet e testes passaram em 69 pacotes.
+    - Front: tsc limpo, 81 arquivos e 422 testes, lint limpo e build ok.
+    - O `schema.ts` foi regenerado pelo gerador do projeto.
+  - **Limites registrados:**
+    - páginas antigas do histórico não são relidas a cada evento, então uma reação numa mensagem antiga só aparece quando a página for recarregada;
+    - a atribuição gera até 3 renovações da página mais nova;
+    - a causa do goose agora aparece nas mensagens de migração (sem senha);
+    - deploy sem rolling entre versões.
+  - **Worktrees:** os `pend-*` e `baixos-*` foram removidos, e os ramos continuam.
+  - Nada foi enviado (push). O ramo para entregar é `agent-control/integracao-20261125`, com 311 commits sobre `agent-control/auditoria-20261122`.
