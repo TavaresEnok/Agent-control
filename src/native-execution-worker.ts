@@ -31,7 +31,9 @@ const Launch=z.object({schemaVersion:z.literal(1),jobId:UUID,contextId:UUID,inte
  artifactCommit:z.string().regex(/^[a-f0-9]{40}$/).optional(),outputSchema:z.record(z.string(),z.unknown()).optional(),
  environmentId:z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),toolsAddress:z.string().refine(isPrivateToolAddress),timeoutMs:z.number().int().min(1000).max(1800000),expiresAt:z.number().int().positive(),provider:z.enum(['codex','claude','grok']).optional(),
  synthetic:z.boolean().optional(),moduleExam:z.literal(true).optional(),
- oauthAccessToken:z.string().min(1).max(16384).optional()}).strict();
+ oauthAccessToken:z.string().min(1).max(16384).optional(),
+ // sha256 of the Grok login the supervisor checked; the module exam worker refuses a mounted login that differs.
+ moduleExamLoginDigest:Hash.optional()}).strict();
 
 /** Coherent agreement with the supervisor: a synthetic fixture never runs the Claude exam token path. */
 export function isClaudeExamWorker(input:{verifyExam:boolean;provider?:string;synthetic?:boolean}):boolean{

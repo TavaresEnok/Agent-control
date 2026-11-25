@@ -7,12 +7,12 @@ import {assertModelAllowed} from './model-policy.ts';
 import {assertNoNativeTaskSecrets} from './native-execution-redaction.ts';
 import {writeNativeSecretSnapshot,readNativeArtifactSecrets} from './native-execution-secret-snapshot.ts';
 import {collectSecretValues} from '../upstream/cezar/packages/cezar/dist/core/secret-redaction.js';
-import {assertCodexSubscriptionIdentity,readMountedCredentialSecrets} from './native-worker-security.ts';
+import {assertCodexSubscriptionIdentity,readGrokLogin,readMountedCredentialSecrets} from './native-worker-security.ts';
 import {requireProjectEnvironmentLaunch} from './project-environments.ts';
 import {pinNativeProtocolForNewAttempt} from './native-protocol-compatibility.ts';
 import {requireRecoveryInventory} from './recovery-inventory.ts';
 import {cancelPreparedNativeResources,admitNativeResources} from './native-resource-envelope.ts';
-import {mkdir,lstat,realpath,readFile,writeFile,rename,cp,rm} from 'node:fs/promises';
+import {mkdir,lstat,realpath,writeFile,rename,cp,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {sign,createHmac,randomBytes} from 'node:crypto';
 import {z} from 'zod';
@@ -29,7 +29,7 @@ import {replaceSecretClassFiles} from './verify-redact.ts';
 import {rememberExamStripNote} from './exam-strip-note.ts';
 import {reviewDiffDocument} from './review-diff.ts';
 import {describeBind,examAccountMount,examWorkerEnv,formatExamStripNote,stripExamHostileConfig} from './verify-exam-isolation.ts';
-import {examLoginNeedsRefresh,grokAccessExpiresAt,postgresAccountLoginLock,prepareClaudeExamAccessToken,renewClaudeLoginInPlace,safeFailureCode} from './exam-login.ts';
+import {examLoginNeedsRefresh,postgresAccountLoginLock,prepareClaudeExamAccessToken,renewClaudeLoginInPlace,safeFailureCode} from './exam-login.ts';
 import {nativeReviewMapScope,nativeTaskWithRepoMap} from './native-repo-map.ts';
 import {Id,PreLaunchExamReason,withGrantLaunchLock,UnstartedExamRetirementPending,readonlyDesignExam,NativeExecutionRequest,toolsEntrypoint,moduleExamCompanion,workerEntrypoint,retireNativePrivateNetwork,readonlySecurityExam,readonlyExamIsolation,stageDesignExamCaptures} from './native-execution-shared.ts';
 import {NativeExecutionTerminalWork} from './native-execution-terminal-work.ts';
@@ -124,6 +124,7 @@ export class NativeExecutionSupervisor extends NativeExecutionTerminalWork{
   let assessment:Awaited<ReturnType<ProviderEligibility['view']>>['latest']|undefined;
   let envSecrets:string[]=[];
   let accountSecrets:string[]=[];
+  let grokLoginDigest:string|undefined;
   const accountRoot=join(this.config.accountRoot,g.account_id);
   let examWorkflowEarly:unknown;
   let claudeExam=false;
@@ -141,8 +142,12 @@ export class NativeExecutionSupervisor extends NativeExecutionTerminalWork{
      // The Grok reviewer gets a read-only copy of the login and cannot refresh it: a login near expiry is stale here.
      const grokHome=join(accountRoot,'.grok'), info=await lstat(grokHome);
      if(!info.isDirectory()||info.isSymbolicLink()||await realpath(grokHome)!==grokHome)throw new Refusal('EXAM_LOGIN_STALE');
-     accountSecrets=await readMountedCredentialSecrets('grok',accountRoot);
-     if(examLoginNeedsRefresh(grokAccessExpiresAt(JSON.parse(await readFile(join(grokHome,'auth.json'),'utf8'))),Date.now(),input.timeoutMs))throw new Refusal('EXAM_LOGIN_STALE');
+     // One private read gives the redaction secrets, the expiry and the digest the signed launch binds the worker to.
+     const login=await readGrokLogin(accountRoot);
+     try{
+      accountSecrets=login.secrets;grokLoginDigest=login.digest;
+      if(examLoginNeedsRefresh(login.expiresAt,Date.now(),input.timeoutMs))throw new Refusal('EXAM_LOGIN_STALE');
+     }finally{login.bytes.fill(0);}
     }
     else if(input.moduleExam){
      const codexHome=join(accountRoot,'.codex'), info=await lstat(codexHome);
@@ -336,7 +341,7 @@ export class NativeExecutionSupervisor extends NativeExecutionTerminalWork{
   const launchProvider=personal?this.config.provider:this.config.provider&&this.config.provider!=='codex'?this.config.provider:undefined;
   const effectiveModel=g.model,effectiveEffort=g.effort;
   const tagSecrets=claudeExam&&examAccessToken?[examAccessToken]:accountSecrets;
-  const launch={schemaVersion:1,jobId:input.jobId,contextId:authority.contextId,intentId:input.intentId,grantId:input.grantId,accountId:g.account_id,profileId:g.profile_id,sessionId:input.sessionId,epoch:authority.epoch,providerSubjectDigest:this.subjects.get(g.account_id)!,credentialSnapshotTag:createHmac('sha256',token).update(canonical(tagSecrets)).digest('hex'),executorDigest:this.executorDigest,inputDigest:hash,proxyUrl:'http://provider-egress:8080',model:effectiveModel,effort:effectiveEffort,role:input.role,task:launchTask,writePaths:input.writePaths,...(input.role!=='programmer'?{artifactCommit:input.base,outputSchema:input.outputSchema}:input.outputSchema?{outputSchema:input.outputSchema}:{}),environmentId:'native_tools',toolsAddress:address,...(input.moduleExam?{moduleExam:true as const}:{}),timeoutMs:input.timeoutMs,expiresAt:Date.now()+60000,...(launchProvider?{provider:launchProvider}:{}),...(synthetic?{synthetic:true}:{}),...(claudeExam&&examAccessToken?{oauthAccessToken:examAccessToken}:{})};
+  const launch={schemaVersion:1,jobId:input.jobId,contextId:authority.contextId,intentId:input.intentId,grantId:input.grantId,accountId:g.account_id,profileId:g.profile_id,sessionId:input.sessionId,epoch:authority.epoch,providerSubjectDigest:this.subjects.get(g.account_id)!,credentialSnapshotTag:createHmac('sha256',token).update(canonical(tagSecrets)).digest('hex'),executorDigest:this.executorDigest,inputDigest:hash,proxyUrl:'http://provider-egress:8080',model:effectiveModel,effort:effectiveEffort,role:input.role,task:launchTask,writePaths:input.writePaths,...(input.role!=='programmer'?{artifactCommit:input.base,outputSchema:input.outputSchema}:input.outputSchema?{outputSchema:input.outputSchema}:{}),environmentId:'native_tools',toolsAddress:address,...(input.moduleExam?{moduleExam:true as const}:{}),timeoutMs:input.timeoutMs,expiresAt:Date.now()+60000,...(launchProvider?{provider:launchProvider}:{}),...(synthetic?{synthetic:true}:{}),...(claudeExam&&examAccessToken?{oauthAccessToken:examAccessToken}:{}),...(input.moduleExam&&grokLoginDigest?{moduleExamLoginDigest:grokLoginDigest}:{})};
   const signed={payload:launch,signature:sign(null,Buffer.from('agent-control:native-execution-launch:v1\n'+canonical(launch)),this.key).toString('hex')};
   // Atomic publication prevents partial JSON reads by the worker; the journal
   // and private directory make this an exclusive one-time release.
