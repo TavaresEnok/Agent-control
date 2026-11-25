@@ -631,7 +631,26 @@ Ordem: `docs/ORDEM-CHATISP.md`. Equipe: `AGENTS.md`, seção "Equipe ChatISP". C
     - paginar `ListMessages`;
     - a idempotência no ERP com a mesma `local_key`;
     - a 00065 trava a escrita de jobs numa instalação existente;
-    - drenar automaticamente a fila de remoção;
     - os 5 médios do checkov;
     - os 449 baixos.
   - Nada foi enviado (push).
+- 25/11/2026 ~16:30 UTC — **Supervisor: fila de remoção de anexos esvaziada automaticamente.**
+  - **`63a5e91`:**
+    - a fila `attachment_pending_deletes` passa a ser esvaziada automaticamente;
+    - a exclusão por privacidade também esvazia a fila do tenant.
+  - **Revisão de `63a5e91`:** achou uma regressão média, porque o dreno dividia o job de 30 s com o ciclo de vida dos atendimentos.
+  - **`0145429`:** o dreno virou um job próprio.
+    - Job `chatisp.attachments.pending_deletes.v1`, na fila `attachment_cleanup`.
+    - Roda a cada 1 min, com timeout de 50 s, até 5 s por tenant e rodízio entre os tenants.
+    - A chave da mídia passou a ser sempre aleatória (`namespace/uuid`), o que fecha a corrida entre dois drenos.
+  - **Revisão final:** aprovada com ressalvas, com 4 baixos:
+    - o rodízio e o prazo global sem teste próprio;
+    - o registro do job no River sem teste;
+    - o dreno passou de 10 s para 1 min, o que atrasa a remoção na exclusão por privacidade;
+    - a corrida volta durante um deploy com réplicas de versões diferentes.
+  - **Integração final:** a suíte Go passou nos 68 pacotes e o front-end nos 370 testes.
+  - **Worktrees:**
+    - Os worktrees `grok-1` a `grok-5` e `seguranca` já integrados foram removidos.
+    - Os ramos continuam.
+    - Os relatórios dos trabalhadores estão em `ordens-correcao/relatorios-ramos/`.
+  - Nada foi enviado (push). O ramo para entregar é `agent-control/integracao-20261125`.
