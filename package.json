@@ -30,6 +30,7 @@
     "personal:restore-proof": "node scripts/personal-restore-proof.mjs",
     "personal:design": "node scripts/personal-design.mjs",
     "personal:verify": "node scripts/personal-verify.mjs",
+    "personal:painel": "VITE_AGENT_CONTROL_MANAGED=1 npm --prefix upstream/cezar run build:web",
     "personal:arquitetura": "node scripts/personal-arquitetura.mjs",
     "personal:dependencias": "node scripts/personal-dependencias.mjs",
     "personal:banco": "node scripts/personal-banco.mjs",
