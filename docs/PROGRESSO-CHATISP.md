@@ -603,3 +603,35 @@ Ordem: `docs/ORDEM-CHATISP.md`. Equipe: `AGENTS.md`, seção "Equipe ChatISP". C
     - Os 5 Grok médio corrigiram os 106 confirmados dos módulos 2 a 9 (85 na primeira onda e 21 na segunda, sobre o ramo de segurança).
     - Revisão independente (Opus médio): os ramos 1 e 3 saíram aprovados com ressalvas e os 2, 4 e 5 reprovados. Os motivos foram uma corrida no upload, mídia que para após 60 s, uma corrida que apaga a mídia de outro worker, o Down da 00048 com leitura ampla e o SQL da fila sem medição. Cada Grok recebeu de volta só o backend.
   - **Regra nova do titular:** front-end só por Opus ou Fable. Os Grok 1, 2 e 3 mexeram em `web/`. O Opus desfaz essa parte e refaz as correções de front-end depois que o Grok de cada ramo termina o backend. A base do front ficou verde: typecheck limpo, 65 arquivos e 335 testes.
+- 25/11/2026 ~15:00 UTC — **Supervisor: rodadas de revisão e junção dos ramos de correção do ChatISP.**
+  - **Front-end:** o Opus desfez o `web/` dos Grok 1 a 3 e refez os 8 achados de front-end. Conferido que todo commit em `web/` que fica nos ramos é do Opus.
+  - **Revisões independentes (Opus médio, só leitura):**
+    - **2ª revisão:** 1, 3 e 5 aprovados com ressalvas; 2 e 4 reprovados (503 na lista acima de 500 conversas, reserva presa em `writing`, ACH-032 contornável, vazamento de objeto apagado).
+    - **3ª rodada:** o Grok fez o backend de 1, 3 e 5; o Opus médio assumiu 2 e 4.
+    - **3ª revisão:** os 5 aprovados (o 5 sem ressalvas).
+    - **Últimos médios:** o Opus corrigiu dois e uma revisão curta aprovou com ressalvas: a mídia de outro worker apagada quando o ETag é igual (ramo 4) e o dreno da fila de remoção (ramo 2).
+  - **Junção:** ramo `agent-control/integracao-20261125` no clone (worktree `chatisp-wt/integracao`), com segurança, grok-5, grok-1, grok-3, grok-2 e grok-4.
+    - **Conflitos resolvidos:**
+      - `main.go`: os dois comandos novos.
+      - `media/convert.go`: a liberação em transação do grok-3 com a remoção adiada do objeto do grok-2.
+      - `jobs/migrate.go`: as políticas do grok-1 com o índice do grok-2.
+      - Diretório de operadores (grok-4 × grok-5, feito pelo Opus): o SQL final mantém o ator amarrado e as restrições por caixa. O Down da 00073 volta à versão da 00060.
+    - **Migrações renumeradas:**
+      - grok-1: 00061 e 00062;
+      - grok-2: 00063 a 00070;
+      - grok-4: 00071 a 00075.
+    - O ciclo de subir, descer e subir de novo passou.
+  - **Último achado (privacidade):**
+    - **Problema:** uma gravação atrasada na chave antiga da mídia ficava sem referência.
+    - **Correção (`e977b34`):** a chave antiga entra em `attachment_pending_deletes` com `not_before` de 10 minutos (migração 00076).
+    - **Limitação anterior a este trabalho:** essa fila só é drenada quando a rota HTTP de limpeza de anexos é chamada.
+  - **Provas na integração:** a suíte Go passou nos 68 pacotes. No front-end, o typecheck ficou limpo, passaram 70 arquivos e 370 testes, e o lint não apontou nada.
+  - **Pendências:**
+    - paginar a lista HTTP de conversas (a trava `FOR SHARE` está registrada no contrato);
+    - paginar `ListMessages`;
+    - a idempotência no ERP com a mesma `local_key`;
+    - a 00065 trava a escrita de jobs numa instalação existente;
+    - drenar automaticamente a fila de remoção;
+    - os 5 médios do checkov;
+    - os 449 baixos.
+  - Nada foi enviado (push).
