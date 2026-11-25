@@ -233,6 +233,9 @@ test('o supervisor monta só o login do Grok, só leitura, sem rede, e recusa lo
       // Login válido: o worker não tem rede, não tem /work nem a pasta da conta, só o auth.json do Grok em leitura.
       await writeLogin(new Date(Date.now() + 6 * 3600_000));
       await supervisor.start(owner, authority, request(await grant())).catch(() => undefined /* the fake Docker stops at start */);
+      // The core admitted a Grok module exam (native-execution-core: moduleExamProviders): the job is journaled.
+      const journaled = (await db.pool.query('SELECT role,account_id FROM ac_native_execution_jobs WHERE id=$1', [jobs.at(-1)])).rows[0];
+      assert.deepEqual(journaled, {role: 'specialist', account_id: account});
       const worker = created.find(item => item.name.startsWith('ac-native-worker-'));
       assert.ok(worker, JSON.stringify(mutations));
       assert.equal(worker.spec.HostConfig.NetworkMode, 'none');
@@ -276,4 +279,39 @@ test('login do revisor Grok vencido para a fila comum na primeira recusa e a not
   assert.ok(result.findings.every(finding => finding.failure === 'EXAM_LOGIN_STALE' && finding.status === 'provavel'));
   assert.ok(result.notes.includes('Login da conta Grok da instalação vencido; renove e rode de novo.'), JSON.stringify(result.notes));
   assert.ok(!result.notes.some(note => note.includes('conta Claude')));
+});
+
+test('o runtime do exame cria um assento Grok para a conta Grok ativa da instalação', {skip: !base}, async () => {
+  const {composePersonalModuleExamRuntime} = await import('../src/module-exam-native.ts');
+  const fixture = await isolatedDatabase(base!, 'modexamgrokrt');
+  const ledger = new Ledger(fixture.url), area = await mkdtemp(join(tmpdir(), 'ac-modexam-grok-rt-'));
+  try {
+    await ledger.migrate();
+    await ledger.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
+    const owner = 'grok-runtime-owner', project = randomUUID();
+    await ledger.pool.query('INSERT INTO ac_projects VALUES($1,$2)', [project, 'Grok runtime']);
+    await ledger.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')", [project, owner]);
+    const capacity = new Capacity(ledger);
+    const claude = randomUUID(), grok = randomUUID();
+    for (const [id, provider] of [[claude, 'claude'], [grok, 'grok']] as const) {
+      await capacity.addAccount(owner, project, {id, provider, label: provider, resourceIdentity: `${provider}:${digest({id})}`, mode: 'subscription_cli',
+        eligibility: 'documented_supported', eligibilitySource: 'https://example.invalid/fixture', maxConcurrent: 1});
+    }
+    const enabled = (await ledger.pool.query('SELECT provider FROM ac_accounts WHERE enabled ORDER BY provider')).rows.map(row => row.provider);
+    assert.deepEqual(enabled, ['claude', 'grok']);
+    const keyFile = join(area, 'execution.pem');
+    await writeFile(keyFile, generateKeyPairSync('ed25519').privateKey.export({format: 'pem', type: 'pkcs8'}).toString(), {mode: 0o600});
+    const image = 'sha256:' + '0'.repeat(64);
+    const config = {project: {repo: join(area, 'repo')}, projects: [], nativeBootstrap: {state: 'active',
+      accounts: [{accountId: claude, subjectDigest: digest({id: claude})}, {accountId: grok, subjectDigest: digest({id: grok})}],
+      execution: {id: 'native-exec', workerImage: image, toolsImage: image, signingKeyFile: keyFile, hostRoot: join(area, 'host'),
+        accountRoot: join(area, 'accounts'), providerNetworkId: 'd'.repeat(64)}}};
+    const runtime = await composePersonalModuleExamRuntime(config as never, ledger);
+    assert.deepEqual(runtime.map(seat => [seat.provider, [...seat.accountIds]]), [['claude', [claude]], ['grok', [grok]]]);
+    // Restricted to the Grok account alone, the runtime still offers its seat.
+    const onlyGrok = await composePersonalModuleExamRuntime(config as never, ledger, [grok]);
+    assert.deepEqual(onlyGrok.map(seat => seat.provider), ['grok']);
+  } finally {
+    await ledger.pool.end(); await fixture.close(); await rm(area, {recursive: true, force: true});
+  }
 });
