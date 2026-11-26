@@ -189,3 +189,21 @@ test('the ledger pool ends sessions left idle inside a transaction',async()=>{
   assert.ok(IDLE_IN_TRANSACTION_TIMEOUT_MS>=5*60*1000,'well above the 80 s Docker call of the incident');
  }finally{await db.close();await isolated.close();}
 });
+
+// Third review (medium): when Postgres ends a session idle inside a transaction (FATAL 25P03), pg emits 'error' on the
+// borrowed client, whose pool listener is detached while it is lent. Without a listener of the ledger that was an unhandled
+// 'error' event: the whole server or CLI went down with every exam slot, instead of only that transaction being undone.
+test('a transaction left idle past the timeout is ended, and the process and the pool go on',async()=>{
+ const {db,isolated}=await setup('lease_idle_end');
+ const errors=console.error;const logged:unknown[][]=[];console.error=(...args:unknown[])=>{logged.push(args);};
+ try{
+  await assert.rejects(db.tx(async c=>{
+   await c.query("SET LOCAL idle_in_transaction_session_timeout='300ms'");
+   await sleep(1000);
+   await c.query('SELECT 1');
+  }),/idle-in-transaction|terminat|not queryable|Connection/i);
+  // The process is alive (this line runs) and the pool hands out a working session again.
+  assert.equal((await db.pool.query('SELECT 1 AS ok')).rows[0].ok,1);
+  assert.ok(logged.some(args=>String(args[0]).includes('LEDGER_SESSION_ERROR')),JSON.stringify(logged));
+ }finally{console.error=errors;await db.close();await isolated.close();}
+});

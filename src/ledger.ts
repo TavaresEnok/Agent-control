@@ -47,9 +47,16 @@ export const IDLE_IN_TRANSACTION_TIMEOUT_MS = 10 * 60 * 1000;
 const fencedLeases = new WeakMap<pg.PoolClient, Map<string, {instanceId: string; epoch: number; leaseUntil: string; fencedAt: string}>>();
 export class Ledger {
   readonly pool: pg.Pool;
-  constructor(connectionString: string,readonly installationAuthority?:InstallationFenceToken,readonly runtimeIdentity?:RuntimeIdentity,/** Volumes the installation writes to; the capacity gate measures these before admitting a new worker. */readonly launchVolumes?:readonly string[]) { if(runtimeIdentity)RuntimeIdentity.parse(runtimeIdentity);this.pool = new pg.Pool({ connectionString, max: 8, idle_in_transaction_session_timeout: IDLE_IN_TRANSACTION_TIMEOUT_MS }); }
+  constructor(connectionString: string,readonly installationAuthority?:InstallationFenceToken,readonly runtimeIdentity?:RuntimeIdentity,/** Volumes the installation writes to; the capacity gate measures these before admitting a new worker. */readonly launchVolumes?:readonly string[]) { if(runtimeIdentity)RuntimeIdentity.parse(runtimeIdentity);this.pool = new pg.Pool({ connectionString, max: 8, idle_in_transaction_session_timeout: IDLE_IN_TRANSACTION_TIMEOUT_MS });
+    // A session ended by the server (the idle-in-transaction timeout, a restart) emits 'error' on its client; the pool's own
+    // listener is detached while the client is lent. Without these, that is an unhandled 'error' event and the whole process
+    // goes down with every exam slot. The failing transaction is undone by its next query; the pool drops the dead client.
+    const logged = (error: Error) => { console.error('LEDGER_SESSION_ERROR', (error as {code?: string}).code ?? error.message); };
+    this.pool.on('connect', client => { client.on('error', logged); });
+    this.pool.on('error', logged); }
   async tx<T>(fn: (c: pg.PoolClient) => Promise<T>): Promise<T> {
     const c = await this.pool.connect();
+    let broken = false;
     try {
       // A pooled client is reused: a fence made outside tx() on it never extends a later transaction.
       fencedLeases.delete(c); await c.query('BEGIN'); const v = await fn(c);
@@ -69,7 +76,11 @@ export class Ledger {
       }
       await c.query('COMMIT'); return v;
     }
-    catch (e) { await c.query('ROLLBACK'); throw e; } finally { fencedLeases.delete(c); c.release(); }
+    catch (e) {
+      // A session the server ended cannot roll back: keep the transaction's own error and destroy the client.
+      try { await c.query('ROLLBACK'); } catch { broken = true; }
+      throw e;
+    } finally { fencedLeases.delete(c); c.release(broken || undefined); }
   }
   async migrate() {
     const folder = new URL('../db/migrations/', import.meta.url);
