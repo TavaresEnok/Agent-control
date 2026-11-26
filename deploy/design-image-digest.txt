@@ -1,1 +1,1 @@
-localhost:5000/ac-design:gerente-ac@sha256:5b923cac152c7cb25f075867165e7f8b24af39d3a0fb4b9c0fd6ef212a038dc2
+localhost:5000/ac-design:gerente-ac@sha256:f0418072be7cf2d2544bc5917fb2cccc8f291cb7ba77bda0c159a56c76317420
