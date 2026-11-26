@@ -35,8 +35,12 @@ export type Intent = { id: string; context_id: string; operation_id: string; run
   manager_epoch: string; plan_revision: number; state: string; command: Command; parent_intent_id?:string|null;parent_unit_id?:string|null };
 /** Leases a transaction proved with `fence`: the row value and the instant it was read, per context. Keyed by the client,
  * so a Ledger built without its constructor (test doubles) shares the same bookkeeping. */
-/** Twice the heartbeat lease: the most a fence may lag the last heartbeat and still give the lease back its pause. */
-const FENCED_EXTENSION_HEARTBEAT_SECONDS = 30;
+/** Twice the heartbeat lease: the most a fence may lag the last heartbeat (pauses given back excluded) and still give the
+ * lease back its pause. */
+export const FENCED_EXTENSION_HEARTBEAT_SECONDS = 30;
+/** Absolute ceiling of the time given back since the last real heartbeat: a manager whose heartbeat stopped cannot keep the
+ * lease longer than this by chaining fenced transactions with short gaps. */
+export const FENCED_EXTENSION_TOTAL_SECONDS = 300;
 const fencedLeases = new WeakMap<pg.PoolClient, Map<string, {instanceId: string; epoch: number; leaseUntil: string; fencedAt: string}>>();
 export class Ledger {
   readonly pool: pg.Pool;
@@ -50,11 +54,15 @@ export class Ledger {
       // recovery and key changes all wait on them, so nobody can take the lease over meanwhile. That time does not consume
       // the lease: a Docker call made under the fence (effect, reconcile, retirement) may outlive it on a saturated disk, and
       // the heartbeat queued behind it must not then find the lease expired. Skipped when the transaction changed the lease
-      // itself (heartbeat, release, key change) and on rollback.
+      // itself (heartbeat, release, key change) and on rollback. The same pause moves heartbeat_at, so a later fence queued
+      // behind this one does not count it against the heartbeat; the total given back since the last real heartbeat is capped.
       for (const [contextId, held] of fencedLeases.get(c) ?? []) {
-        await c.query(`UPDATE ac_managers SET lease_until=lease_until+(clock_timestamp()-$4::timestamptz)
-          WHERE context_id=$1 AND instance_id=$2 AND epoch=$3 AND lease_until=$5::timestamptz`,
-        [contextId, held.instanceId, held.epoch, held.fencedAt, held.leaseUntil]);
+        await c.query(`WITH g AS (SELECT LEAST(clock_timestamp()-$4::timestamptz,
+            GREATEST(0, $6::double precision-m.extended_seconds)*interval '1 second') pause FROM ac_managers m WHERE m.context_id=$1)
+          UPDATE ac_managers m SET lease_until=m.lease_until+g.pause,heartbeat_at=m.heartbeat_at+g.pause,
+            extended_seconds=m.extended_seconds+extract(epoch FROM g.pause)
+          FROM g WHERE m.context_id=$1 AND m.instance_id=$2 AND m.epoch=$3 AND m.lease_until=$5::timestamptz`,
+        [contextId, held.instanceId, held.epoch, held.fencedAt, held.leaseUntil, FENCED_EXTENSION_TOTAL_SECONDS]);
       }
       await c.query('COMMIT'); return v;
     }
@@ -169,7 +177,7 @@ export class Ledger {
         }
         const r = await c.query(`INSERT INTO ac_managers VALUES($1,$2,$3,1,clock_timestamp()+$4*interval '1 second')
           ON CONFLICT(context_id) DO UPDATE SET instance_id=excluded.instance_id,profile_id=excluded.profile_id,
-          epoch=ac_managers.epoch+1,lease_until=excluded.lease_until,heartbeat_at=excluded.heartbeat_at
+          epoch=ac_managers.epoch+1,lease_until=excluded.lease_until,heartbeat_at=excluded.heartbeat_at,extended_seconds=0
           WHERE ac_managers.lease_until<=clock_timestamp() RETURNING epoch`, [contextId, instanceId, profileId, leaseSeconds]);
         if (!r.rowCount) throw new Refusal('MANAGER_ACTIVE');
         await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'manager.acquired',$2)",
@@ -207,7 +215,7 @@ export class Ledger {
   async heartbeat(a: Authority) {
     await this.tx(async c => {
       await this.fence(c, a, true);
-      await c.query("UPDATE ac_managers SET lease_until=clock_timestamp()+interval '15 seconds',heartbeat_at=clock_timestamp() WHERE context_id=$1", [a.contextId]);
+      await c.query("UPDATE ac_managers SET lease_until=clock_timestamp()+interval '15 seconds',heartbeat_at=clock_timestamp(),extended_seconds=0 WHERE context_id=$1", [a.contextId]);
     });
   }
   /** Ends this manager's lease without deleting the row or changing its epoch. */

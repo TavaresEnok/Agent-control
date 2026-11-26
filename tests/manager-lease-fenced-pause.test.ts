@@ -134,3 +134,46 @@ test('a fenced transaction aborted by a swallowed error is reported, not silentl
   await db.heartbeat(authority);
  }finally{await db.close();await isolated.close();}
 });
+
+// Second review (high): the heartbeat age was measured at the fence and counted the time the heartbeat itself waited behind
+// another fenced transaction. With several exam jobs, B fenced after A's 80 s Docker call found the heartbeat "old", got no
+// pause back, and the heartbeat queued behind B found the lease expired. The pause now also moves heartbeat_at.
+test('two fenced transactions in a row, the first past the heartbeat ceiling, do not cost the heartbeat its lease',async()=>{
+ const {db,isolated,principal,context}=await setup('lease_queue');
+ try{
+  const authority=await db.acquire(principal,context,randomUUID(),'personal-verify',1);
+  // 29 s since the last heartbeat: A is still under the 30 s ceiling; A's 1.5 s pause would push B past it.
+  await db.pool.query("UPDATE ac_managers SET heartbeat_at=clock_timestamp()-interval '29 seconds' WHERE context_id=$1",[context]);
+  let fencedA!:()=>void;const enteredA=new Promise<void>(resolve=>{fencedA=resolve;});
+  const a=db.tx(async c=>{await db.fence(c,authority,true);fencedA();await sleep(1500);});
+  await enteredA;
+  // B asks for the fence while A holds it; the heartbeat queues behind B.
+  const b=db.tx(async c=>{await db.fence(c,authority,true);await sleep(1500);});
+  await sleep(200);
+  const heartbeat=db.heartbeat(authority);
+  await a;await b;
+  await heartbeat;
+  const row=(await db.pool.query('SELECT extended_seconds FROM ac_managers WHERE context_id=$1',[context])).rows[0];
+  assert.equal(Number(row.extended_seconds),0,'the real heartbeat resets the total given back');
+ }finally{await db.close();await isolated.close();}
+});
+
+// Second review: the absolute ceiling. A manager whose heartbeat stopped but chains fenced transactions with short gaps keeps
+// its heartbeat age low (each pause moves heartbeat_at), so the total given back since the last real heartbeat is capped.
+test('a manager whose heartbeat stopped still loses the lease once the total given back reaches the ceiling',async()=>{
+ const {FENCED_EXTENSION_TOTAL_SECONDS}=await import('../src/ledger.ts');
+ const {db,isolated,principal,context}=await setup('lease_ceiling');
+ try{
+  const authority=await db.acquire(principal,context,randomUUID(),'personal-verify',1);
+  // Just under the ceiling: this transaction gets back at most what is left (0.2 s), not its 1.3 s pause.
+  await db.pool.query('UPDATE ac_managers SET extended_seconds=$2 WHERE context_id=$1',[context,FENCED_EXTENSION_TOTAL_SECONDS-0.2]);
+  await db.tx(async c=>{await db.fence(c,authority,true);await sleep(1300);});
+  const row=(await db.pool.query('SELECT extended_seconds FROM ac_managers WHERE context_id=$1',[context])).rows[0];
+  assert.ok(Math.abs(Number(row.extended_seconds)-FENCED_EXTENSION_TOTAL_SECONDS)<1e-6,String(row.extended_seconds));
+  await assert.rejects(db.heartbeat(authority),/STALE_MANAGER/);
+  // A new lease starts from zero: the same pause is given back again.
+  const next=await db.acquire(principal,context,randomUUID(),'personal-verify',1);
+  await db.tx(async c=>{await db.fence(c,next,true);await sleep(1300);});
+  await db.heartbeat(next);
+ }finally{await db.close();await isolated.close();}
+});
