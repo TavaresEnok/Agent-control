@@ -95,6 +95,7 @@
   "git-archive-snapshot.test.ts",
   "git-cas-concurrency.test.ts",
   "git-compose.test.ts",
+  "grok-model-migration.test.ts",
   "import-history-contract.test.ts",
   "import-preview-stream.test.ts",
   "import-preview.test.ts",
