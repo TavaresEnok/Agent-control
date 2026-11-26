@@ -83,7 +83,7 @@ export async function assertInstallationMigrations(ledger:Ledger){
  const code=await migrationRefusal(()=>ledger.pool.query<AppliedMigration>(appliedMigrationsQuery));
  if(code)throw new Refusal(code,503);
 }
-export const migrationsPendingText='Há migrações pendentes. Faça um backup com npm run personal:backup -- <instalação.json> e depois execute node --import tsx src/server-main.ts initialize <instalação.json>.';
+export const migrationsPendingText='Há migrações pendentes. Faça um backup com npm run personal:backup -- <instalação.json> /caminho/vazio e depois execute node --import tsx src/server-main.ts initialize <instalação.json>.';
 
 function filesystemStatus(fn:()=>Promise<boolean>):Promise<Status>{return timed(fn()).then(ok=>ok?'ok':'blocked',error=>{
  const code=(error as NodeJS.ErrnoException).code;

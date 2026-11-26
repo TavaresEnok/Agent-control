@@ -5,13 +5,14 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {execFileSync,spawnSync} from 'node:child_process';
-import {Installation,initializeInstallation} from '../src/installation.ts';
+import {Installation,initializeInstallation,sessionKey,syncInstallationActivation} from '../src/installation.ts';
 import {inspectInstallationReadiness} from '../src/installation-readiness.ts';
 import {digest} from '../src/contracts.ts';
 import type {Ledger} from '../src/ledger.ts';
 import type pg from 'pg';
 import {createServer} from 'node:net';
 import {Ledger as RealLedger} from '../src/ledger.ts';
+import {Projects} from '../src/projects.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
 test('readiness reports local facts without writing or exposing configuration',async()=>{
@@ -104,7 +105,7 @@ test('readiness and CLI inspect a newly initialized isolated PostgreSQL database
  }finally{await ledger.close();await database.close();await rm(root,{recursive:true,force:true});}
 });
 
-test('serve e personal:design recusam migração pendente; serve inicia com esquema completo',
+test('serve e personal:design recusam o esquema anterior à 121; initialize migra e serve inicia',
  {timeout:60000,skip:!process.env.AC_TEST_DATABASE_URL},async()=>{
  const database=await isolatedDatabase(process.env.AC_TEST_DATABASE_URL!,'migcli'),ledger=new RealLedger(database.url);
  const root=await mkdtemp(join(tmpdir(),'ac-migration-cli-'));
@@ -119,21 +120,43 @@ test('serve e personal:design recusam migração pendente; serve inicia com esqu
   const config=Installation.parse({schemaVersion:1,mode:'administration-only',activation:'personal',databaseUrl:database.url,dataDirectory:privateDir,
    project:{id:randomUUID(),label:'Migration fixture',repo,owner:'synthetic-migration-owner'},
    http:{listen:'127.0.0.1',port,publicOrigin:`http://127.0.0.1:${port}`}});
-  await initializeInstallation(config,ledger);
+  const folder=new URL('../db/migrations/',import.meta.url);
+  const migrations=(await readdir(folder)).filter(name=>/^\d+_.+\.sql$/.test(name)).sort();
+  await ledger.tx(async client=>{
+   await client.query('CREATE TABLE ac_schema_migrations(version integer PRIMARY KEY, digest text NOT NULL)');
+   for(const name of migrations){
+    const version=Number(name.split('_')[0]);
+    if(version>120)continue;
+    const sql=await readFile(new URL(name,folder),'utf8');
+    await client.query(sql);
+    await client.query('INSERT INTO ac_schema_migrations(version,digest) VALUES($1,$2)',[version,digest(sql)]);
+   }
+  });
+  await syncInstallationActivation(ledger,config.activation);
+  await new Projects(ledger).register([config.project],config.project.owner);
+  (await sessionKey(config,true)).fill(0);
   const file=join(root,'installation.json');await writeFile(file,JSON.stringify(config),{mode:0o600});
-  const removed=await ledger.pool.query('DELETE FROM ac_schema_migrations WHERE version=(SELECT max(version) FROM ac_schema_migrations) RETURNING version,digest');
-  assert.equal(removed.rowCount,1);
+  const applied=async()=> (await ledger.pool.query('SELECT version,digest FROM ac_schema_migrations ORDER BY version')).rows;
+  const readHeartbeat=()=>ledger.pool.query('SELECT heartbeat_at FROM ac_managers LIMIT 0');
+  const before=await applied();
+  assert.equal(before.at(-1)?.version,120);
+  await assert.rejects(readHeartbeat,{code:'42703'});
   const env={...process.env};delete env.NO_COLOR;
   const serve=spawnSync(process.execPath,['--import','tsx','src/server-main.ts','serve',file],{encoding:'utf8',timeout:20000,env});
   const assertPending=(result:typeof serve)=>{
    assert.ifError(result.error);assert.equal(result.status,1);assert.match(result.stderr,/MIGRATIONS_PENDING/);
-   assert.match(result.stderr,/npm run personal:backup.*node --import tsx src\/server-main\.ts initialize <instalação\.json>/);
+   assert.match(result.stderr,/npm run personal:backup -- <instalação\.json> \/caminho\/vazio e depois execute node --import tsx src\/server-main\.ts initialize <instalação\.json>/);
   };
   assertPending(serve);
   const design=spawnSync(process.execPath,['scripts/personal-design.mjs',file,config.project.id,'--url','http://migration-fixture.local'],{encoding:'utf8',timeout:20000,env});
   assertPending(design);
-  assert.equal((await ledger.pool.query('SELECT 1 FROM ac_schema_migrations WHERE version=$1',[removed.rows[0].version])).rowCount,0);
-  await ledger.pool.query('INSERT INTO ac_schema_migrations(version,digest) VALUES($1,$2)',[removed.rows[0].version,removed.rows[0].digest]);
+  assert.deepEqual(await applied(),before);
+  await assert.rejects(readHeartbeat,{code:'42703'});
+  const initialize=spawnSync(process.execPath,['--import','tsx','src/server-main.ts','initialize',file],{encoding:'utf8',timeout:20000,env});
+  assert.ifError(initialize.error);assert.equal(initialize.status,0,initialize.stderr);
+  assert.equal(JSON.parse(initialize.stdout).projectId,config.project.id);
+  assert.deepEqual((await applied()).map(row=>row.version),migrations.map(name=>Number(name.split('_')[0])));
+  assert.equal((await readHeartbeat()).fields[0].name,'heartbeat_at');
   const {spawn}=await import('node:child_process');
   server=spawn(process.execPath,['--import','tsx','src/server-main.ts','serve',file],{env});
   const child=server;
