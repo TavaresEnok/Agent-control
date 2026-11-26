@@ -738,3 +738,14 @@ Ordem: `docs/ORDEM-CHATISP.md`. Equipe: `AGENTS.md`, seção "Equipe ChatISP". C
   - Agent Control, Opus 5.5 médio (worktree `agent-control-wt/final-ac`): juntar os 3 commits restantes de `task/grok-revisor`, o passo a passo para ligar o revisor e a causa do `VERIFY_LEASE_LOST`.
 - **Banco de testes:** `ac-test-db-journal` (porta 54333) foi recriado com `--restart unless-stopped` e volume nomeado; antes era descartável (`--rm`) e sem política de reinício.
 - **Disco:** 94% antes da rodada; a retenção automática aplicada não achou nada a retirar.
+- 26/11/2026 ~05:20 UTC — **COTA:** os trabalhadores Opus `d2` e Agent Control pararam com "You've hit your 5-hour limit" na conta Enok Max (renovação às 05:20 UTC). Retomados com `--resume` depois da renovação.
+- 26/11/2026 ~10:45 UTC — **Rodada final: integração completa e exame de design relançado.**
+  - **Integração** `agent-control/integracao-20261126` (`c1e673e`, a partir de `87a0149`): lotes `seg`, `inc`, `ac1`, `ac2`, `d1`, `d2`, `d3`, `cruz` (pedidos do front para o backend) e `front` (passada final). Cada lote passou por revisão independente (Opus 5.5 médio, só leitura) até aprovação; reprovações e ressalvas voltaram ao autor com a revisão inteira.
+    - Migrações novas: 00100–00105, 00110–00114, 00120–00130 (00106–00109 e 00115–00119 não usadas).
+    - Conflitos da junção do `seg` resolvidos à mão (mídia, CI, Dockerfile alpine, roteiro de UI, runbook).
+    - **Prova:** Go com `gofmt` limpo, build, vet e testes ok nos 69 pacotes; front com tsc, 639 testes em 111 arquivos, lint e build ok.
+  - **Baixos aceitos antes:** reavaliados. Ficaram aceitos só os que exigem refatoração ampla sem defeito, ou contrato novo com terceiros, cada um com o custo no relatório do lote (`ordens-correcao/relatorios-ramos/final-*.md`).
+  - **Homologação** atualizada para `c1e673e` com a configuração reconstruída em `~/.agent-control/ispagent/chatisp-homolog/` (a de `/tmp` se perdeu na reinicialização de 24/11). Backup do banco e imagens antigas guardados para reverter. O caminho de atualização do Caddy sem root (`caddy-perms`) funcionou; o Garage precisou ser recriado uma vez (alias de rede). Senhas de `admin-homolog` e `atendente-homolog` redefinidas pelo fluxo de recuperação do produto.
+  - **Disco:** `docker builder prune -f` (cache sem uso, 11 GB) e remoção dos worktrees já integrados; o disco foi de 95% para 92–93%.
+  - **Módulo 10 (design)** relançado pelo produto com Opus médio sobre `c1e673e` (clone central no ramo local `agent-control/exame-design-20261126`), log `ordens-correcao/logs/design-final.log`.
+  - Nada foi enviado (push).
