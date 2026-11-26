@@ -8,6 +8,7 @@ import {DockerDaemon} from './sandbox-broker.ts';
 import {digest,Refusal} from './contracts.ts';
 import {requireRecoveryInventory,type RecoveryInventoryCapability} from './recovery-inventory.ts';
 import pg from 'pg';
+import {logLedgerSessionError} from './ledger-session-errors.ts';
 import {logContainedFailure} from './failure-log.ts';
 /** Trusted injection only. Provisioning is a separate disposable-lab action.
  * Every group shares the same kernel parent across controllers/state roots. */
@@ -36,7 +37,9 @@ export class NativeResourceDockerDaemon extends DockerDaemon{
    const ledger=this.inventoryLedger;
    // Dedicated client avoids exhausting the Ledger pool when every outer
    // domain transaction concurrently waits for a nested physical operation.
-   const c=new pg.Client(ledger.pool.options);await c.connect();
+   // Same options as the ledger, so the same idle-in-transaction timeout: a session the server ends during the physical
+   // operation is recorded, not left as an unhandled 'error' event; the transaction error is rethrown below.
+   const c=new pg.Client(ledger.pool.options);c.on('error',logLedgerSessionError);await c.connect();
    try{await c.query('BEGIN');const inventory=await requireRecoveryInventory(c,ledger);if(inventory)this.bindRecoveryInventory(inventory);else this.inventory=undefined;const result=await this.callResourceFenced(action,value);await c.query('COMMIT');return result;}
    catch(error){await c.query('ROLLBACK').catch(()=>{/* the transaction error is rethrown; the connection ends below */});throw error;}finally{await c.end();}
   }

@@ -290,6 +290,7 @@
   "r5-workflow-graph-pg.test.ts",
   "r6-recovery-bootstrap.test.ts",
   "recovery-catalog-lease.test.ts",
+  "remote-development-admin-session.test.ts",
   "remote-intent.test.ts",
   "remote-project-materialization.test.ts",
   "remote-source-authorization.test.ts",

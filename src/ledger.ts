@@ -3,6 +3,7 @@ import {fenceInstallationContext,type InstallationFenceToken} from './installati
 import { randomUUID } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import pg from 'pg';
+import {watchLedgerSessions} from './ledger-session-errors.ts';
 import { acceptedCommandDigest, Authority, Checkpoint, Command, digest, Id, Refusal, Projection } from './contracts.ts';
 import {CONVERSATION_CHANNEL} from './conversation-transport.ts';
 import { workflowFor } from './workflows.ts';
@@ -60,9 +61,7 @@ export class Ledger {
     // A session ended by the server (the idle-in-transaction timeout, a restart) emits 'error' on its client; the pool's own
     // listener is detached while the client is lent. Without these, that is an unhandled 'error' event and the whole process
     // goes down with every exam slot. The failing transaction is undone by its next query; the pool drops the dead client.
-    const logged = (error: Error) => { console.error('LEDGER_SESSION_ERROR', (error as {code?: string}).code ?? error.message); };
-    this.pool.on('connect', client => { client.on('error', logged); });
-    this.pool.on('error', logged); }
+    watchLedgerSessions(this.pool); }
   async tx<T>(fn: (c: pg.PoolClient) => Promise<T>): Promise<T> {
     const c = await this.pool.connect();
     let broken = false;
