@@ -161,7 +161,9 @@ test('two fenced transactions in a row, the first past the heartbeat ceiling, do
 // Second review: the absolute ceiling. A manager whose heartbeat stopped but chains fenced transactions with short gaps keeps
 // its heartbeat age low (each pause moves heartbeat_at), so the total given back since the last real heartbeat is capped.
 test('a manager whose heartbeat stopped still loses the lease once the total given back reaches the ceiling',async()=>{
- const {FENCED_EXTENSION_TOTAL_SECONDS}=await import('../src/ledger.ts');
+ const {fencedExtensionCeilingSeconds}=await import('../src/ledger.ts');
+ // No capacity configuration in this database: one exam slot, so the ceiling is its floor.
+ const FENCED_EXTENSION_TOTAL_SECONDS=fencedExtensionCeilingSeconds(1);
  const {db,isolated,principal,context}=await setup('lease_ceiling');
  try{
   const authority=await db.acquire(principal,context,randomUUID(),'personal-verify',1);
@@ -206,4 +208,43 @@ test('a transaction left idle past the timeout is ended, and the process and the
   assert.equal((await db.pool.query('SELECT 1 AS ok')).rows[0].ok,1);
   assert.ok(logged.some(args=>String(args[0]).includes('LEDGER_SESSION_ERROR')),JSON.stringify(logged));
  }finally{console.error=errors;await db.close();await isolated.close();}
+});
+
+// Third review (medium): the ceiling must cover every exam slot queuing one slow fenced Docker call ahead of the heartbeat.
+// With evaluation_limit 4 and ~80 s calls (the incident), a fixed 300 s ceiling let the heartbeat behind them expire.
+test('four fenced transactions in a row ahead of the heartbeat fit the ceiling sized by evaluation_limit',async()=>{
+ const {fencedExtensionCeilingSeconds,FENCED_WORST_CALL_SECONDS,IDLE_IN_TRANSACTION_TIMEOUT_MS}=await import('../src/ledger.ts');
+ // The sizing itself: four incident-sized calls (80 s) plus a lease fit, and the ceiling is never below the idle timeout.
+ assert.ok(fencedExtensionCeilingSeconds(4)>=4*80+15);
+ assert.ok(fencedExtensionCeilingSeconds(4)>=IDLE_IN_TRANSACTION_TIMEOUT_MS/1000);
+ assert.ok(IDLE_IN_TRANSACTION_TIMEOUT_MS/1000>=FENCED_WORST_CALL_SECONDS,'a worst-case call is not ended by the idle timeout');
+ assert.equal(fencedExtensionCeilingSeconds(8),8*FENCED_WORST_CALL_SECONDS+15);
+ const {db,isolated,principal,context}=await setup('lease_four');
+ try{
+  await db.pool.query('INSERT INTO ac_control_admins VALUES($1) ON CONFLICT DO NOTHING',['synthetic-capacity-administrator']);
+  const {Capacity}=await import('../src/capacity.ts');
+  await new Capacity(db).configure('synthetic-capacity-administrator',{programmingLimit:8,evaluationLimit:8});
+  const queue=async(authority:Awaited<ReturnType<typeof db.acquire>>)=>{
+   const slow=(entered:()=>void)=>db.tx(async c=>{await db.fence(c,authority,true);entered();await sleep(1200);});
+   let first!:()=>void;const firstIn=new Promise<void>(resolve=>{first=resolve;});
+   const jobs=[slow(first)];await firstIn;
+   for(let i=1;i<4;i++){await sleep(100);jobs.push(slow(()=>undefined));}
+   await sleep(100);
+   const heartbeat=db.heartbeat(authority);
+   const settled=await Promise.allSettled([...jobs,heartbeat]);
+   return {jobs:settled.slice(0,4),heartbeat:settled[4]!};
+  };
+  const stale=(result:PromiseSettledResult<unknown>)=>result.status==='rejected'&&/STALE_MANAGER/.test(String((result.reason as Error)?.message??result.reason));
+  // 700 s already given back since the last heartbeat: above the 600 s floor, under the ceiling of 8 slots (975 s).
+  const authority=await db.acquire(principal,context,randomUUID(),'personal-verify',1);
+  await db.pool.query('UPDATE ac_managers SET extended_seconds=700 WHERE context_id=$1',[context]);
+  const fitted=await queue(authority);
+  assert.deepEqual([...fitted.jobs,fitted.heartbeat].map(result=>result.status),Array(5).fill('fulfilled'),'all four calls and the heartbeat keep the lease');
+  // The same state with 4 slots (ceiling 600 s): nothing more is given back, so the heartbeat behind the queue fails.
+  await db.pool.query('UPDATE ac_capacity_config SET evaluation_limit=4 WHERE id=1');
+  const next=await db.acquire(principal,context,randomUUID(),'personal-verify',1).catch(async()=>{await sleep(16000);return db.acquire(principal,context,randomUUID(),'personal-verify',1);});
+  await db.pool.query('UPDATE ac_managers SET extended_seconds=700 WHERE context_id=$1',[context]);
+  const capped=await queue(next);
+  assert.ok(stale(capped.heartbeat),'the heartbeat behind the queue finds the lease expired');
+ }finally{await db.close();await isolated.close();}
 });

@@ -38,12 +38,21 @@ export type Intent = { id: string; context_id: string; operation_id: string; run
 /** Twice the heartbeat lease: the most a fence may lag the last heartbeat (pauses given back excluded) and still give the
  * lease back its pause. */
 export const FENCED_EXTENSION_HEARTBEAT_SECONDS = 30;
-/** Absolute ceiling of the time given back since the last real heartbeat: a manager whose heartbeat stopped cannot keep the
- * lease longer than this by chaining fenced transactions with short gaps. */
-export const FENCED_EXTENSION_TOTAL_SECONDS = 300;
 /** Ends a session left idle inside a transaction (a stuck caller holding the context anchor or the manager row). Above the
  * longest legitimate fenced transaction: a Docker call on a saturated disk took about 80 s on 25/11/2026. */
 export const IDLE_IN_TRANSACTION_TIMEOUT_MS = 10 * 60 * 1000;
+/** The slowest fenced Docker call the ceiling is sized for: 1.5x the ~80 s of the incident. */
+export const FENCED_WORST_CALL_SECONDS = 120;
+/** Floor of the ceiling, aligned with the idle-in-transaction timeout. */
+export const FENCED_EXTENSION_TOTAL_SECONDS = IDLE_IN_TRANSACTION_TIMEOUT_MS / 1000;
+const HEARTBEAT_LEASE_SECONDS = 15;
+/** Absolute ceiling of the time given back since the last real heartbeat. Every exam slot (`evaluation_limit`) may queue one
+ * worst-case fenced call ahead of the heartbeat, plus one lease of slack; never below the idle-in-transaction timeout. A
+ * manager whose heartbeat stopped still loses the lease once this much was given back by chaining fenced transactions. */
+export function fencedExtensionCeilingSeconds(evaluationLimit: number) {
+  const slots = Number.isInteger(evaluationLimit) && evaluationLimit > 0 ? evaluationLimit : 1;
+  return Math.max(FENCED_EXTENSION_TOTAL_SECONDS, slots * FENCED_WORST_CALL_SECONDS + HEARTBEAT_LEASE_SECONDS);
+}
 const fencedLeases = new WeakMap<pg.PoolClient, Map<string, {instanceId: string; epoch: number; leaseUntil: string; fencedAt: string}>>();
 export class Ledger {
   readonly pool: pg.Pool;
@@ -67,12 +76,15 @@ export class Ledger {
       // itself (heartbeat, release, key change) and on rollback. The same pause moves heartbeat_at, so a later fence queued
       // behind this one does not count it against the heartbeat; the total given back since the last real heartbeat is capped.
       for (const [contextId, held] of fencedLeases.get(c) ?? []) {
-        await c.query(`WITH g AS (SELECT LEAST(clock_timestamp()-$4::timestamptz,
-            GREATEST(0, $6::double precision-m.extended_seconds)*interval '1 second') pause FROM ac_managers m WHERE m.context_id=$1)
+        // The same ceiling as fencedExtensionCeilingSeconds, from the installation's evaluation_limit.
+        await c.query(`WITH cap AS (SELECT GREATEST($6::double precision,
+            COALESCE((SELECT evaluation_limit FROM ac_capacity_config WHERE id=1), 1)*$7::double precision+$8::double precision) seconds),
+          g AS (SELECT LEAST(clock_timestamp()-$4::timestamptz,
+            GREATEST(0, cap.seconds-m.extended_seconds)*interval '1 second') pause FROM ac_managers m, cap WHERE m.context_id=$1)
           UPDATE ac_managers m SET lease_until=m.lease_until+g.pause,heartbeat_at=m.heartbeat_at+g.pause,
             extended_seconds=m.extended_seconds+extract(epoch FROM g.pause)
           FROM g WHERE m.context_id=$1 AND m.instance_id=$2 AND m.epoch=$3 AND m.lease_until=$5::timestamptz`,
-        [contextId, held.instanceId, held.epoch, held.fencedAt, held.leaseUntil, FENCED_EXTENSION_TOTAL_SECONDS]);
+        [contextId, held.instanceId, held.epoch, held.fencedAt, held.leaseUntil, FENCED_EXTENSION_TOTAL_SECONDS, FENCED_WORST_CALL_SECONDS, HEARTBEAT_LEASE_SECONDS]);
       }
       await c.query('COMMIT'); return v;
     }
