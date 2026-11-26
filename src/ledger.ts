@@ -35,6 +35,8 @@ export type Intent = { id: string; context_id: string; operation_id: string; run
   manager_epoch: string; plan_revision: number; state: string; command: Command; parent_intent_id?:string|null;parent_unit_id?:string|null };
 /** Leases a transaction proved with `fence`: the row value and the instant it was read, per context. Keyed by the client,
  * so a Ledger built without its constructor (test doubles) shares the same bookkeeping. */
+/** Twice the heartbeat lease: the most a fence may lag the last heartbeat and still give the lease back its pause. */
+const FENCED_EXTENSION_HEARTBEAT_SECONDS = 30;
 const fencedLeases = new WeakMap<pg.PoolClient, Map<string, {instanceId: string; epoch: number; leaseUntil: string; fencedAt: string}>>();
 export class Ledger {
   readonly pool: pg.Pool;
@@ -167,7 +169,7 @@ export class Ledger {
         }
         const r = await c.query(`INSERT INTO ac_managers VALUES($1,$2,$3,1,clock_timestamp()+$4*interval '1 second')
           ON CONFLICT(context_id) DO UPDATE SET instance_id=excluded.instance_id,profile_id=excluded.profile_id,
-          epoch=ac_managers.epoch+1,lease_until=excluded.lease_until
+          epoch=ac_managers.epoch+1,lease_until=excluded.lease_until,heartbeat_at=excluded.heartbeat_at
           WHERE ac_managers.lease_until<=clock_timestamp() RETURNING epoch`, [contextId, instanceId, profileId, leaseSeconds]);
         if (!r.rowCount) throw new Refusal('MANAGER_ACTIVE');
         await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'manager.acquired',$2)",
@@ -187,9 +189,10 @@ export class Ledger {
     await lockWorkflowProjectShared(c,a.contextId);
     // Context anchor precedes manager/domain locks in acquire and fence alike.
     await c.query('SELECT id FROM ac_contexts WHERE id=$1 FOR UPDATE',[a.contextId]);
-    const r = await c.query(`SELECT x.paused,m.epoch,m.lease_until::text lease_until,clock_timestamp()::text fenced_at FROM ac_contexts x JOIN ac_managers m ON m.context_id=x.id
+    const r = await c.query(`SELECT x.paused,m.epoch,m.lease_until::text lease_until,clock_timestamp()::text fenced_at,
+      clock_timestamp()-m.heartbeat_at<=$4*interval '1 second' heartbeat_recent FROM ac_contexts x JOIN ac_managers m ON m.context_id=x.id
       WHERE x.id=$1 AND m.instance_id=$2 AND m.epoch=$3 AND m.lease_until>clock_timestamp() FOR UPDATE OF x,m`,
-    [a.contextId, a.instanceId, a.epoch]);
+    [a.contextId, a.instanceId, a.epoch, FENCED_EXTENSION_HEARTBEAT_SECONDS]);
     if (!r.rowCount) throw new Refusal('STALE_MANAGER');
     await assertGenerationFence(c,a.contextId,allowPaused);
     await fenceInstallationContext(c,a.contextId,this.installationAuthority,allowPaused);
@@ -197,13 +200,14 @@ export class Ledger {
     const admission=(await c.query('SELECT enabled FROM ac_admission_control WHERE id=1 FOR SHARE')).rows[0];
     if (!admission?.enabled && !allowPaused) throw new Refusal('ADMISSION_CLOSED');
     const held = fencedLeases.get(c) ?? new Map();
-    if (!held.has(a.contextId)) held.set(a.contextId, {instanceId: a.instanceId, epoch: a.epoch, leaseUntil: r.rows[0].lease_until, fencedAt: r.rows[0].fenced_at});
+    // Only a manager whose heartbeat is recent gets the pause back; one whose heartbeat stopped loses the lease on time.
+    if (r.rows[0].heartbeat_recent && !held.has(a.contextId)) held.set(a.contextId, {instanceId: a.instanceId, epoch: a.epoch, leaseUntil: r.rows[0].lease_until, fencedAt: r.rows[0].fenced_at});
     fencedLeases.set(c, held);
   }
   async heartbeat(a: Authority) {
     await this.tx(async c => {
       await this.fence(c, a, true);
-      await c.query("UPDATE ac_managers SET lease_until=clock_timestamp()+interval '15 seconds' WHERE context_id=$1", [a.contextId]);
+      await c.query("UPDATE ac_managers SET lease_until=clock_timestamp()+interval '15 seconds',heartbeat_at=clock_timestamp() WHERE context_id=$1", [a.contextId]);
     });
   }
   /** Ends this manager's lease without deleting the row or changing its epoch. */

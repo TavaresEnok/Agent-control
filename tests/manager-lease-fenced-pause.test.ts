@@ -104,3 +104,33 @@ test('the abandoned-run sweep does not fail a run whose manager is inside a long
   assert.equal(await status(),'failed');
  }finally{await rm(data,{recursive:true,force:true});await db.close();await isolated.close();}
 });
+
+// Review (low): the pause is given back only while the heartbeat is recent, so a manager whose heartbeat stopped cannot keep
+// its lease by chaining fenced transactions.
+test('a fenced transaction does not extend the lease of a manager whose heartbeat stopped',async()=>{
+ const {db,isolated,principal,context}=await setup('lease_stale_hb');
+ try{
+  const authority=await db.acquire(principal,context,randomUUID(),'personal-verify',1);
+  await db.pool.query("UPDATE ac_managers SET heartbeat_at=clock_timestamp()-interval '31 seconds' WHERE context_id=$1",[context]);
+  await db.tx(async c=>{await db.fence(c,authority,true);await sleep(1300);});
+  await assert.rejects(db.heartbeat(authority),/STALE_MANAGER/);
+  // A fresh heartbeat restores the pause: acquire again, then the same transaction keeps the lease.
+  const next=await db.acquire(principal,context,randomUUID(),'personal-verify',1);
+  await db.tx(async c=>{await db.fence(c,next,true);await sleep(1300);});
+  await db.heartbeat(next);
+ }finally{await db.close();await isolated.close();}
+});
+
+// Review (low): Ledger.tx changed for one case. A fenced function that swallows a failed statement without a savepoint leaves
+// the transaction aborted; COMMIT used to roll it back silently and tx() resolved. The lease statement now fails first, so
+// tx() rejects instead of reporting a write that never happened. Without a fence the old behavior is unchanged.
+test('a fenced transaction aborted by a swallowed error is reported, not silently rolled back',async()=>{
+ const {db,isolated,principal,context}=await setup('lease_aborted_tx');
+ try{
+  const authority=await db.acquire(principal,context,randomUUID(),'personal-verify',15);
+  const swallow=async(c:import('pg').PoolClient)=>{await c.query('SELECT 1/0').catch(()=>undefined);};
+  await assert.rejects(db.tx(async c=>{await db.fence(c,authority,true);await swallow(c);}),/current transaction is aborted/);
+  await db.tx(async c=>{await swallow(c);});
+  await db.heartbeat(authority);
+ }finally{await db.close();await isolated.close();}
+});
