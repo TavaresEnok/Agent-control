@@ -182,9 +182,10 @@ test('com examinador Claude, o revisor de outro provedor dos módulos 2 a 9 pode
     await reservations.release(high, 'not_started');
 
     // Assento tirado pelo exame (login vencido, falhas repetidas, cota): por provedor ou pela conta, a reserva não o oferece de novo.
+    // With only the exam's own exclusions left, the refusal says so (the exam keeps the reason it took the seat out).
     for (const skip of [[{provider: 'grok'}], [{provider: 'grok', accountId: grok}]]) {
       await assert.rejects(() => reservations.reserve('reviewer', examiner, {source: 'coletor', severity: 'media', fromExaminer: false, skip}),
-        (error: unknown) => error instanceof Refusal && error.code === 'MODULE_EXAM_REVIEWER_UNAVAILABLE');
+        (error: unknown) => error instanceof Refusal && error.code === 'MODULE_EXAM_REVIEWER_SEATS_SKIPPED');
     }
     const otherAccount = await reservations.reserve('reviewer', examiner, {source: 'coletor', severity: 'media', fromExaminer: false,
       skip: [{provider: 'grok', accountId: randomUUID()}]});
@@ -315,7 +316,7 @@ test('login do revisor Grok vencido para a fila comum na primeira recusa e a not
     // Like the real reservation, a skipped provider is never offered again; with no other provider the lane has no seat.
     reserve: async (purpose, _avoid, target) => {
       if (purpose === 'examiner') return examiner;
-      if (target?.skip?.some(entry => entry.provider === 'grok')) throw new Refusal('MODULE_EXAM_REVIEWER_UNAVAILABLE');
+      if (target?.skip?.some(entry => entry.provider === 'grok')) throw new Refusal('MODULE_EXAM_REVIEWER_SEATS_SKIPPED');
       reviewerSeats++; return seat('grok');
     },
     release: async () => {},
@@ -563,4 +564,33 @@ test('a conta Grok nova registra grok-4.6 com o papel specialist', async () => {
   const {ACCOUNT_ADD_ROLES, ACCOUNT_ADD_MODEL_ROLES} = await import('../src/account-add.ts');
   assert.deepEqual(ACCOUNT_ADD_ROLES.grok.map(profile => profile.model), ['grok-4.6']);
   assert.ok(ACCOUNT_ADD_MODEL_ROLES.includes('specialist'));
+});
+
+// Second review (low): after Grok is taken out for a stale login, Codex having no eligible capacity is Codex's shortage, not
+// Grok's login: the rest of the queue keeps MODULE_EXAM_REVIEWER_UNAVAILABLE, and only the Grok finding says EXAM_LOGIN_STALE.
+test('depois de tirar o Grok, falta de capacidade do Codex mantém o próprio motivo', async () => {
+  const {examineFunctionalModule, examJobExited} = await import('../src/module-exam.ts');
+  const {qaStaticFinding} = await import('./fixtures/module-exam-review.ts');
+  const skipped = (n: number) => `test.skip("caso ${n}", () => {})`;
+  const files = Array.from({length: 4}, (_, f) => ({file: `src/c${f}.test.ts`, reason: null, code: skipped(f) + ';\n'}));
+  const findings = files.map(({file}, f) => qaStaticFinding(file, 1, skipped(f) + ';'));
+  const examiner = {provider: 'claude', model: 'claude-sonnet-5-5', accountId: randomUUID(), profileId: randomUUID(), grantId: randomUUID()};
+  const grok = {provider: 'grok', model: 'grok-4.6', accountId: randomUUID(), profileId: randomUUID(), grantId: randomUUID()};
+  const result = await examineFunctionalModule({module: 'qa', intentId: randomUUID(), commit: 'a'.repeat(40), map: {files, routes: []}, findings,
+    reviewTriage: false,
+    // Grok first; once Grok is skipped, Codex is tried and has no eligible capacity, as the real reservation reports it.
+    reserve: async (purpose, _avoid, target) => {
+      if (purpose === 'examiner') return examiner;
+      if (target?.skip?.some(entry => entry.provider === 'grok')) throw new Refusal('MODULE_EXAM_REVIEWER_UNAVAILABLE');
+      return grok;
+    },
+    release: async () => {},
+    worker: {async run(call) {
+      const task = JSON.parse(call.task);
+      if (task.checklist) return JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: ['qa'], routesReviewed: [], findings: []});
+      throw examJobExited(new Refusal('EXAM_LOGIN_STALE'));
+    }}});
+  assert.deepEqual(result.findings.map(finding => finding.failure),
+    ['EXAM_LOGIN_STALE', 'MODULE_EXAM_REVIEWER_UNAVAILABLE', 'MODULE_EXAM_REVIEWER_UNAVAILABLE', 'MODULE_EXAM_REVIEWER_UNAVAILABLE']);
+  assert.ok(result.notes.includes('Revisor de outro provedor indisponível para o contexto.'), JSON.stringify(result.notes));
 });

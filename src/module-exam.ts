@@ -266,7 +266,7 @@ function unavailableText(code: string, provider = 'claude') {
   if (code === HIGH_SESSION_UNPROVEN) {
     return 'Sessões distintas do examinador e do revisor de achado alto não comprovadas.';
   }
-  if (code === 'MODULE_EXAM_REVIEWER_UNAVAILABLE' || code === 'MODULE_EXAM_PROVIDER_NOT_DISTINCT') {
+  if (code === 'MODULE_EXAM_REVIEWER_UNAVAILABLE' || code === 'MODULE_EXAM_REVIEWER_SEATS_SKIPPED' || code === 'MODULE_EXAM_PROVIDER_NOT_DISTINCT') {
     return 'Revisor de outro provedor indisponível para o contexto.';
   }
   if (code === 'MODULE_EXAM_RUNTIME_UNAVAILABLE') return 'Runtime de exame indisponível.';
@@ -729,7 +729,9 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
           if (fatal(error) || input.signal?.aborted) throw error;
           if (jobExited(error)) exited = true;
           const raw = failure(error);
-          const code = !seat && !high && raw === 'MODULE_EXAM_REVIEWER_UNAVAILABLE' && lastSkip ? lastSkip.code : raw;
+          // Only when the reservation says every distinct seat left was one this exam took out: any other shortage (a provider
+          // with no eligible capacity, say) keeps its own code.
+          const code = !seat && !high && raw === 'MODULE_EXAM_REVIEWER_SEATS_SKIPPED' && lastSkip ? lastSkip.code : raw;
           if (!seat && capacityRefusal(code) && held > 0) {
             sibling = siblingSeat();
           } else if (code === 'PROVIDER_USAGE_LIMIT' && input.waitForClaudeQuota && (!seat || seat.provider === 'claude') && code === raw) {
@@ -750,7 +752,7 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
             // way: that seat leaves the standard lane instead of reserving, preparing and releasing a job per remaining finding.
             else if (otherProvider && (code === 'EXAM_LOGIN_STALE' || code === 'PROVIDER_AUTH_FAILED'
               || failures >= MODULE_EXAM_SEAT_FAILURE_LIMIT)) { skipSeat(seat!.provider, seat!.accountId); lastSkip = {code, provider: seat!.provider}; }
-            else if (!high && (code === 'MODULE_EXAM_REVIEWER_UNAVAILABLE' || code === 'MODULE_EXAM_PROVIDER_NOT_DISTINCT'
+            else if (!high && (code === 'MODULE_EXAM_REVIEWER_UNAVAILABLE' || code === 'MODULE_EXAM_REVIEWER_SEATS_SKIPPED' || code === 'MODULE_EXAM_PROVIDER_NOT_DISTINCT'
               || code === 'EXAM_LOGIN_STALE' || code === 'PROVIDER_AUTH_FAILED')) stopStandardReview = code;
             return;
           }
