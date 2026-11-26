@@ -281,3 +281,18 @@ test('actual prepared package handoff closes old Cezar lock, retries committed t
   assert.equal((await s.next.pool.query('SELECT count(*) FROM ac_workflow_generations WHERE intent_id=$1',[s.intent.id])).rows[0].count,'2');await assert.rejects(s.old.heartbeat(s.authority),code('STALE_MANAGER'));
  }finally{await competitor?.close();await source?.close();await successor?.close();if(folder)await rm(folder,{recursive:true,force:true});await s.close();}
 });
+
+// Third review (low): the successor of a generation took over the manager row with the predecessor's spent pause budget and an
+// old heartbeat, so it got no pause back until its first real heartbeat. It starts fresh, like an acquire.
+test('a generation successor starts with a fresh heartbeat and no pause budget spent',async()=>{
+ const s=await setup();try{
+  await s.old.pool.query("UPDATE ac_managers SET extended_seconds=250,heartbeat_at=clock_timestamp()-interval '25 seconds' WHERE context_id=$1",[s.context]);
+  const successor=randomUUID();
+  const result=await s.generations.rollover(principal,s.authority,{intentId:s.intent.id,expectedGeneration:0,requestId:randomUUID(),targetBuild:s.nextIdentity.buildId,successorManagerInstance:successor});
+  assert.equal(result.authority.instanceId,successor);
+  const row=(await s.old.pool.query('SELECT instance_id,extended_seconds,clock_timestamp()-heartbeat_at<interval \'5 seconds\' fresh FROM ac_managers WHERE context_id=$1',[s.context])).rows[0];
+  assert.equal(row.instance_id,successor);
+  assert.equal(Number(row.extended_seconds),0);
+  assert.equal(row.fresh,true);
+ }finally{await s.close();}
+});

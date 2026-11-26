@@ -102,7 +102,7 @@ export class WorkflowGenerations{
    const epoch=authority.epoch+1;
    const next=(await c.query(`INSERT INTO ac_workflow_generations(intent_id,generation,predecessor,build_id,state,request_id,request_digest,workflow_digest,continuation,successor_instance,successor_epoch)
     VALUES($1,$2,$3,$4,'reconciling',$5,$6,$7,$8,$9,$10) RETURNING *`,[input.intentId,previous.generation+1,previous.generation,input.targetBuild,input.requestId,requestDigest,row.workflow_digest,continuation,input.successorManagerInstance,epoch])).rows[0];
-   await c.query("UPDATE ac_managers SET instance_id=$2,epoch=$3,lease_until=clock_timestamp()+interval '60 seconds' WHERE context_id=$1",[authority.contextId,input.successorManagerInstance,epoch]);
+   await c.query("UPDATE ac_managers SET instance_id=$2,epoch=$3,lease_until=clock_timestamp()+interval '60 seconds',heartbeat_at=clock_timestamp(),extended_seconds=0 WHERE context_id=$1",[authority.contextId,input.successorManagerInstance,epoch]);
    await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'workflow.generation_transferred',$2)",[authority.contextId,{intentId:input.intentId,from:previous.generation,to:previous.generation+1,requestId:input.requestId}]);
    return receipt(authority.contextId,next);
   });
