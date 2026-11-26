@@ -33,29 +33,30 @@ export type ExamContext = {
 
 export type Intent = { id: string; context_id: string; operation_id: string; run_id: string;
   manager_epoch: string; plan_revision: number; state: string; command: Command; parent_intent_id?:string|null;parent_unit_id?:string|null };
+/** Leases a transaction proved with `fence`: the row value and the instant it was read, per context. Keyed by the client,
+ * so a Ledger built without its constructor (test doubles) shares the same bookkeeping. */
+const fencedLeases = new WeakMap<pg.PoolClient, Map<string, {instanceId: string; epoch: number; leaseUntil: string; fencedAt: string}>>();
 export class Ledger {
   readonly pool: pg.Pool;
   constructor(connectionString: string,readonly installationAuthority?:InstallationFenceToken,readonly runtimeIdentity?:RuntimeIdentity,/** Volumes the installation writes to; the capacity gate measures these before admitting a new worker. */readonly launchVolumes?:readonly string[]) { if(runtimeIdentity)RuntimeIdentity.parse(runtimeIdentity);this.pool = new pg.Pool({ connectionString, max: 8 }); }
-  /** Leases a transaction proved with `fence`: the row value and the instant it was read, per context. */
-  private readonly fencedLeases = new WeakMap<pg.PoolClient, Map<string, {instanceId: string; epoch: number; leaseUntil: string; fencedAt: string}>>();
   async tx<T>(fn: (c: pg.PoolClient) => Promise<T>): Promise<T> {
     const c = await this.pool.connect();
     try {
       // A pooled client is reused: a fence made outside tx() on it never extends a later transaction.
-      this.fencedLeases.delete(c); await c.query('BEGIN'); const v = await fn(c);
+      fencedLeases.delete(c); await c.query('BEGIN'); const v = await fn(c);
       // From fence to commit this transaction holds the context anchor and the manager row: acquire, heartbeat, orphan
       // recovery and key changes all wait on them, so nobody can take the lease over meanwhile. That time does not consume
       // the lease: a Docker call made under the fence (effect, reconcile, retirement) may outlive it on a saturated disk, and
       // the heartbeat queued behind it must not then find the lease expired. Skipped when the transaction changed the lease
       // itself (heartbeat, release, key change) and on rollback.
-      for (const [contextId, held] of this.fencedLeases.get(c) ?? []) {
+      for (const [contextId, held] of fencedLeases.get(c) ?? []) {
         await c.query(`UPDATE ac_managers SET lease_until=lease_until+(clock_timestamp()-$4::timestamptz)
           WHERE context_id=$1 AND instance_id=$2 AND epoch=$3 AND lease_until=$5::timestamptz`,
         [contextId, held.instanceId, held.epoch, held.fencedAt, held.leaseUntil]);
       }
       await c.query('COMMIT'); return v;
     }
-    catch (e) { await c.query('ROLLBACK'); throw e; } finally { this.fencedLeases.delete(c); c.release(); }
+    catch (e) { await c.query('ROLLBACK'); throw e; } finally { fencedLeases.delete(c); c.release(); }
   }
   async migrate() {
     const folder = new URL('../db/migrations/', import.meta.url);
@@ -195,9 +196,9 @@ export class Ledger {
     if (r.rows[0].paused && !allowPaused) throw new Refusal('HUMAN_PAUSED');
     const admission=(await c.query('SELECT enabled FROM ac_admission_control WHERE id=1 FOR SHARE')).rows[0];
     if (!admission?.enabled && !allowPaused) throw new Refusal('ADMISSION_CLOSED');
-    const held = this.fencedLeases.get(c) ?? new Map();
+    const held = fencedLeases.get(c) ?? new Map();
     if (!held.has(a.contextId)) held.set(a.contextId, {instanceId: a.instanceId, epoch: a.epoch, leaseUntil: r.rows[0].lease_until, fencedAt: r.rows[0].fenced_at});
-    this.fencedLeases.set(c, held);
+    fencedLeases.set(c, held);
   }
   async heartbeat(a: Authority) {
     await this.tx(async c => {
