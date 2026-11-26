@@ -6,6 +6,8 @@ import {join} from 'node:path';
 import {test} from 'node:test';
 import {fileURLToPath} from 'node:url';
 import {promisify} from 'node:util';
+import {interpretDesignImageDocument} from '../src/design-image-run.ts';
+import {designExamStatus} from '../src/personal-design-cli.ts';
 
 const image = process.env.AC_DESIGN_CAPTURE_LAB_IMAGE;
 const origin = 'http://127.0.0.1:8080';
@@ -18,7 +20,8 @@ test('captura e ferramentas usam sessão em todas as rotas e descartam a tela de
     const tools = fileURLToPath(new URL('../deploy/design-tools/', import.meta.url));
     await writeFile(join(directory, 'serve.mjs'), `
       import {createServer} from 'node:http';
-      const form = '<form method="post"><input id="user" name="user"><input id="pass" name="pass" type="password"><button type="submit">Entrar</button></form>';
+      const form = '<form method="post"><input id="user" name="user"><input id="pass" name="pass" type="password"><button type="button" onclick="this.form.requestSubmit()">Entrar</button></form>';
+      const visits = new Map();
       const send = (res, body) => {
         res.writeHead(200, {'content-type': 'text/html', 'cache-control': 'no-store'});
         res.end('<!doctype html><html lang="pt-BR"><title>Laboratório</title><main>' + body + '</main></html>');
@@ -38,6 +41,14 @@ test('captura e ferramentas usam sessão em todas as rotas e descartam a tela de
         if (req.url === '/acesso') return send(res, form);
         if (req.url === '/expirada' || req.headers.cookie !== 'lab=opened') return redirect('/acesso');
         if (req.url === '/formulario') return send(res, form);
+        if (['/so-pa11y', '/so-lighthouse'].includes(req.url)) {
+          const visit = (visits.get(req.url) ?? 0) + 1;
+          visits.set(req.url, visit);
+          // Playwright faz a captura e três passagens de régua/teclado.
+          // Depois vêm os dois runners do Pa11y e os dois formatos do Lighthouse.
+          if (req.url === '/so-pa11y' && visit >= 5 && visit <= 6) return send(res, form);
+          if (req.url === '/so-lighthouse' && visit >= 7) return send(res, form);
+        }
         if (req.url === '/spa') return send(res, '<h1>SPA autenticada</h1><script>if (localStorage.lab !== "local" || sessionStorage.lab !== "session") location.replace("/acesso");</script>');
         return send(res, '<h1>Painel autenticado</h1>');
       }).listen(8080, '127.0.0.1');
@@ -46,10 +57,10 @@ test('captura e ferramentas usam sessão em todas as rotas e descartam a tela de
     await mkdir(loginDir, {mode: 0o700});
     await writeFile(join(loginDir, 'login.json'), JSON.stringify({
       url: origin + '/acesso', username: 'laboratorio', password,
-      usernameSelector: '#user', passwordSelector: '#pass', submitSelector: 'button[type=submit]',
+      usernameSelector: '#user', passwordSelector: '#pass', submitSelector: 'text=Entrar',
       successSelector: 'h1',
     }), {mode: 0o600});
-    const accepted = ['/painel', '/spa'];
+    const accepted = ['/painel', '/so-lighthouse', '/so-pa11y', '/spa'];
     const rejected = ['/expirada', '/formulario'];
     await writeFile(join(directory, 'pedido.json'), JSON.stringify({
       routes: [...accepted, ...rejected].map(route => ({route, states: ['padrao']})),
@@ -68,12 +79,13 @@ test('captura e ferramentas usam sessão em todas as rotas e descartam a tela de
         cp /output/state.json /login/state.json
         rm /output/state.json
         node /opt/design-tools/run-exam.mjs`,
-    ], {timeout: 240_000});
+    ], {timeout: 360_000});
     const raw = await readFile(join(directory, 'achados-brutos.json'), 'utf8');
     assert.equal(raw.includes(password), false);
     const doc = JSON.parse(raw) as {
       screenshots: {route: string; fileName: string; state: string}[];
       unavailable: {route: string; status: number}[];
+      auditLoginFailures: {tool: string; route: string}[];
       reports: Record<'axe' | 'pa11y' | 'lighthouse' | 'render', {route: string}[]>;
       computed: {route: string}[];
     };
@@ -82,7 +94,13 @@ test('captura e ferramentas usam sessão em todas as rotas e descartam a tela de
     assert.deepEqual(doc.unavailable.map(row => [row.route, row.status]), rejected.map(route => [route, 401]));
     for (const [tool, reports] of Object.entries({...doc.reports, computed: doc.computed})) {
       if (!['axe', 'pa11y', 'lighthouse', 'render', 'computed'].includes(tool)) continue;
-      assert.deepEqual([...new Set(reports.map(row => row.route))].sort(), accepted, tool);
+      assert.deepEqual([...new Set(reports.map(row => row.route))].sort(), accepted.filter(route => route !== `/so-${tool}`), tool);
+    }
+    for (const tool of ['pa11y', 'lighthouse']) {
+      const failures = doc.auditLoginFailures.filter(row => row.route === `/so-${tool}`);
+      assert.deepEqual(failures, [{route: `/so-${tool}`, tool}]);
+      const result = interpretDesignImageDocument({...doc, unavailable: [], auditLoginFailures: failures});
+      assert.equal(designExamStatus(result).code, 1, tool);
     }
   } finally {
     await rm(directory, {recursive: true, force: true});

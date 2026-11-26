@@ -99,7 +99,7 @@ export function designExamStatus(result: {
 }): {code: number; lines: string[]} {
   const lines: string[] = [];
   if (result.loginStale) lines.push(EXAM_LOGIN_STALE_TEXT);
-  if (result.captureLoginFailed) lines.push('Uma ou mais rotas falharam na captura autenticada. Consulte o relatório de design.');
+  if (result.captureLoginFailed) lines.push('Uma ou mais rotas perderam a sessão autenticada. Consulte o relatório de design.');
   if (result.visualUnjudged) {
     if (result.visualRequested === 0) {
       lines.push(messages.DESIGN_VISUAL_NO_SCREENS!);

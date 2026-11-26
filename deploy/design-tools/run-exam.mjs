@@ -853,28 +853,44 @@ function restoreStorage({origin, local = [], session = []}) {
   for (const [key, value] of session) if (sessionStorage.getItem(key) === null) sessionStorage.setItem(key, value);
 }
 
-async function captureLoginFailed(page, requested, login, {allowNavigation = false} = {}) {
+async function captureLoginFailed(page, requested, login, {allowNavigation = false, playwrightSelectors = true} = {}) {
   const landed = new URL(page.url());
   const expected = new URL(requested);
   if (landed.origin !== expected.origin) return true;
   const moved = redirectedTo(requested, landed.href);
   if (moved !== null && !allowNavigation) return true;
   if (login.path !== undefined && plainPath(landed.href) === login.path) return true;
-  return page.evaluate(({passwordSelector, submitSelector}) => {
-    const visible = (selector, fallback) => {
-      let fields;
-      try {
-        fields = document.querySelectorAll(selector ?? fallback);
-      } catch {
-        fields = document.querySelectorAll(fallback);
+  const password = 'input[type="password"]';
+  const submit = 'button[type="submit"], input[type="submit"]';
+  const otp = 'input[autocomplete="one-time-code"]';
+  if (playwrightSelectors) {
+    const visible = async selector => {
+      for (const field of await page.locator(selector).all()) {
+        if (await field.isVisible()) return true;
       }
-      return Array.from(fields).some(field => field.getClientRects().length > 0
+      return false;
+    };
+    return await visible(otp)
+      || (await visible(login.passwordSelector ?? password) && await visible(login.submitSelector ?? submit));
+  }
+  return page.evaluate(({passwordSelector, submitSelector}) => {
+    const visible = selector =>
+      Array.from(document.querySelectorAll(selector)).some(field => field.getClientRects().length > 0
         && getComputedStyle(field).visibility === 'visible');
+    const visibleOr = (selector, fallback) => {
+      try {
+        return visible(selector);
+      } catch (error) {
+        if (error.name !== 'SyntaxError') throw error;
+        return fallback();
+      }
     };
     return visible('input[autocomplete="one-time-code"]')
-      || (visible(passwordSelector, 'input[type="password"]')
-        && visible(submitSelector, 'button[type="submit"], input[type="submit"]'));
-  }, {passwordSelector: login.passwordSelector, submitSelector: login.submitSelector});
+      || (visibleOr(passwordSelector, () => visible('input[type="password"]'))
+        // Puppeteer cannot use Playwright selectors here. A visible password is
+        // enough to reject the audit when its submit selector cannot be checked.
+        && visibleOr(submitSelector, () => true));
+  }, {passwordSelector: login.passwordSelector ?? password, submitSelector: login.submitSelector ?? submit});
 }
 
 async function prepareAuditPage(page, origin, login) {
@@ -1423,6 +1439,12 @@ async function main() {
   const pa11yBin = '/opt/design-tools/node_modules/.bin/pa11y';
   const pa11yConfig = '/tmp/pa11y.json';
   const chromeArgs = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'];
+  const auditLoginFailures = new Map();
+  const auditLoginFailed = async (tool, route, page, url, status) => {
+    if (status !== 401 && !await captureLoginFailed(page, url, login.designLogin, {playwrightSelectors: false})) return false;
+    auditLoginFailures.set(`${tool} ${route}`, {tool, route});
+    return true;
+  };
   let auditBrowser;
   let puppeteer;
   try {
@@ -1430,7 +1452,7 @@ async function main() {
   } catch {
     // Each authenticated audit reports its own failure without retrying anonymously.
   }
-  const runAuthenticatedPa11y = async (url, viewport, runner) => {
+  const runAuthenticatedPa11y = async (route, url, viewport, runner) => {
     if (auditBrowser === undefined) {
       auditBrowser = await puppeteer.launch({executablePath: chrome ?? undefined, args: chromeArgs});
     }
@@ -1440,10 +1462,10 @@ async function main() {
       await prepareAuditPage(page, target.origin, login);
       await page.setViewport({width: viewport, height: viewportHeight(viewport)});
       const response = await page.goto(url, {waitUntil: 'load', timeout: 20000});
-      if (!response?.ok() || await captureLoginFailed(page, url, login.designLogin)) return null;
+      if (await auditLoginFailed('pa11y', route, page, url, response?.status()) || !response?.ok()) return null;
       const pa11y = (await import('pa11y')).default;
       const result = await bounded(pa11y(url, {browser: auditBrowser, page, ignoreUrl: true, runners: [runner], timeout: 25000}), 25000);
-      return await captureLoginFailed(page, url, login.designLogin) ? null : result.issues;
+      return await auditLoginFailed('pa11y', route, page, url) ? null : result.issues;
     } finally {
       await context.close();
     }
@@ -1456,7 +1478,7 @@ async function main() {
         try {
           const url = routeUrl(target.origin, route.route);
           if (login !== null) {
-            const issues = await runAuthenticatedPa11y(url, viewport, runner);
+            const issues = await runAuthenticatedPa11y(route.route, url, viewport, runner);
             if (issues === null) {
               cellDone = false;
               pa11yFailures.push(`DESIGN_PA11Y_FAILED ${label} rota indisponível com sessão`);
@@ -1537,7 +1559,7 @@ async function main() {
               ? {mobile: true, width: 375, height: 812, deviceScaleFactor: 2, disabled: false}
               : {mobile: false, width: 1350, height: 940, deviceScaleFactor: 1, disabled: false},
           }, undefined, auditPage), LIGHTHOUSE_TIMEOUT_MS);
-          if (login !== null && await captureLoginFailed(auditPage, url, login.designLogin)) {
+          if (login !== null && await auditLoginFailed('lighthouse', route.route, auditPage, url)) {
             lhFailures.push(`DESIGN_LIGHTHOUSE_FAILED ${route.route} ${formFactor} sessão não confirmada na rota`);
             continue;
           }
@@ -1697,6 +1719,7 @@ async function main() {
     target: target.origin,
     findings,
     unavailable,
+    auditLoginFailures: [...auditLoginFailures.values()],
     reports: {
       axe: axeReports,
       pa11y: pa11yReports,

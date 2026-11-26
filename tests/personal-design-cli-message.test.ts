@@ -2,6 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {Refusal} from '../src/contracts.ts';
 import {designCliFailureText, designExamStatus} from '../src/personal-design-cli.ts';
+import {interpretDesignImageDocument} from '../src/design-image-run.ts';
 
 const leaked = 'secret-token-xyz /home/app/private';
 const redacted = 'O exame de design falhou.';
@@ -65,6 +66,20 @@ test('DESIGN_CREATE_PROMPT_TOO_LARGE explica o limite de 100000 caracteres e ori
 test('uma rota que perde a sessão mantém o relatório e reprova a execução do design', () => {
   assert.deepEqual(designExamStatus({captureLoginFailed: true}), {
     code: 1,
-    lines: ['Uma ou mais rotas falharam na captura autenticada. Consulte o relatório de design.'],
+    lines: ['Uma ou mais rotas perderam a sessão autenticada. Consulte o relatório de design.'],
   });
+});
+
+test('cada auditoria que perde a sessão reprova o CLI com as capturas disponíveis', () => {
+  for (const tool of ['pa11y', 'lighthouse']) {
+    const result = interpretDesignImageDocument({
+      screenshots: [{fileName: 'painel.png', route: '/painel', viewport: 375}],
+      unavailable: [],
+      auditLoginFailures: [{tool, route: '/painel'}],
+    });
+    assert.equal(result.shotMeta.length, 1);
+    assert.equal(designExamStatus(result).code, 1, tool);
+  }
+  const genericFailure = interpretDesignImageDocument({coverage: [{tool: 'pa11y', failure: 'DESIGN_PA11Y_FAILED'}]});
+  assert.equal(designExamStatus(genericFailure).code, 0);
 });
