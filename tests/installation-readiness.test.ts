@@ -103,3 +103,49 @@ test('readiness and CLI inspect a newly initialized isolated PostgreSQL database
   assert.deepEqual(await counts(),before);
  }finally{await ledger.close();await database.close();await rm(root,{recursive:true,force:true});}
 });
+
+test('serve e personal:design recusam migração pendente; serve inicia com esquema completo',
+ {timeout:60000,skip:!process.env.AC_TEST_DATABASE_URL},async()=>{
+ const database=await isolatedDatabase(process.env.AC_TEST_DATABASE_URL!,'migcli'),ledger=new RealLedger(database.url);
+ const root=await mkdtemp(join(tmpdir(),'ac-migration-cli-'));
+ let server:import('node:child_process').ChildProcess|undefined;
+ try{
+  const repo=join(root,'repo'),privateDir=join(root,'private');await mkdir(repo);
+  execFileSync('git',['-C',repo,'init','-q']);
+  execFileSync('git',['-C',repo,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','--allow-empty','-qm','fixture']);
+  const probe=createServer();await new Promise<void>(resolve=>probe.listen(0,'127.0.0.1',resolve));
+  const address=probe.address();assert(address&&typeof address!=='string');const port=address.port;
+  await new Promise<void>((resolve,reject)=>probe.close(error=>error?reject(error):resolve()));
+  const config=Installation.parse({schemaVersion:1,mode:'administration-only',activation:'personal',databaseUrl:database.url,dataDirectory:privateDir,
+   project:{id:randomUUID(),label:'Migration fixture',repo,owner:'synthetic-migration-owner'},
+   http:{listen:'127.0.0.1',port,publicOrigin:`http://127.0.0.1:${port}`}});
+  await initializeInstallation(config,ledger);
+  const file=join(root,'installation.json');await writeFile(file,JSON.stringify(config),{mode:0o600});
+  const removed=await ledger.pool.query('DELETE FROM ac_schema_migrations WHERE version=(SELECT max(version) FROM ac_schema_migrations) RETURNING version,digest');
+  assert.equal(removed.rowCount,1);
+  const env={...process.env};delete env.NO_COLOR;
+  const serve=spawnSync(process.execPath,['--import','tsx','src/server-main.ts','serve',file],{encoding:'utf8',timeout:20000,env});
+  const assertPending=(result:typeof serve)=>{
+   assert.ifError(result.error);assert.equal(result.status,1);assert.match(result.stderr,/MIGRATIONS_PENDING/);
+   assert.match(result.stderr,/npm run personal:backup.*node --import tsx src\/server-main\.ts initialize <instalação\.json>/);
+  };
+  assertPending(serve);
+  const design=spawnSync(process.execPath,['scripts/personal-design.mjs',file,config.project.id,'--url','http://migration-fixture.local'],{encoding:'utf8',timeout:20000,env});
+  assertPending(design);
+  assert.equal((await ledger.pool.query('SELECT 1 FROM ac_schema_migrations WHERE version=$1',[removed.rows[0].version])).rowCount,0);
+  await ledger.pool.query('INSERT INTO ac_schema_migrations(version,digest) VALUES($1,$2)',[removed.rows[0].version,removed.rows[0].digest]);
+  const {spawn}=await import('node:child_process');
+  server=spawn(process.execPath,['--import','tsx','src/server-main.ts','serve',file],{env});
+  const child=server;
+  await new Promise<void>((resolve,reject)=>{
+   let output='';const timer=setTimeout(()=>reject(Error(`serve did not start: ${output}`)),20000);
+   const done=(error?:Error)=>{clearTimeout(timer);error?reject(error):resolve();};
+   child.stdout!.on('data',chunk=>{output+=String(chunk);if(output.includes('personal_ready')||output.includes('administration_ready'))done();});
+   child.stderr!.on('data',chunk=>{output+=String(chunk);});
+   child.once('error',done);child.once('exit',(code,signal)=>done(Error(`serve exited ${code ?? signal}: ${output}`)));
+  });
+ }finally{
+  if(server&&server.exitCode===null&&server.signalCode===null){server.kill('SIGTERM');await new Promise<void>(resolve=>server!.once('exit',()=>resolve()));}
+  await ledger.close();await database.close();await rm(root,{recursive:true,force:true});
+ }
+});

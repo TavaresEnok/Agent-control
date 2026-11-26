@@ -15,6 +15,7 @@ import type {DesignSourceFile} from './design-collect.ts';
 import type {DesignReserveOptions, DesignSeat} from './design-examine.ts';
 import {createDesignNativeWorker, type DesignExamSupervisor} from './design-native-launch.ts';
 import {loadInstallation} from './installation.ts';
+import {assertInstallationMigrations} from './installation-readiness.ts';
 import {Ledger} from './ledger.ts';
 import {composePersonalRuntime} from './personal-runtime.ts';
 import type {DesignWorker} from './design-types.ts';
@@ -421,6 +422,7 @@ export async function resolvePersonalDesign(
   let authority: Authority | undefined;
   let intentId: string | undefined;
   try {
+    await assertInstallationMigrations(ledger);
     const commit = await readHead(project.repo);
     const principal = project.owner;
     const exam = await ledger.ensureExamContext(principal, project.id, 'design');

@@ -2,6 +2,7 @@ import {resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {Refusal} from './contracts.ts';
 import {loadInstallation,type Installation} from './installation.ts';
+import {assertInstallationMigrations,migrationsPendingText} from './installation-readiness.ts';
 import {Ledger} from './ledger.ts';
 import {applyPersonalCombo,setPersonalEvaluators,describeAppliedCombo,listPersonalCombos,projectComboName,type PersonalCombo} from './personal-combos.ts';
 import {personalComboRefusal} from './personal-conversation.ts';
@@ -43,6 +44,7 @@ export async function runPersonalComboCli(argv:string[]){
  const config=await loadInstallation(file),selected=project(config,token);
  const ledger=new Ledger(config.databaseUrl,config.installationAuthority?.token);
  try{
+  await assertInstallationMigrations(ledger);
   if(action==='list'){
    const listed=await listPersonalCombos(config.dataDirectory);
    const current=await projectComboName(ledger.pool,selected.id);
@@ -59,6 +61,7 @@ export async function runPersonalComboCli(argv:string[]){
 }
 
 const messages:Record<string,string>={
+ MIGRATIONS_PENDING:`MIGRATIONS_PENDING. ${migrationsPendingText}`,
  COMBO_USAGE:usage,
  COMBO_PROJECT_NOT_FOUND:'Projeto não encontrado. Use o label ou o id.',
  COMBO_PROJECT_AMBIGUOUS:'Há mais de um projeto com esse label.',

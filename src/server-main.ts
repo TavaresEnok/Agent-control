@@ -7,6 +7,7 @@ import {serve} from '@hono/node-server';
 import {z} from 'zod';
 import {join} from 'node:path';
 import {Installation,readPrivateFile,loadInstallation,sessionKey,initializeInstallation,prepareInstallationOperator,privateDirectory,syncInstallationActivation} from './installation.ts';
+import {assertInstallationMigrations,inspectInstallationReadiness,migrationsPendingText} from './installation-readiness.ts';
 import {Refusal} from './contracts.ts';
 import {Ledger} from './ledger.ts';
 import {Projects,ProjectRuntimes} from './projects.ts';
@@ -142,7 +143,6 @@ async function main(){
  const shutdownAbort=new AbortController();
  try{
   if(command==='inspect'){
-   const {inspectInstallationReadiness}=await import('./installation-readiness.ts');
    const report=await inspectInstallationReadiness(ledger,config);
    console.log(JSON.stringify(report));
    if(report.checks.some(check=>check.status!=='ok'))process.exitCode=2;
@@ -168,6 +168,7 @@ async function main(){
   if(command==='vault-backup'||command==='vault-restore'){
    const {executeVaultBackup}=await import('./context-vault-cli.ts');console.log(JSON.stringify(await executeVaultBackup(command,config,ledger,extra[0])));return;
   }
+  await assertInstallationMigrations(ledger);
   // Attach the pre-provisioned recovery inventory before starting any runtime.
   await bootstrapRecoveryInventory(ledger,config.recoveryInventory);
   // Serving does not silently migrate schemas or create projects/credentials.
@@ -346,4 +347,5 @@ async function main(){
 main().catch(error=>{
  // Only a refusal code or an upper-case error identifier is shown; free text may carry paths or secrets.
  const raw=String((error as {code?:unknown})?.code??(error as Error)?.message??''),code=/^[A-Z][A-Z0-9_]{2,80}$/.test(raw)?raw:(error as Error)?.name==='ZodError'?'INVALID_CONFIGURATION_SHAPE':'UNCLASSIFIED';
- console.error('INSTALLATION_COMMAND_FAILED ('+code+'): inspect private configuration, initialization and service availability; secrets are not logged.');process.exitCode=1;});
+ const detail=error instanceof Refusal&&code==='MIGRATIONS_PENDING'?migrationsPendingText:'inspect private configuration, initialization and service availability; secrets are not logged.';
+ console.error('INSTALLATION_COMMAND_FAILED ('+code+'): '+detail);process.exitCode=1;});

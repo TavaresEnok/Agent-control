@@ -2,6 +2,7 @@ import {basename,resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {Refusal} from './contracts.ts';
 import {loadInstallation,type Installation} from './installation.ts';
+import {assertInstallationMigrations} from './installation-readiness.ts';
 import {Ledger} from './ledger.ts';
 import {moduleCliFailureText,printClaudeQuotaWait,runPersonalModuleCli,type PersonalModuleCliDeps} from './personal-module-cli.ts';
 import {clearPersonalQaConfig,parsePersonalQaConfig,readPersonalQaConfig,writePersonalQaConfig,type PersonalQaConfig} from './personal-qa-config.ts';
@@ -33,7 +34,7 @@ export async function runPersonalQaCli(argv:string[],deps?:PersonalModuleCliDeps
  const config=await loadInstallation(file),selected=project(config,token);
  if(config.activation!=='personal')throw new Refusal('PERSONAL_ACTIVATION_REQUIRED',403);
  const ledger=new Ledger(config.databaseUrl,config.installationAuthority?.token);
- try{return await ledger.tx(async client=>{
+ try{await assertInstallationMigrations(ledger);return await ledger.tx(async client=>{
   const activation=await client.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal' FOR SHARE");
   if(!activation.rowCount)throw new Refusal('PERSONAL_ACTIVATION_REQUIRED',403);
   const membership=await client.query('SELECT role FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 FOR SHARE',[selected.id,selected.owner]);

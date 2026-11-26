@@ -8,6 +8,7 @@ import {Id, Refusal, type Authority} from './contracts.ts';
 import {withExamSignals} from './exam-intent.ts';
 import {clearExamContextCapacityWaits} from './exam-provider.ts';
 import {loadInstallation, type Installation} from './installation.ts';
+import {assertInstallationMigrations,migrationsPendingText} from './installation-readiness.ts';
 import {Ledger, type VerificationModule} from './ledger.ts';
 import {abortPersonalVerifyForLeaseLoss, keepPersonalVerifyLease, releasePersonalVerifyLease} from './personal-verify-cli.ts';
 import {examRunOptions} from './verify-command.ts';
@@ -126,6 +127,7 @@ const recheckGuidance: Record<string, string> = {
 
 export function moduleCliFailureText(error: unknown, module?: VerificationModule): string {
   const code = error instanceof Refusal ? error.code : error instanceof Error ? error.message : '';
+  if (code === 'MIGRATIONS_PENDING') return `${code}. ${migrationsPendingText}`;
   const incomplete = (error as {examIncomplete?: ExamIncomplete} | null)?.examIncomplete;
   if (code === 'MODULE_EXAM_INCOMPLETE' && incomplete) {
     return `O modelo não examinou ${incomplete.unjudged} de ${incomplete.total} arquivos (código ${incomplete.code}). Relatório parcial em ${incomplete.directory}.`;
@@ -304,6 +306,7 @@ export async function runPersonalModuleCli(
     process.on('SIGTERM', interruptRecheck);
   }
   try {
+    await assertInstallationMigrations(ledger);
     if (parsed.kind === 'discard') {
       await discardModuleReport(ledger, project.owner, config.dataDirectory, project.id, module, parsed.runId);
       return ['Relatório descartado.'];
