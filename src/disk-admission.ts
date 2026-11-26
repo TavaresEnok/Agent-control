@@ -43,12 +43,13 @@ export function diskPolicyFromEnvironment(env:NodeJS.ProcessEnv=process.env):Dis
 }
 export class DiskAdmissionGuard implements DiskGuard{
  readonly policy:DiskAdmissionPolicy;
- constructor(raw:DiskAdmissionPolicy){this.policy=DiskAdmissionPolicy.parse(raw);}
+ /** `measure` is the real statfs reading; tests pass a fixed one so a verdict never depends on another process writing. */
+ constructor(raw:DiskAdmissionPolicy,private readonly measure:(path:string)=>Promise<{availableBytes:bigint}>=measureDiskCapacity){this.policy=DiskAdmissionPolicy.parse(raw);}
  async assess(additionalReservedBytes=0n){
   const requiredBytes=requiredFreeBytes(this.policy.minFreeBytes,this.policy.estimatedWriteBytes,additionalReservedBytes);
   let tightest:{path:string;availableBytes:bigint}|undefined;
   for(const path of this.policy.paths){
-   const measurement=await measureDiskCapacity(path);
+   const measurement=await this.measure(path);
    if(!tightest||measurement.availableBytes<tightest.availableBytes)tightest={path,availableBytes:measurement.availableBytes};
    const verdict=explainDiskAdmission(measurement.availableBytes,requiredBytes);
    if(!verdict.admitted)return {schemaVersion:1 as const,...verdict,path,availableBytes:measurement.availableBytes,requiredBytes};
