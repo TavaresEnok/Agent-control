@@ -176,6 +176,7 @@
   "native-qa-snapshot.test.ts",
   "native-repo-map.test.ts",
   "native-resource-config.test.ts",
+  "native-resource-envelope-session.test.ts",
   "native-retired-executor.test.ts",
   "native-review-scope.test.ts",
   "native-tool-forwarder.test.ts",
