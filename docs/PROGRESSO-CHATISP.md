@@ -721,3 +721,7 @@ Ordem: `docs/ORDEM-CHATISP.md`. Equipe: `AGENTS.md`, seção "Equipe ChatISP". C
     - deploy sem rolling entre versões.
   - **Worktrees:** os `pend-*` e `baixos-*` foram removidos, e os ramos continuam.
   - Nada foi enviado (push). O ramo para entregar é `agent-control/integracao-20261125`, com 311 commits sobre `agent-control/auditoria-20261122`.
+
+## Envio do ramo de integração (26/11/2026)
+
+- Com o sim do titular, o ramo `agent-control/integracao-20261125` (`87a0149`, 312 commits sobre `main`) foi enviado ao remoto `origin` como ramo novo. `main`, os outros ramos e a instalação publicada não foram tocados.
