@@ -756,3 +756,8 @@ Ordem: `docs/ORDEM-CHATISP.md`. Equipe: `AGENTS.md`, seção "Equipe ChatISP". C
 - 16:15 UTC — a relançada do exame falhou porque o código novo (89f8b3c1) já esperava as migrações 121–123, que a instalação viva ainda não tinha. Backup feito (`personal:backup`, conferência ok, 3 mantidos).
 - 16:17 UTC — o reinício do gateway sozinho não aplica migrações: o gateway ficou fora por cerca de 3 min (`MANAGER_ENDPOINT_START_FAILED`, coluna `heartbeat_at` ausente). Corrigido com `node --import tsx src/server-main.ts initialize <instalação.json>`, que aplicou 121–123, e novo início do serviço. Gateway ativo, painel 200.
 - 16:20 UTC — exame de design relançado (`design-final-3.log`) contra a homologação em c1e673e.
+- 17:40 UTC — CI do Agent Control (task/personal-activation, b8ee9101): 349 arquivos, 1973 testes, 0 falhas (`ac-final-ci-2.log`).
+- ~17:50 UTC — por pedido do titular (a cota Claude está acabando e o Codex voltou), o restante fora o design vai para o Codex `gpt-6.2-sol` médio:
+  - `task/codex-migracoes-pendentes`: o `serve` e o CLI de design recusam cedo com `MIGRATIONS_PENDING` quando há migração não aplicada (o defeito das 16:17).
+  - conferência final só de leitura, achado por achado, dos lotes do ChatISP em c1e673e (`relatorios-ramos/conferencia-final-codex.md`).
+  - O exame de design continua rodando e fica por último.
