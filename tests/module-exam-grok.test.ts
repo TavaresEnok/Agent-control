@@ -191,6 +191,17 @@ test('com examinador Claude, o revisor de outro provedor dos módulos 2 a 9 pode
       skip: [{provider: 'grok', accountId: randomUUID()}]});
     assert.equal(otherAccount.accountId, grok);
     await reservations.release(otherAccount, 'not_started');
+    // Terceira revisão: com o Grok retirado e o Codex tentado sem capacidade elegível (nenhum perfil Codex na cadeia), a recusa
+    // é a falta do Codex (UNAVAILABLE), não SEATS_SKIPPED: o exame não deve herdar o motivo do Grok.
+    const codex = randomUUID();
+    await capacity.addAccount(owner, project, {id: codex, provider: 'codex', label: 'codex', resourceIdentity: `codex:${codex}`, mode: 'synthetic',
+      eligibility: 'documented_supported', eligibilitySource: 'synthetic://allow', maxConcurrent: 2});
+    await capacity.observeQuota(owner, codex, {status: 'available', ttlSeconds: 3600, source: 'synthetic://allow'});
+    const withCodex = createModuleExamReservations({module: 'qa', ledger, principal: owner, authority, intentId,
+      supportedSeats: new Map<'claude' | 'codex' | 'grok', ReadonlySet<string>>([['claude', new Set([claude])], ['codex', new Set([codex])], ['grok', new Set([grok])]])});
+    await assert.rejects(() => withCodex.reserve('reviewer', examiner, {source: 'coletor', severity: 'media', fromExaminer: false, skip: [{provider: 'grok'}]}),
+      (error: unknown) => error instanceof Refusal && error.code === 'MODULE_EXAM_REVIEWER_UNAVAILABLE');
+    assert.equal(withCodex.lastAttemptProvider(), 'codex');
     // Sem Grok no projeto, não há outro provedor: o revisor fica indisponível, nunca vira Claude.
     const onlyClaude = createModuleExamReservations({module: 'qa', ledger, principal: owner, authority, intentId, supportedSeats,
       allowedAccountIds: [claude]});

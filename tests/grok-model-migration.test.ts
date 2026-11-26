@@ -58,3 +58,30 @@ test('migration 123 moves recorded Grok catalog and profiles from grok-4.7 to gr
     await capacity.addProfile(principal, project, {id: randomUUID(), accountId: grok, model: 'grok-4.6', effort: 'medium', role: 'specialist'});
   } finally { await db.close(); await isolated.close(); }
 });
+
+// Third review (low): the branch where grok-4.6 is already in the catalog (registered by a newer account-add, say, with fewer
+// efforts or roles). The migration merges efforts and roles instead of keeping the narrower entry, so the specialist survives.
+test('migration 123 merges into a grok-4.6 entry that already exists', async () => {
+  const url = process.env.AC_TEST_DATABASE_URL; if (!url) throw Error('ISOLATED_DATABASE_REQUIRED');
+  const isolated = await isolatedDatabase(url, 'grok_merge'), db = new Ledger(isolated.url);
+  try {
+    await db.migrate();
+    await db.pool.query('DELETE FROM ac_schema_migrations WHERE version=123');
+    const admin = 'synthetic-capacity-administrator';
+    await db.pool.query('INSERT INTO ac_control_admins VALUES($1) ON CONFLICT DO NOTHING', [admin]);
+    const capacity = new Capacity(db);
+    await capacity.registerModel(admin, {provider: 'grok', model: 'grok-4.7', efforts: ['low', 'medium', 'high'],
+      roles: ['manager', 'programmer', 'reviewer', 'qa', 'specialist', 'judge'], source: 'personal://account-add'});
+    await capacity.registerModel(admin, {provider: 'grok', model: 'grok-4.6', efforts: ['low'], roles: ['programmer'], source: 'custom://grok'});
+    await db.migrate();
+    const rows = (await db.pool.query("SELECT model,efforts,roles,source FROM ac_model_catalog WHERE provider='grok' ORDER BY model")).rows;
+    assert.deepEqual(rows.map(row => row.model), ['grok-4.6']);
+    assert.deepEqual(rows[0].efforts, ['high', 'low', 'medium']);
+    assert.deepEqual(rows[0].roles, ['judge', 'manager', 'programmer', 'qa', 'reviewer', 'specialist']);
+    assert.equal(rows[0].source, 'custom://grok', 'the existing entry is kept and widened, not replaced');
+    // Idempotent on this branch too.
+    const sql = await readFile(new URL('../db/migrations/123_grok_model_4_6.sql', import.meta.url), 'utf8');
+    await db.pool.query(sql);
+    assert.deepEqual((await db.pool.query("SELECT model,efforts,roles,source FROM ac_model_catalog WHERE provider='grok' ORDER BY model")).rows, rows);
+  } finally { await db.close(); await isolated.close(); }
+});
