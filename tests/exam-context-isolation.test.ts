@@ -935,7 +935,7 @@ test('exame de design sem segundo perfil Claude em specialist recusa com DESIGN_
       provider: 'codex', model: 'gpt-6.1-sol', efforts: ['medium'], roles: [...roles], source: 'personal://account-add',
     });
     await capacity.registerModel(principal, {
-      provider: 'grok', model: 'grok-4.7', efforts: ['medium'], roles: [...roles], source: 'personal://account-add',
+      provider: 'grok', model: 'grok-4.6', efforts: ['medium'], roles: [...roles], source: 'personal://account-add',
     });
     const claudeId = randomUUID();
     const codexId = randomUUID();
@@ -951,7 +951,7 @@ test('exame de design sem segundo perfil Claude em specialist recusa com DESIGN_
     const specGrok = randomUUID();
     const codexRev = randomUUID();
     await capacity.addProfile(principal, projectId, {id: specClaude, accountId: claudeId, model: 'claude-opus-5-5', effort: 'high', role: 'specialist'});
-    await capacity.addProfile(principal, projectId, {id: specGrok, accountId: grokId, model: 'grok-4.7', effort: 'medium', role: 'specialist'});
+    await capacity.addProfile(principal, projectId, {id: specGrok, accountId: grokId, model: 'grok-4.6', effort: 'medium', role: 'specialist'});
     await capacity.addProfile(principal, projectId, {id: codexRev, accountId: codexId, model: 'gpt-6.1-sol', effort: 'medium', role: 'reviewer'});
     const rev = await capacity.publish(principal, projectId, 0, CapacityPolicy.parse({
       schemaVersion: 1, maxProgrammersPerContext: 1, maxEvaluatorsPerContext: 2,

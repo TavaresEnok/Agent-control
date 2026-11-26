@@ -72,10 +72,10 @@ test('basic reserves the basic profile and standard reserves the standard profil
   await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project,principal]);
   await db.pool.query('INSERT INTO ac_control_admins VALUES($1)',[principal]);
   await capacity.configure(principal,{programmingLimit:4,evaluationLimit:2});
-  await capacity.registerModel(principal,{provider:'grok',model:'grok-4.7',efforts:['low','medium','high'],roles:['programmer'],source:'synthetic://task-level'});
+  await capacity.registerModel(principal,{provider:'grok',model:'grok-4.6',efforts:['low','medium','high'],roles:['programmer'],source:'synthetic://task-level'});
   await capacity.addAccount(principal,project,{id:account,provider:'grok',label:'grok',resourceIdentity:'task-level:'+account,mode:'synthetic',eligibility:'documented_supported',eligibilitySource:'synthetic://task-level',maxConcurrent:2});
-  await capacity.addProfile(principal,project,{id:standard,accountId:account,model:'grok-4.7',effort:'high',role:'programmer'});
-  await capacity.addProfile(principal,project,{id:basic,accountId:account,model:'grok-4.7',effort:'medium',role:'programmer'});
+  await capacity.addProfile(principal,project,{id:standard,accountId:account,model:'grok-4.6',effort:'high',role:'programmer'});
+  await capacity.addProfile(principal,project,{id:basic,accountId:account,model:'grok-4.6',effort:'medium',role:'programmer'});
   await capacity.observeQuota(principal,account,{status:'available',source:'synthetic://task-level',ttlSeconds:3600});
   const revision=await capacity.publish(principal,project,0,{schemaVersion:1,maxProgrammersPerContext:2,maxEvaluatorsPerContext:1,roles:{programmer:{regular:[standard,basic],emergency:[]}},programmerTiers:{standard:[standard],basic:[basic]},qaModel:false});
   const context=await db.createContext(principal,project,randomUUID());

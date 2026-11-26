@@ -247,7 +247,7 @@ const GrokResult = z.object({
   modelUsage: z.record(z.string(), z.unknown()).optional(),
 }).passthrough();
 
-/** `modelUsage` names the reserved model or its `-build` serving name, as Grok 1.0.70 reports `grok-4.7-build`. */
+/** `modelUsage` names the reserved model or its `-build` serving name, as Grok 1.0.70 reported `grok-4.7-build` for grok-4.7 (the reserved model is now `grok-4.6`). */
 export function isModuleExamGrokModel(name: string, model: string): boolean {
   return name === model || name === model + '-build';
 }

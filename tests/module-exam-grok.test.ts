@@ -31,9 +31,9 @@ test('o revisor Grok só alcança o host de conversa do provedor', () => {
 });
 
 test('o Grok roda sem ferramentas, sem web, sem subagentes, em modo plan e num turno só', () => {
-  const args = moduleExamGrokArgs({model: 'grok-4.7', effort: 'xhigh'}, '/tmp/h/pedido.txt', '/tmp/vazio');
+  const args = moduleExamGrokArgs({model: 'grok-4.6', effort: 'xhigh'}, '/tmp/h/pedido.txt', '/tmp/vazio');
   const value = (flag: string) => args[args.indexOf(flag) + 1];
-  assert.equal(value('--model'), 'grok-4.7');
+  assert.equal(value('--model'), 'grok-4.6');
   assert.equal(value('--reasoning-effort'), 'high');
   assert.equal(value('--tools'), '');
   assert.equal(value('--permission-mode'), 'plan');
@@ -51,8 +51,8 @@ test('a saída do Grok vale só num turno encerrado do modelo reservado', () => 
   const verdict = {kind: 'confirmacao', status: 'confirmado'};
   const ok = {text: JSON.stringify(verdict), stopReason: 'end_turn', num_turns: 1, structuredOutput: verdict,
     usage: {input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 30, cache_creation_input_tokens: 0, reasoning_tokens: 15},
-    modelUsage: {'grok-4.7-build': {inputTokens: 100}}};
-  const read = (value: object, model = 'grok-4.7') => readModuleExamGrokOutput(JSON.stringify(value), model);
+    modelUsage: {'grok-4.6-build': {inputTokens: 100}}};
+  const read = (value: object, model = 'grok-4.6') => readModuleExamGrokOutput(JSON.stringify(value), model);
   const good = read(ok);
   assert.equal(good.succeeded, true);
   assert.deepEqual(JSON.parse(good.output), verdict);
@@ -64,19 +64,19 @@ test('a saída do Grok vale só num turno encerrado do modelo reservado', () => 
   assert.equal(read(ok, 'grok-5').succeeded, false);
   assert.equal(read({...ok, modelUsage: {}}).succeeded, false);
   // Só o nome reservado ou o seu nome de serviço -build; variantes derivadas não contam como o modelo reservado.
-  for (const variant of ['grok-4.7-mini', 'grok-4.7-fast', 'grok-4.7-build-mini', 'grok-4.70']) {
+  for (const variant of ['grok-4.6-mini', 'grok-4.6-fast', 'grok-4.6-build-mini', 'grok-4.60']) {
     assert.equal(read({...ok, modelUsage: {[variant]: {}}}).succeeded, false, variant);
   }
-  assert.equal(read({...ok, modelUsage: {'grok-4.7': {}}}).succeeded, true);
-  assert.equal(readModuleExamGrokOutput('não é json', 'grok-4.7').succeeded, false);
-  const error = readModuleExamGrokOutput(JSON.stringify({type: 'error', message: 'Not signed in.'}), 'grok-4.7');
+  assert.equal(read({...ok, modelUsage: {'grok-4.6': {}}}).succeeded, true);
+  assert.equal(readModuleExamGrokOutput('não é json', 'grok-4.6').succeeded, false);
+  const error = readModuleExamGrokOutput(JSON.stringify({type: 'error', message: 'Not signed in.'}), 'grok-4.6');
   assert.equal(error.succeeded, false);
   assert.deepEqual(error.errors, ['Not signed in.']);
 });
 
 test('o veredito do Grok vem do texto, com chaves únicas, e precisa bater com a saída estruturada', () => {
-  const ok = {stopReason: 'end_turn', num_turns: 1, modelUsage: {'grok-4.7-build': {}}};
-  const read = (value: object) => readModuleExamGrokOutput(JSON.stringify(value), 'grok-4.7');
+  const ok = {stopReason: 'end_turn', num_turns: 1, modelUsage: {'grok-4.6-build': {}}};
+  const read = (value: object) => readModuleExamGrokOutput(JSON.stringify(value), 'grok-4.6');
   // Chave duplicada no texto: a saída estruturada guardaria só o último valor, e a ambiguidade é recusada.
   assert.equal(read({...ok, text: '{"status":"descartado","status":"confirmado"}', structuredOutput: {status: 'confirmado'}}).succeeded, false);
   // Texto e saída estruturada divergentes.
@@ -102,7 +102,7 @@ test('limite e login do Grok saem só do erro estruturado do CLI; o stderr fica 
   assert.equal(fail('quota project header ignored'), 'MODULE_EXAM_PROVIDER_FAILED');
   assert.equal(fail('request id 4290017 failed'), 'MODULE_EXAM_PROVIDER_FAILED');
   // Um "cancelled" com um log de stderr que fala em 429 ou quota continua falha comum, não parada por cota.
-  const cancelled = readModuleExamGrokOutput(JSON.stringify({stopReason: 'cancelled', num_turns: 1, text: '', modelUsage: {'grok-4.7-build': {}}}), 'grok-4.7');
+  const cancelled = readModuleExamGrokOutput(JSON.stringify({stopReason: 'cancelled', num_turns: 1, text: '', modelUsage: {'grok-4.6-build': {}}}), 'grok-4.6');
   const withLog = {...cancelled, diagnostics: [...cancelled.diagnostics, 'telemetry: 429 quota exceeded for api.mixpanel.com']};
   assert.equal(resolveModuleExamGrokResult(withLog, []).failureCode, 'MODULE_EXAM_PROVIDER_FAILED');
 });
@@ -133,7 +133,7 @@ test('com examinador Claude, o revisor de outro provedor dos módulos 2 a 9 pode
     await capacity.configure(owner, {programmingLimit: 4, evaluationLimit: 4});
     const roles = ['manager', 'programmer', 'reviewer', 'qa', 'specialist', 'judge'] as const;
     // Mesmo registro que o account-add grava para o Grok na instalação.
-    await capacity.registerModel(owner, {provider: 'grok', model: 'grok-4.7', efforts: ['low', 'medium', 'high'], roles: [...roles], source: 'personal://account-add'});
+    await capacity.registerModel(owner, {provider: 'grok', model: 'grok-4.6', efforts: ['low', 'medium', 'high'], roles: [...roles], source: 'personal://account-add'});
     await capacity.registerModel(owner, {provider: 'claude', model: 'claude-opus-5-5', efforts: ['medium', 'high'], roles: [...roles], source: 'synthetic://allow'});
     await capacity.registerModel(owner, {provider: 'claude', model: 'claude-sonnet-5-5', efforts: ['medium', 'high'], roles: ['specialist'], source: 'synthetic://module-exam'});
     const claude = randomUUID(), grok = randomUUID();
@@ -149,7 +149,7 @@ test('com examinador Claude, o revisor de outro provedor dos módulos 2 a 9 pode
     };
     const sonnet = await profile(claude, 'claude-sonnet-5-5', 'medium');
     const opus = await profile(claude, 'claude-opus-5-5', 'medium');
-    const grokProfile = await profile(grok, 'grok-4.7', 'medium');
+    const grokProfile = await profile(grok, 'grok-4.6', 'medium');
     const rev = await capacity.publish(owner, project, 0, {schemaVersion: 1, maxProgrammersPerContext: 2, maxEvaluatorsPerContext: 4,
       roles: {specialist: {regular: [sonnet, grokProfile], emergency: [opus]}}});
     const context = await ledger.createContext(owner, project, randomUUID());
@@ -172,7 +172,7 @@ test('com examinador Claude, o revisor de outro provedor dos módulos 2 a 9 pode
       assert.equal(reviewer.provider, 'grok');
       assert.equal(reviewer.accountId, grok);
       assert.equal(reviewer.profileId, grokProfile);
-      assert.equal(reviewer.model, 'grok-4.7');
+      assert.equal(reviewer.model, 'grok-4.6');
       await reservations.release(reviewer, 'not_started');
     }
     // Achado alto do examinador continua com o Opus.
@@ -222,7 +222,7 @@ test('o supervisor monta só o login do Grok, só leitura, sem rede, e recusa lo
     await capacity.addAccount(owner, project, {id: account, provider: 'grok', label: 'grok fixture', resourceIdentity: 'grok:' + subject, mode: 'subscription_cli',
       eligibility: 'documented_supported', eligibilitySource: 'https://example.invalid/fixture', maxConcurrent: 2});
     await capacity.observeQuota(owner, account, {status: 'available', source: 'https://example.invalid/fixture', ttlSeconds: 3600});
-    await db.pool.query("INSERT INTO ac_profiles(id,account_id,model,effort,role,enabled) VALUES($1,$2,'grok-4.7','medium','specialist',true)", [profile, account]);
+    await db.pool.query("INSERT INTO ac_profiles(id,account_id,model,effort,role,enabled) VALUES($1,$2,'grok-4.6','medium','specialist',true)", [profile, account]);
     await db.pool.query("INSERT INTO ac_policy_revisions(project_id,revision,digest,snapshot,published_by) VALUES($1,1,$2,'{}',$3)", [project, 'b'.repeat(64), owner]);
     const contextId = await db.createContext(owner, project, randomUUID());
     await db.pool.query("INSERT INTO ac_exam_contexts(project_id,module,context_id) VALUES($1,'qa',$2)", [project, contextId]);
@@ -257,7 +257,7 @@ test('o supervisor monta só o login do Grok, só leitura, sem rede, e recusa lo
     const jobs: string[] = [];
     const request = (grantId: string) => NativeExecutionRequest.parse({jobId: (jobs.push(randomUUID()), jobs.at(-1)), intentId, grantId, sessionId: randomUUID(), base: commit, role: 'specialist',
       task: 'Revise o achado.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
-      moduleExam: {accountId: account, profileId: profile, model: 'grok-4.7'}, timeoutMs: 120000});
+      moduleExam: {accountId: account, profileId: profile, model: 'grok-4.6'}, timeoutMs: 120000});
     try {
       // Login que vence durante o exame: recusa antes de qualquer contêiner, sem tentar renovar.
       await writeLogin(new Date(Date.now() + 60_000));
@@ -307,7 +307,7 @@ test('login do revisor Grok vencido para a fila comum na primeira recusa e a not
   const skipped = (n: number) => `test.skip("caso ${n}", () => {})`;
   const files = Array.from({length: 6}, (_, f) => ({file: `src/g${f}.test.ts`, reason: null, code: skipped(f) + ';\n'}));
   const findings = files.map(({file}, f) => qaStaticFinding(file, 1, skipped(f) + ';'));
-  const seat = (provider: string) => ({provider, model: provider === 'grok' ? 'grok-4.7' : 'claude-sonnet-5-5', accountId: randomUUID(), profileId: randomUUID(), grantId: randomUUID()});
+  const seat = (provider: string) => ({provider, model: provider === 'grok' ? 'grok-4.6' : 'claude-sonnet-5-5', accountId: randomUUID(), profileId: randomUUID(), grantId: randomUUID()});
   const examiner = seat('claude');
   let reviewerSeats = 0, reviewerCalls = 0;
   const result = await examineFunctionalModule({module: 'qa', intentId: randomUUID(), commit: 'a'.repeat(40), map: {files, routes: []}, findings,
@@ -396,14 +396,14 @@ if (mode === 'sleep') setTimeout(() => {}, 60000);
 else if (mode === 'flood') process.stdout.write('x'.repeat(300000));
 else {
   process.stdout.write(JSON.stringify({text: '{"kind":"confirmacao"}', stopReason: 'end_turn', num_turns: 1, structuredOutput: {kind: 'confirmacao'},
-    modelUsage: {'grok-4.7-build': {}}}));
+    modelUsage: {'grok-4.6-build': {}}}));
   process.exitCode = mode === 'exit1' ? 1 : 0;
 }
 `, {mode: 0o700});
     process.env.HTTPS_PROXY = 'http://127.0.0.1:19493';
     process.env.SEGREDO_DO_HOST = 'nao-deve-chegar-ao-grok';
     const paths = {bin, accountRoot, tmpRoot};
-    const input = {model: 'grok-4.7', effort: 'medium' as const, task: 'PEDIDO-SINTETICO', timeoutMs: 120_000, moduleExamLoginDigest: freshDigest};
+    const input = {model: 'grok-4.6', effort: 'medium' as const, task: 'PEDIDO-SINTETICO', timeoutMs: 120_000, moduleExamLoginDigest: freshDigest};
     const run = async (which: string, overrides: Partial<typeof input> = {}, signal = new AbortController().signal) => {
       await writeFile(mode, which);
       await rm(record, {force: true});
@@ -555,4 +555,12 @@ test('cota do Grok na fila comum não para a revisão alta pelo Opus', async () 
   assert.equal(high.status, 'confirmado');
   assert.equal(high.verifier?.model, 'claude-opus-5-5');
   assert.equal(result.findings.find(finding => finding.file === files[0]!.file)!.failure, 'PROVIDER_USAGE_LIMIT');
+});
+
+// grok-4.7 left the account's catalog (grok models lists grok-4.6 and grok-4.5): new Grok accounts register grok-4.6,
+// still for the specialist role the module exam reviewer reserves.
+test('a conta Grok nova registra grok-4.6 com o papel specialist', async () => {
+  const {ACCOUNT_ADD_ROLES, ACCOUNT_ADD_MODEL_ROLES} = await import('../src/account-add.ts');
+  assert.deepEqual(ACCOUNT_ADD_ROLES.grok.map(profile => profile.model), ['grok-4.6']);
+  assert.ok(ACCOUNT_ADD_MODEL_ROLES.includes('specialist'));
 });

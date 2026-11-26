@@ -14,10 +14,12 @@ const Provider=z.enum(['codex','claude','grok']);
 export type ProviderLogin={accountId:string;provider:'codex'|'claude'|'grok';label:string;state:'pending'|'active'|'error';url?:string;userCode?:string};
 const sessions=new Map<string,ProviderLogin>();
 /** Test team only. The permanent roster in AGENTS.md stays Codex for manager and programmer. */
-const ROLES={
+export const ACCOUNT_ADD_MODEL_ROLES=['manager','programmer','reviewer','qa','specialist','judge'] as const;
+/** Profiles each new account gets, and the roles its models are registered for (specialist is the module exam reviewer). */
+export const ACCOUNT_ADD_ROLES={
  codex:[] as {role:'manager'|'programmer'|'reviewer'|'qa';model:string}[],
  claude:[{role:'manager' as const,model:'claude-sonnet-5-5'},{role:'reviewer' as const,model:'claude-sonnet-5-5'},{role:'qa' as const,model:'claude-sonnet-5-5'}],
- grok:[{role:'programmer' as const,model:'grok-4.7'}],
+ grok:[{role:'programmer' as const,model:'grok-4.6'}],
 };
 
 export function providerLogin(accountId:string){return sessions.get(accountId)??null;}
@@ -58,10 +60,10 @@ export async function addProviderAccount(config:Installation,ledger:Ledger,raw:{
   await capacity.configure(owner,{programmingLimit:4,evaluationLimit:2});
  const accountId=randomUUID();
  const subject=createHash('sha256').update(provider+'\0'+accountId).digest('hex');
- for(const profile of ROLES[provider])
-  await capacity.registerModel(owner,{provider,model:profile.model,efforts:['low','medium','high'],roles:['manager','programmer','reviewer','qa','specialist','judge'],source:'personal://account-add'});
+ for(const profile of ACCOUNT_ADD_ROLES[provider])
+  await capacity.registerModel(owner,{provider,model:profile.model,efforts:['low','medium','high'],roles:[...ACCOUNT_ADD_MODEL_ROLES],source:'personal://account-add'});
  await capacity.addAccount(owner,projectId,{id:accountId,provider,label,resourceIdentity:provider+':'+subject,mode:'subscription_cli',eligibility:'documented_supported',eligibilitySource:'personal://owner',maxConcurrent:2});
- for(const profile of ROLES[provider])
+ for(const profile of ACCOUNT_ADD_ROLES[provider])
   await capacity.addProfile(owner,projectId,{id:randomUUID(),accountId,model:profile.model,effort:'medium',role:profile.role});
  await capacity.observeQuota(owner,accountId,{status:'available',source:'personal://account-add',ttlSeconds:3600});
  const repositories=[config.project.repo,...config.projects.map(project=>project.repo)];
