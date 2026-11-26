@@ -725,3 +725,16 @@ Ordem: `docs/ORDEM-CHATISP.md`. Equipe: `AGENTS.md`, seção "Equipe ChatISP". C
 ## Envio do ramo de integração (26/11/2026)
 
 - Com o sim do titular, o ramo `agent-control/integracao-20261125` (`87a0149`, 312 commits sobre `main`) foi enviado ao remoto `origin` como ramo novo. `main`, os outros ramos e a instalação publicada não foram tocados.
+
+## Rodada final das pendências (26/11/2026)
+
+- **Pedido do titular:** "Seguir com tudo", para fechar o que ficou aberto depois da integração `87a0149`.
+- **Troca de modelo (não silenciosa):** o `grok-4.7` saiu do catálogo da conta Grok (`unknown model id`); estão disponíveis só `grok-4.6` e `grok-4.5`. Os trabalhadores de backend rodam em `grok-4.6`, com trailer `Co-Authored-By: Grok 4.6 <noreply@x.ai>`.
+- **Lotes** (worktrees `chatisp-wt/final-*`, a partir de `87a0149`; ordens e listas em `ordens-correcao/pendencias/final/`):
+  - `seg`, Grok 4.6 alto: 92 achados da segurança (35 baixos e 11 informativos confirmados, mais os prováveis nunca conferidos), migrações 00100–00104;
+  - `inc`, Grok 4.6 alto: 20 inconclusivos e os informativos confirmados dos módulos 2 a 9, migrações 00105–00109;
+  - `ac1` e `ac2`, Grok 4.6 médio: reavaliação dos baixos de backend aceitos sem mudança (83 e 106), migrações 00110–00119;
+  - `d1`, `d2` e `d3`, Opus 5.5 médio: front-end, com os achados do design (módulo 10), os baixos de front aceitos antes e o ACH-068 (503 na restauração da sessão passa a mostrar "Tentar de novo" em vez de mandar para Entrar);
+  - Agent Control, Opus 5.5 médio (worktree `agent-control-wt/final-ac`): juntar os 3 commits restantes de `task/grok-revisor`, o passo a passo para ligar o revisor e a causa do `VERIFY_LEASE_LOST`.
+- **Banco de testes:** `ac-test-db-journal` (porta 54333) foi recriado com `--restart unless-stopped` e volume nomeado; antes era descartável (`--rm`) e sem política de reinício.
+- **Disco:** 94% antes da rodada; a retenção automática aplicada não achou nada a retirar.
