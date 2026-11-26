@@ -181,6 +181,15 @@ test('com examinador Claude, o revisor de outro provedor dos módulos 2 a 9 pode
     assert.equal(high.profileId, opus);
     await reservations.release(high, 'not_started');
 
+    // Assento tirado pelo exame (login vencido, falhas repetidas, cota): por provedor ou pela conta, a reserva não o oferece de novo.
+    for (const skip of [[{provider: 'grok'}], [{provider: 'grok', accountId: grok}]]) {
+      await assert.rejects(() => reservations.reserve('reviewer', examiner, {source: 'coletor', severity: 'media', fromExaminer: false, skip}),
+        (error: unknown) => error instanceof Refusal && error.code === 'MODULE_EXAM_REVIEWER_UNAVAILABLE');
+    }
+    const otherAccount = await reservations.reserve('reviewer', examiner, {source: 'coletor', severity: 'media', fromExaminer: false,
+      skip: [{provider: 'grok', accountId: randomUUID()}]});
+    assert.equal(otherAccount.accountId, grok);
+    await reservations.release(otherAccount, 'not_started');
     // Sem Grok no projeto, não há outro provedor: o revisor fica indisponível, nunca vira Claude.
     const onlyClaude = createModuleExamReservations({module: 'qa', ledger, principal: owner, authority, intentId, supportedSeats,
       allowedAccountIds: [claude]});
@@ -303,7 +312,12 @@ test('login do revisor Grok vencido para a fila comum na primeira recusa e a not
   let reviewerSeats = 0, reviewerCalls = 0;
   const result = await examineFunctionalModule({module: 'qa', intentId: randomUUID(), commit: 'a'.repeat(40), map: {files, routes: []}, findings,
     reviewTriage: false,
-    reserve: async purpose => { if (purpose === 'examiner') return examiner; reviewerSeats++; return seat('grok'); },
+    // Like the real reservation, a skipped provider is never offered again; with no other provider the lane has no seat.
+    reserve: async (purpose, _avoid, target) => {
+      if (purpose === 'examiner') return examiner;
+      if (target?.skip?.some(entry => entry.provider === 'grok')) throw new Refusal('MODULE_EXAM_REVIEWER_UNAVAILABLE');
+      reviewerSeats++; return seat('grok');
+    },
     release: async () => {},
     worker: {async run(call) {
       const task = JSON.parse(call.task);
@@ -446,4 +460,99 @@ else {
     for (const [name, value] of Object.entries(saved)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
     await rm(area, {recursive: true, force: true});
   }
+});
+
+// Review (low): stops by seat. Grok and Codex are both distinct reviewers; what takes out Grok must not take out Codex.
+async function standardQueue(grokFailure: (n: number) => Error | null, options: {files?: number} = {}) {
+  const {examineFunctionalModule, examJobExited} = await import('../src/module-exam.ts');
+  const {qaStaticFinding} = await import('./fixtures/module-exam-review.ts');
+  const {reviewFixtureVerdict} = await import('./fixtures/module-exam-review.ts');
+  const skipped = (n: number) => `test.skip("caso ${n}", () => {})`;
+  const files = Array.from({length: options.files ?? 6}, (_, f) => ({file: `src/s${f}.test.ts`, reason: null, code: skipped(f) + ';\n'}));
+  const findings = files.map(({file}, f) => qaStaticFinding(file, 1, skipped(f) + ';'));
+  const seat = (provider: string, accountId = randomUUID()) => ({provider, model: provider === 'grok' ? 'grok-4.6' : provider === 'codex' ? 'gpt-6.2-sol' : 'claude-sonnet-5-5', accountId, profileId: randomUUID(), grantId: randomUUID()});
+  const examiner = seat('claude');
+  const grokAccount = randomUUID();
+  const calls = {grok: 0, codex: 0};
+  const result = await examineFunctionalModule({module: 'qa', intentId: randomUUID(), commit: 'a'.repeat(40), map: {files, routes: []}, findings,
+    reviewTriage: false,
+    // Grok first, as moduleExamProviders orders the distinct reviewers; Codex once Grok is skipped.
+    reserve: async (purpose, _avoid, target) => {
+      if (purpose === 'examiner') return examiner;
+      const grokSkipped = target?.skip?.some(entry => entry.provider === 'grok' && (!entry.accountId || entry.accountId === grokAccount));
+      return grokSkipped ? seat('codex') : seat('grok', grokAccount);
+    },
+    release: async () => {},
+    worker: {async run(call) {
+      const task = JSON.parse(call.task);
+      if (task.checklist) return JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: ['qa'], routesReviewed: [], findings: []});
+      const verdict = () => JSON.stringify(reviewFixtureVerdict(task, skipped(Number(/s(\d+)\.test/.exec(task.file)![1])) + ';'));
+      if (call.provider === 'grok') { const error = grokFailure(++calls.grok); if (error) throw examJobExited(error); return verdict(); }
+      calls.codex++;
+      return verdict();
+    }}});
+  return {result, calls};
+}
+
+test('login do Grok vencido tira só o Grok da fila comum: o Codex segue revisando', async () => {
+  const {result, calls} = await standardQueue(() => new Refusal('EXAM_LOGIN_STALE'));
+  assert.equal(calls.grok, 1);
+  assert.equal(calls.codex, 5);
+  assert.equal(result.findings.filter(finding => finding.failure === 'EXAM_LOGIN_STALE').length, 1);
+  assert.ok(result.findings.slice(1).every(finding => finding.failure === null), JSON.stringify(result.findings.map(f => f.failure)));
+});
+
+test('falhas repetidas MODULE_EXAM_PROVIDER_FAILED do mesmo assento tiram esse assento depois do limite', async () => {
+  const {MODULE_EXAM_SEAT_FAILURE_LIMIT} = await import('../src/module-exam.ts');
+  const {result, calls} = await standardQueue(() => new Refusal('MODULE_EXAM_PROVIDER_FAILED'));
+  assert.equal(calls.grok, MODULE_EXAM_SEAT_FAILURE_LIMIT);
+  assert.equal(calls.codex, 6 - MODULE_EXAM_SEAT_FAILURE_LIMIT);
+  assert.equal(result.findings.filter(finding => finding.failure === 'MODULE_EXAM_PROVIDER_FAILED').length, MODULE_EXAM_SEAT_FAILURE_LIMIT);
+});
+
+test('falhas do Grok alternadas com sucesso não tiram o assento: o contador zera no sucesso', async () => {
+  const {result, calls} = await standardQueue(n => n % 2 ? new Refusal('MODULE_EXAM_PROVIDER_FAILED') : null);
+  assert.equal(calls.grok, 6);
+  assert.equal(calls.codex, 0);
+  assert.equal(result.findings.filter(finding => finding.failure === null).length, 3);
+});
+
+test('cota do Grok tira só o Grok: a fila comum segue no Codex e nada para o exame', async () => {
+  const {result, calls} = await standardQueue(() => new Refusal('PROVIDER_USAGE_LIMIT'));
+  assert.equal(calls.grok, 1);
+  assert.equal(calls.codex, 5);
+  assert.equal(result.findings[0]!.failure, 'PROVIDER_USAGE_LIMIT');
+});
+
+// Review (low, pre-existing): a Grok quota filled stopReview and stopped the high lane too, which reviews with Claude Opus.
+test('cota do Grok na fila comum não para a revisão alta pelo Opus', async () => {
+  const {examineFunctionalModule, examJobExited} = await import('../src/module-exam.ts');
+  const {qaStaticFinding, reviewFixtureVerdict, skipQuestion} = await import('./fixtures/module-exam-review.ts');
+  const skipped = (n: number) => `test.skip("caso ${n}", () => {})`;
+  const files = [0, 1].map(f => ({file: `src/h${f}.test.ts`, reason: null, code: skipped(f) + ';\n'}));
+  const account = randomUUID();
+  const examiner = {provider: 'claude', model: 'claude-sonnet-5-5', accountId: account, profileId: randomUUID(), grantId: randomUUID()};
+  const opus = {provider: 'claude', model: 'claude-opus-5-5', accountId: account, profileId: randomUUID(), grantId: randomUUID()};
+  const grok = {provider: 'grok', model: 'grok-4.6', accountId: randomUUID(), profileId: randomUUID(), grantId: randomUUID()};
+  const sessions = {examiner: randomUUID(), reviewer: randomUUID()};
+  let grokCalls = 0;
+  const result = await examineFunctionalModule({module: 'qa', intentId: randomUUID(), commit: 'a'.repeat(40), map: {files, routes: []},
+    findings: [qaStaticFinding(files[0]!.file, 1, skipped(0) + ';')], reviewTriage: false,
+    reserve: async (purpose, _avoid, target) => purpose === 'examiner' ? examiner : target?.fromExaminer && target.severity === 'alta' ? opus : grok,
+    release: async () => {},
+    attestSessions: async () => true,
+    worker: {async run(call) {
+      const task = JSON.parse(call.task);
+      (call as {examSessionId?: string}).examSessionId = task.checklist ? sessions.examiner : sessions.reviewer;
+      if (task.checklist) return JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: ['qa'], routesReviewed: [],
+        findings: task.file === files[1]!.file ? [{line: 1, snippet: skipped(1), hypothesis: skipQuestion, title: 'Alto', severity: 'alta'}] : []});
+      if (call.provider === 'grok') { grokCalls++; throw examJobExited(new Refusal('PROVIDER_USAGE_LIMIT')); }
+      return JSON.stringify(reviewFixtureVerdict(task, skipped(1)));
+    }}});
+  assert.equal(grokCalls, 1);
+  const high = result.findings.find(finding => finding.severity === 'alta')!;
+  assert.equal(high.failure, null, JSON.stringify(result.findings.map(f => [f.severity, f.failure])));
+  assert.equal(high.status, 'confirmado');
+  assert.equal(high.verifier?.model, 'claude-opus-5-5');
+  assert.equal(result.findings.find(finding => finding.file === files[0]!.file)!.failure, 'PROVIDER_USAGE_LIMIT');
 });

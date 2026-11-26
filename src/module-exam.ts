@@ -66,7 +66,11 @@ export type ModuleExamResult = {mode: 'exame' | 'somente_ferramentas'; coverage:
   stopped?: string | null;
   /** Files left not judged by a failure code, as moduleExamUnjudgedByFailure counts them. */
   unjudgedByFailure?: number};
-export type ModuleExamReviewTarget = {severity: ModuleExamCandidate['severity']; source: string; fromExaminer: boolean};
+export type ModuleExamReviewTarget = {severity: ModuleExamCandidate['severity']; source: string; fromExaminer: boolean;
+  /** Standard reviewer seats this exam stopped using (stale login, refused login, repeated failures, exhausted quota). */
+  skip?: readonly {provider: string; accountId?: string}[]};
+/** Consecutive MODULE_EXAM_PROVIDER_FAILED of one reviewer seat before the exam stops using it. */
+export const MODULE_EXAM_SEAT_FAILURE_LIMIT = 3;
 
 /** Reservations must enforce policy, project access and quota. The reviewer excludes the examiner provider. */
 const ModuleExamCall = VerifyWorkerCall.omit({repo: true, avoidProviders: true, avoidProfiles: true, avoidAccounts: true, avoidExaminerAccounts: true});
@@ -631,6 +635,15 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
     let stopReview = stopExam === 'PROVIDER_USAGE_LIMIT' ? stopExam : null;
     let stopStandardReview: string | null = null;
     let stopHighReview: string | null = null;
+    // Standard reviewer seats taken out of this exam, by provider and account (or the whole provider for its quota).
+    // Another distinct provider keeps reviewing; when none is left the reservation stops the standard lane itself.
+    const skippedSeats: {provider: string; accountId?: string}[] = [];
+    const seatFailures = new Map<string, number>();
+    // Why the last seat was taken out: once no seat is left, the remaining findings keep that code and provider.
+    let lastSkip: {code: string; provider: string} | null = null;
+    const skipSeat = (provider: string, accountId?: string) => {
+      if (!skippedSeats.some(seat => seat.provider === provider && seat.accountId === accountId)) skippedSeats.push({provider, ...(accountId ? {accountId} : {})});
+    };
     const collectorReview = input.collectorReview?.intentId === input.intentId ? {
       ...input.collectorReview, coverage: coverageByFile,
       relatedSources: input.module === 'arquitetura' ? new Map(input.map.files.map(file => [file.file, file.code])) : undefined,
@@ -701,7 +714,8 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
         let sibling: Promise<void> | undefined;
         try {
           const worst = members.reduce((top, s) => severityRank[s.finding.severity] < severityRank[top] ? s.finding.severity : top, lead.finding.severity);
-          seat = await reserveSeat('reviewer', lead.examiner!, {severity: worst, source: lead.finding.source, fromExaminer: lead.fromExaminer});
+          seat = await reserveSeat('reviewer', lead.examiner!, {severity: worst, source: lead.finding.source, fromExaminer: lead.fromExaminer,
+            ...(!high && skippedSeats.length ? {skip: [...skippedSeats]} : {})});
           checkAbort(input.signal);
           const call = prepare(seat);
           launched = true;
@@ -709,21 +723,33 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
           exited = true;
           checkAbort(input.signal);
           await onOutput(output, seat, call);
+          seatFailures.delete(seat.provider + ':' + seat.accountId);
           return;
         } catch (error) {
           if (fatal(error) || input.signal?.aborted) throw error;
           if (jobExited(error)) exited = true;
-          const code = failure(error);
+          const raw = failure(error);
+          const code = !seat && !high && raw === 'MODULE_EXAM_REVIEWER_UNAVAILABLE' && lastSkip ? lastSkip.code : raw;
           if (!seat && capacityRefusal(code) && held > 0) {
             sibling = siblingSeat();
-          } else if (code === 'PROVIDER_USAGE_LIMIT' && input.waitForClaudeQuota && (!seat || seat.provider === 'claude')) {
+          } else if (code === 'PROVIDER_USAGE_LIMIT' && input.waitForClaudeQuota && (!seat || seat.provider === 'claude') && code === raw) {
             waiting = true;
           } else {
-            fail(code, seat?.provider);
-            if (code === 'PROVIDER_USAGE_LIMIT' || capacityRefusal(code) || (launched && !exited)) stopReview = code;
+            fail(code, seat?.provider ?? (code === raw ? undefined : lastSkip?.provider));
+            const otherProvider = !high && seat !== undefined && seat.provider !== lead.examiner!.provider;
+            const key = seat ? seat.provider + ':' + seat.accountId : '';
+            const failures = code === 'MODULE_EXAM_PROVIDER_FAILED' && seat ? (seatFailures.get(key) ?? 0) + 1 : 0;
+            if (seat) { if (failures) seatFailures.set(key, failures); else seatFailures.delete(key); }
+            // The quota of another provider's reviewer is that provider's alone: the examiner and the high lane keep going.
+            if (code === 'PROVIDER_USAGE_LIMIT' && otherProvider) { skipSeat(seat!.provider); lastSkip = {code, provider: seat!.provider}; }
+            // Every distinct seat was taken out: the standard lane stops with the code that took out the last one.
+            else if (code !== raw) stopStandardReview = code;
+            else if (code === 'PROVIDER_USAGE_LIMIT' || capacityRefusal(code) || (launched && !exited)) stopReview = code;
             else if (high && code === 'MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE') stopHighReview = code;
-            // A stale or refused reviewer login fails every later call the same way: stop the standard lane
-            // instead of reserving, preparing and releasing a job for each remaining finding.
+            // A stale or refused login, or the same seat failing again and again, fails every later call of that seat the same
+            // way: that seat leaves the standard lane instead of reserving, preparing and releasing a job per remaining finding.
+            else if (otherProvider && (code === 'EXAM_LOGIN_STALE' || code === 'PROVIDER_AUTH_FAILED'
+              || failures >= MODULE_EXAM_SEAT_FAILURE_LIMIT)) { skipSeat(seat!.provider, seat!.accountId); lastSkip = {code, provider: seat!.provider}; }
             else if (!high && (code === 'MODULE_EXAM_REVIEWER_UNAVAILABLE' || code === 'MODULE_EXAM_PROVIDER_NOT_DISTINCT'
               || code === 'EXAM_LOGIN_STALE' || code === 'PROVIDER_AUTH_FAILED')) stopStandardReview = code;
             return;

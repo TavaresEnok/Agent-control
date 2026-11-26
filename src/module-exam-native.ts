@@ -133,6 +133,11 @@ export function createModuleExamReservations(input: ReservationInput): Pick<Requ
       const accounts = intersectAccounts(rawAccounts);
       if (!accounts.size) continue;
       hadAllowedIntersection = true;
+      // Seats the exam stopped using: the whole provider, or the accounts named.
+      const skipped = target?.skip?.filter(seat => seat.provider === provider) ?? [];
+      if (skipped.some(seat => !seat.accountId)) continue;
+      for (const seat of skipped) accounts.delete(seat.accountId!);
+      if (!accounts.size) continue;
       lastProvider = provider;
       try {
         const seat = await reserveWithCapacityQueue({
