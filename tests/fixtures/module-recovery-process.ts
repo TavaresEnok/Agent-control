@@ -1,3 +1,6 @@
+// Child of verification-modules-cleanup.test.ts: the host disk is not what it proves, so it reads the same fixed figure.
+import {useFixedDisk} from './fixed-disk.ts';
+useFixedDisk();
 import {randomUUID} from 'node:crypto';
 import {Refusal, type Authority} from '../../src/contracts.ts';
 import {Ledger} from '../../src/ledger.ts';
