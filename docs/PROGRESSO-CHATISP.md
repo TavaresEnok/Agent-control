@@ -749,3 +749,10 @@ Ordem: `docs/ORDEM-CHATISP.md`. Equipe: `AGENTS.md`, seção "Equipe ChatISP". C
   - **Disco:** `docker builder prune -f` (cache sem uso, 11 GB) e remoção dos worktrees já integrados; o disco foi de 95% para 92–93%.
   - **Módulo 10 (design)** relançado pelo produto com Opus médio sobre `c1e673e` (clone central no ramo local `agent-control/exame-design-20261126`), log `ordens-correcao/logs/design-final.log`.
   - Nada foi enviado (push).
+
+## 26/11/2026 — aplicação viva do Agent Control e exame de design
+
+- 13:57 UTC — COTA: o exame de design parou com `PROVIDER_USAGE_LIMIT` (conta Claude Max Enok). A suíte de CI do Agent Control também parou e foi relançada (`ac-final-ci-2.log`).
+- 16:15 UTC — a relançada do exame falhou porque o código novo (89f8b3c1) já esperava as migrações 121–123, que a instalação viva ainda não tinha. Backup feito (`personal:backup`, conferência ok, 3 mantidos).
+- 16:17 UTC — o reinício do gateway sozinho não aplica migrações: o gateway ficou fora por cerca de 3 min (`MANAGER_ENDPOINT_START_FAILED`, coluna `heartbeat_at` ausente). Corrigido com `node --import tsx src/server-main.ts initialize <instalação.json>`, que aplicou 121–123, e novo início do serviço. Gateway ativo, painel 200.
+- 16:20 UTC — exame de design relançado (`design-final-3.log`) contra a homologação em c1e673e.
