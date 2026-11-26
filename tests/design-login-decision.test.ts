@@ -40,6 +40,9 @@ test('cookie mudado ou novo é detectado; páginas iguais ignoram a barra final'
   assert.equal(cookieChanged(before, [{domain: 'a.local', path: '/', name: '__Host-session', value: 's'}]), true);
   assert.equal(samePage(new URL('https://a.local/entrar/'), new URL('https://a.local/entrar')), true);
   assert.equal(samePage(new URL('https://a.local/painel'), new URL('https://a.local/entrar')), false);
+  assert.equal(samePage(new URL('https://a.local/#/entrar?volta=1'), new URL('https://a.local/#/entrar/')), true);
+  assert.equal(samePage(new URL('https://a.local/#/painel'), new URL('https://a.local/#/entrar')), false);
+  assert.equal(samePage(new URL('https://a.local/entrar#formulario'), new URL('https://a.local/entrar')), true);
 });
 
 test('a senha é achada crua, curta, escapada no JSON, codificada e em base64', () => {

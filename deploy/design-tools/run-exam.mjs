@@ -9,6 +9,7 @@ import {mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSyn
 import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {prepareTrust} from './trust.mjs';
+import {loginFormVisible, loginRoute} from './login-decision.mjs';
 
 const HOST = /^(?:127\.0\.0\.1|localhost|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+local)$/;
 const AXE_TAGS = ['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa', 'best-practice'];
@@ -846,60 +847,54 @@ function readLoginState() {
   return {storageState, designLogin};
 }
 
-// Runs before app scripts, only in the declared origin and only for this browser session.
+// Abre um documento vazio, atendido pelo navegador, para semear o storage uma vez por aba.
+const storagePage = origin => new URL('/.ac-design-storage', origin).href;
+const emptyDocument = {status: 200, contentType: 'text/html', body: '<!doctype html><html></html>'};
+
 function restoreStorage({origin, local = [], session = []}) {
-  if (window.location.origin !== origin) return;
-  for (const {name, value} of local) if (localStorage.getItem(name) === null) localStorage.setItem(name, value);
-  for (const [key, value] of session) if (sessionStorage.getItem(key) === null) sessionStorage.setItem(key, value);
+  if (window.location.origin !== origin) throw new Error('DESIGN_CAPTURE_LOGIN_FAILED');
+  for (const {name, value} of local) localStorage.setItem(name, value);
+  for (const [key, value] of session) sessionStorage.setItem(key, value);
 }
 
-async function captureLoginFailed(page, requested, login, {playwrightSelectors = true} = {}) {
+async function captureLoginFailed(page, requested, login) {
   const landed = new URL(page.url());
-  const expected = new URL(requested);
-  if (landed.origin !== expected.origin) return true;
-  if (login.path !== undefined && plainPath(landed.href) === login.path) return true;
-  const password = 'input[type="password"]';
-  const submit = 'button[type="submit"], input[type="submit"]';
-  const otp = 'input[autocomplete="one-time-code"]';
-  if (playwrightSelectors) {
-    const visible = async selector => {
-      for (const field of await page.locator(selector).all()) {
-        if (await field.isVisible()) return true;
-      }
-      return false;
-    };
-    return await visible(otp)
-      || (await visible(login.passwordSelector ?? password) && await visible(login.submitSelector ?? submit));
-  }
-  return page.evaluate(({passwordSelector, submitSelector}) => {
-    const visible = selector =>
-      Array.from(document.querySelectorAll(selector)).some(field => field.getClientRects().length > 0
-        && getComputedStyle(field).visibility === 'visible');
-    const visibleOr = (selector, fallback) => {
-      try {
-        return visible(selector);
-      } catch (error) {
-        if (error.name !== 'SyntaxError') throw error;
-        return fallback();
-      }
-    };
-    return visible('input[autocomplete="one-time-code"]')
-      || (visibleOr(passwordSelector, () => visible('input[type="password"]'))
-        // Puppeteer cannot use Playwright selectors here. A visible password is
-        // enough to reject the audit when its submit selector cannot be checked.
-        && visibleOr(submitSelector, () => true));
-  }, {passwordSelector: login.passwordSelector ?? password, submitSelector: login.submitSelector ?? submit});
+  return landed.origin !== new URL(requested).origin
+    || loginRoute(landed) === login.path
+    || await page.evaluate(loginFormVisible);
+}
+
+// Uma resposta do documento principal pode chegar depois de goto, por uma ação ou pelo Lighthouse.
+function watchUnauthorized(page) {
+  let rejected = false;
+  page.on('response', response => {
+    const request = response.request();
+    if (response.status() === 401 && request.isNavigationRequest() && request.frame() === page.mainFrame()) rejected = true;
+  });
+  return () => rejected;
 }
 
 async function prepareAuditPage(page, origin, login) {
   const {storageState, designLogin} = login;
   await page.setBypassServiceWorker(true);
   await page.browserContext().setCookie(...storageState.cookies);
-  await page.evaluateOnNewDocument(restoreStorage, {
-    origin,
-    local: storageState.origins.find(item => item.origin === origin)?.localStorage,
-    session: designLogin.sessionStorage,
-  });
+  const local = storageState.origins.find(item => item.origin === origin)?.localStorage;
+  const session = designLogin.sessionStorage;
+  if (!(local?.length || session?.length)) return;
+  const url = storagePage(origin);
+  const serve = request => {
+    const response = request.url() === url ? request.respond(emptyDocument) : request.abort();
+    response.catch(() => undefined);
+  };
+  await page.setRequestInterception(true);
+  page.on('request', serve);
+  try {
+    await page.goto(url, {waitUntil: 'domcontentloaded', timeout: 20000});
+    await page.evaluate(restoreStorage, {origin, local, session});
+  } finally {
+    page.off('request', serve);
+    await page.setRequestInterception(false);
+  }
 }
 
 function readPlan(origin) {
@@ -1164,9 +1159,9 @@ async function main() {
   const renderFailures = [];
   const keyboardFailures = [];
   const auditLoginFailures = new Map();
-  const auditLoginFailed = async (tool, route, page, url, {status, playwrightSelectors = true} = {}) => {
+  const auditLoginFailed = async (tool, route, page, url, unauthorized) => {
     if (login === null) return false;
-    if (status !== 401 && !await captureLoginFailed(page, url, login.designLogin, {playwrightSelectors})) return false;
+    if (!unauthorized() && !await captureLoginFailed(page, url, login.designLogin)) return false;
     auditLoginFailures.set(`${tool} ${route}`, {tool, route});
     return true;
   };
@@ -1252,95 +1247,96 @@ async function main() {
     return steps;
   };
 
-  const passLoginFailed = async (tool, route, page, failures, label, status) => {
-    if (!await auditLoginFailed(tool, route, page, routeUrl(target.origin, route), {status})) return false;
+  const passLoginFailed = async (tool, route, page, failures, label, unauthorized) => {
+    if (!await auditLoginFailed(tool, route, page, routeUrl(target.origin, route), unauthorized)) return false;
     failures.push(`${label} sessão não confirmada na rota`);
     return true;
   };
 
   // Abre a rota sem estado, no tema claro, para as passagens de régua e teclado.
-  const openPlain = async (page, route, viewport, tool, failures, label) => {
+  const openPlain = async (page, route, viewport, tool, failures, label, unauthorized) => {
     await page.setViewportSize({width: viewport, height: viewportHeight(viewport)});
     await page.emulateMedia({colorScheme: 'light'});
     const url = routeUrl(target.origin, route);
-    const response = await page.goto(url, {waitUntil: 'load', timeout: 20000});
+    const response = await page.goto(url, {waitUntil: 'load', timeout: 20000}).catch(() => null);
     const status = response && Number.isInteger(response.status()) ? response.status() : 0;
-    if (await passLoginFailed(tool, route, page, failures, label, status)) return false;
+    if (await passLoginFailed(tool, route, page, failures, label, unauthorized)) return false;
     const landed = new URL(page.url());
     if (status >= 400 || status === 0 || landed.origin !== target.origin) return false;
     if (login === null && redirectedTo(url, landed.href) !== null) return false;
     return await probe(page, overlayProbe, [], DEV_OVERLAY, renderFailures, route) !== true;
   };
 
-  const runRoutePasses = async (page, route) => {
+  const runRoutePasses = async (withPage, route) => {
     const narrow = `${route} 320 claro padrao`;
-    try {
-      if (renderCells.length < RENDER_CELL_MAX && await openPlain(page, route, 320, 'render', renderFailures, narrow)) {
-        const read = await probe(page, renderProbe, RENDER_HELPERS, {overflow: true}, renderFailures, narrow);
-        if (!await passLoginFailed('render', route, page, renderFailures, narrow) && read?.overflow) {
-          pushRender({file: narrow, route, viewport: 320, theme: 'claro', state: 'padrao', overflow: read.overflow});
-          renderMeasured += 1;
+    await withPage(async (page, unauthorized) => {
+      try {
+        if (renderCells.length < RENDER_CELL_MAX && await openPlain(page, route, 320, 'render', renderFailures, narrow, unauthorized)) {
+          const read = await probe(page, renderProbe, RENDER_HELPERS, {overflow: true}, renderFailures, narrow);
+          if (!await passLoginFailed('render', route, page, renderFailures, narrow, unauthorized) && read?.overflow) {
+            pushRender({file: narrow, route, viewport: 320, theme: 'claro', state: 'padrao', overflow: read.overflow});
+            renderMeasured += 1;
+          }
         }
+      } catch (error) {
+        renderFailures.push(`${narrow} ${shortError(error)}`);
       }
-    } catch (error) {
-      renderFailures.push(`${narrow} ${shortError(error)}`);
-    }
+    });
     const wide = `${route} 1440 claro padrao`;
-    try {
-      if (await openPlain(page, route, 1440, 'keyboard', keyboardFailures, wide)) {
-        const steps = await walkTab(page, wide);
-        if (!await passLoginFailed('keyboard', route, page, keyboardFailures, wide) && steps.length > 0) keyboardWalks.push({file: wide, steps});
-      }
-    } catch (error) {
-      keyboardFailures.push(`${wide} ${shortError(error)}`);
-    }
-    const motion = `${wide} movimento`;
-    try {
-      await page.emulateMedia({colorScheme: 'light', reducedMotion: 'reduce'});
-      if (await openPlain(page, route, 1440, 'render', renderFailures, motion)) {
-        await page.waitForTimeout(1000);
-        if (await passLoginFailed('render', route, page, renderFailures, motion)) return;
-        const read = await probe(page, motionProbe, MOTION_HELPERS, null, renderFailures, motion);
-        if (!await passLoginFailed('render', route, page, renderFailures, motion) && Array.isArray(read?.running)) {
-          pushRender({file: wide, route, viewport: 1440, theme: 'claro', state: 'padrao', motion: read});
+    await withPage(async (page, unauthorized) => {
+      try {
+        if (await openPlain(page, route, 1440, 'keyboard', keyboardFailures, wide, unauthorized)) {
+          const steps = await walkTab(page, wide);
+          if (!await passLoginFailed('keyboard', route, page, keyboardFailures, wide, unauthorized) && steps.length > 0) keyboardWalks.push({file: wide, steps});
         }
+      } catch (error) {
+        keyboardFailures.push(`${wide} ${shortError(error)}`);
       }
-    } catch (error) {
-      renderFailures.push(`${wide} movimento ${shortError(error)}`);
-    } finally {
-      await page.emulateMedia({reducedMotion: null}).catch(() => undefined);
-    }
+    });
+    const motion = `${wide} movimento`;
+    await withPage(async (page, unauthorized) => {
+      try {
+        await page.emulateMedia({colorScheme: 'light', reducedMotion: 'reduce'});
+        if (await openPlain(page, route, 1440, 'render', renderFailures, motion, unauthorized)) {
+          await page.waitForTimeout(1000);
+          if (await passLoginFailed('render', route, page, renderFailures, motion, unauthorized)) return;
+          const read = await probe(page, motionProbe, MOTION_HELPERS, null, renderFailures, motion);
+          if (!await passLoginFailed('render', route, page, renderFailures, motion, unauthorized) && Array.isArray(read?.running)) {
+            pushRender({file: wide, route, viewport: 1440, theme: 'claro', state: 'padrao', motion: read});
+          }
+        }
+      } catch (error) {
+        renderFailures.push(`${wide} movimento ${shortError(error)}`);
+      } finally {
+        await page.emulateMedia({reducedMotion: null}).catch(() => undefined);
+      }
+    });
   };
 
-  const runCell = async (page, cell) => {
+  const runCell = async (page, cell, unauthorized) => {
     const fileName = routeShotName(cell.route, cell.viewport, cell.theme, cell.state);
     const label = cellLabel(cell);
+    const url = cell.href ?? routeUrl(target.origin, cell.route);
+    const lostSession = async () => {
+      if (login === null) return false;
+      const lost = unauthorized() || await captureLoginFailed(page, url, login.designLogin);
+      if (lost) markUnavailable(cell, 401, 'sessão não confirmada na rota');
+      return lost;
+    };
     try {
       await page.setViewportSize({width: cell.viewport, height: viewportHeight(cell.viewport)});
       await page.emulateMedia({colorScheme: cell.theme === 'escuro' ? 'dark' : 'light'});
-      const url = cell.href ?? routeUrl(target.origin, cell.route);
       let response;
       try {
         response = await page.goto(url, {waitUntil: 'load', timeout: 20000});
       } catch {
-        markUnavailable(cell, 0);
+        if (!await lostSession().catch(() => false)) markUnavailable(cell, 0);
         return;
       }
-      const status = response && Number.isInteger(response.status()) ? response.status() : 0;
-      let landed = null;
-      try {
-        landed = new URL(page.url());
-      } catch {
-        landed = null;
-      }
-      const lostSession = async () => {
-        if (login === null) return false;
-        const lost = status === 401 || await captureLoginFailed(page, url, login.designLogin).catch(() => true);
-        if (lost) markUnavailable(cell, 401, 'sessão não confirmada na rota');
-        return lost;
-      };
+      const status = response?.status() ?? 0;
+      const landed = new URL(page.url());
       if (await lostSession()) return;
-      if (status >= 400 || status === 0 || !landed || landed.origin !== target.origin) {
+      if (status >= 400 || status === 0 || landed.origin !== target.origin) {
         markUnavailable(cell, status >= 400 ? status : 0);
         return;
       }
@@ -1361,24 +1357,49 @@ async function main() {
         markUnavailable(cell, 0, 'tela de erro do servidor de desenvolvimento');
         return;
       }
-      const shot = join('/output/capturas', fileName);
       const png = await page.screenshot({fullPage: true, type: 'png'});
       if (await lostSession()) return;
-      writeFileSync(shot, png);
-      screenshots.push({fileName, route: cell.route, viewport: cell.viewport, theme: cell.theme, state: cell.state});
+      const saveShot = () => {
+        writeFileSync(join('/output/capturas', fileName), png);
+        screenshots.push({fileName, route: cell.route, viewport: cell.viewport, theme: cell.theme, state: cell.state});
+      };
+      if (login === null) saveShot();
       const measureCell = login !== null || moved === null;
-      if (measureCell) {
-        const styles = await readStyleBlocks(page);
-        const samples = await page.evaluate(inPage(sampleProbe, SAMPLE_HELPERS));
+      const styles = measureCell ? await readStyleBlocks(page) : [];
+      const samples = measureCell ? await page.evaluate(inPage(sampleProbe, SAMPLE_HELPERS)) : null;
+      if (await lostSession()) return;
+      let results;
+      try {
+        results = await new AxeBuilder({page}).withTags(AXE_TAGS).analyze();
+      } catch (error) {
+        axeFailures.push(`DESIGN_AXE_FAILED ${label} ${shortError(error)}`);
+      }
+      if (await lostSession()) return;
+      let render;
+      let renderRead;
+      if (measureCell && renderCells.length < RENDER_CELL_MAX) {
+        const wide = cell.viewport === 1440;
+        renderRead = await probe(page, renderProbe, RENDER_HELPERS, {
+          overflow: true,
+          clipped: true,
+          images: true,
+          inputs: cell.viewport === 375,
+          residue: wide,
+          charts: wide,
+          title: wide && cell.theme === 'claro' && cell.state === 'padrao',
+          patterns: RESIDUE_PATTERNS,
+        }, renderFailures, label);
+        render = {file: label, route: cell.route, viewport: cell.viewport, theme: cell.theme, state: cell.state};
+        if (wide && cell.state === 'padrao') render.states = await probeStates(page, label);
         if (await lostSession()) return;
+      }
+      if (login !== null) saveShot();
+      if (measureCell) {
         rememberStyles(styles);
         computed.push({route: cell.route, viewport: cell.viewport, theme: cell.theme, state: cell.state, samples});
       }
-      try {
-        const results = await new AxeBuilder({page}).withTags(AXE_TAGS).analyze();
-        if (await lostSession()) return;
-        const violations = Array.isArray(results?.violations) ? results.violations.length : 0;
-        axeFindings += violations;
+      if (results) {
+        axeFindings += Array.isArray(results.violations) ? results.violations.length : 0;
         axeFinished += 1;
         axeReports.push({
           file: label,
@@ -1388,30 +1409,16 @@ async function main() {
           state: cell.state,
           json: results,
         });
-      } catch (error) {
-        axeFailures.push(`DESIGN_AXE_FAILED ${label} ${shortError(error)}`);
       }
-      if (!measureCell || renderCells.length >= RENDER_CELL_MAX) return;
-      const wide = cell.viewport === 1440;
-      const read = await probe(page, renderProbe, RENDER_HELPERS, {
-        overflow: true,
-        clipped: true,
-        images: true,
-        inputs: cell.viewport === 375,
-        residue: wide,
-        charts: wide,
-        title: wide && cell.theme === 'claro' && cell.state === 'padrao',
-        patterns: RESIDUE_PATTERNS,
-      }, renderFailures, label);
-      const entry = {file: label, route: cell.route, viewport: cell.viewport, theme: cell.theme, state: cell.state};
-      if (wide && cell.state === 'padrao') entry.states = await probeStates(page, label);
-      if (await lostSession()) return;
-      if (read && typeof read === 'object') {
-        Object.assign(entry, read);
-        renderMeasured += 1;
+      if (render) {
+        if (renderRead && typeof renderRead === 'object') {
+          Object.assign(render, renderRead);
+          renderMeasured += 1;
+        }
+        pushRender(render);
       }
-      pushRender(entry);
     } catch (error) {
+      if (await lostSession().catch(() => false)) return;
       axeFailures.push(`DESIGN_AXE_FAILED ${label} ${shortError(error)}`);
       note(`captura falhou ${cell.route} ${cell.viewport} ${cell.state}`);
     }
@@ -1421,18 +1428,29 @@ async function main() {
   let axeFindings = 0;
   if (browser) {
     try {
-      const context = await browser.newContext({
-        serviceWorkers: 'block',
-        ...(login === null ? {} : {storageState: login.storageState}),
-      });
-      if (login?.designLogin.sessionStorage?.length > 0) {
-        await context.addInitScript(restoreStorage, {origin: target.origin, session: login.designLogin.sessionStorage});
-      }
-      const page = await context.newPage();
+      const options = {serviceWorkers: 'block'};
+      const publicContext = login === null ? await browser.newContext(options) : null;
+      const publicPage = await publicContext?.newPage();
+      const withPage = async run => {
+        if (publicPage) return run(publicPage);
+        const context = await browser.newContext({...options, storageState: login.storageState});
+        try {
+          const page = await context.newPage();
+          if (login.designLogin.sessionStorage?.length > 0) {
+            const url = storagePage(target.origin);
+            await page.route(url, route => route.fulfill(emptyDocument), {times: 1});
+            await page.goto(url, {waitUntil: 'domcontentloaded', timeout: 20000});
+            await page.evaluate(restoreStorage, {origin: target.origin, session: login.designLogin.sessionStorage});
+          }
+          await run(page, watchUnauthorized(page));
+        } finally {
+          await context.close();
+        }
+      };
       for (const group of routeCells) {
-        for (const cell of group.cells) await runCell(page, cell);
+        for (const cell of group.cells) await withPage((page, unauthorized) => runCell(page, cell, unauthorized));
         // Uma vez por rota, depois das células: 320px, Tab e movimento reduzido.
-        if (group.cells.length > 0) await runRoutePasses(page, group.route);
+        if (group.cells.length > 0) await runRoutePasses(withPage, group.route);
       }
     } catch (error) {
       if (login !== null) {
@@ -1475,11 +1493,14 @@ async function main() {
       const page = await context.newPage();
       await prepareAuditPage(page, target.origin, login);
       await page.setViewport({width: viewport, height: viewportHeight(viewport)});
-      const response = await page.goto(url, {waitUntil: 'load', timeout: 20000});
-      if (await auditLoginFailed('pa11y', route, page, url, {status: response?.status(), playwrightSelectors: false}) || !response?.ok()) return null;
+      const unauthorized = watchUnauthorized(page);
+      const response = await page.goto(url, {waitUntil: 'load', timeout: 20000}).catch(() => null);
+      const loginFailed = () => auditLoginFailed('pa11y', route, page, url, unauthorized);
+      if (await loginFailed() || !response?.ok()) return null;
       const pa11y = (await import('pa11y')).default;
-      const result = await bounded(pa11y(url, {browser: auditBrowser, page, ignoreUrl: true, runners: [runner], timeout: 25000}), 25000);
-      return await auditLoginFailed('pa11y', route, page, url, {playwrightSelectors: false}) ? null : result.issues;
+      const result = await bounded(pa11y(url, {browser: auditBrowser, page, ignoreUrl: true, runners: [runner], timeout: 25000}), 25000)
+        .catch(() => null);
+      return await loginFailed() ? null : result?.issues ?? null;
     } finally {
       await context.close();
     }
@@ -1545,6 +1566,9 @@ async function main() {
         const mobile = formFactor === 'mobile';
         let chromeSession;
         let auditPage;
+        let unauthorized;
+        const url = routeUrl(target.origin, route.route);
+        const loginFailed = () => auditLoginFailed('lighthouse', route.route, auditPage, url, unauthorized);
         try {
           chromeSession = await launch({
             chromePath: chrome ?? undefined,
@@ -1554,8 +1578,8 @@ async function main() {
             const connected = await puppeteer.connect({browserURL: `http://127.0.0.1:${chromeSession.port}`});
             auditPage = await connected.newPage();
             await prepareAuditPage(auditPage, target.origin, login);
+            unauthorized = watchUnauthorized(auditPage);
           }
-          const url = routeUrl(target.origin, route.route);
           // Página com animação infinita ou rede que nunca sossega pode prender o Lighthouse.
           // O teto fecha o Chrome e segue para a próxima rota, com a falha registrada.
           const result = await bounded(lighthouse(url, {
@@ -1573,7 +1597,7 @@ async function main() {
               ? {mobile: true, width: 375, height: 812, deviceScaleFactor: 2, disabled: false}
               : {mobile: false, width: 1350, height: 940, deviceScaleFactor: 1, disabled: false},
           }, undefined, auditPage), LIGHTHOUSE_TIMEOUT_MS);
-          if (login !== null && await auditLoginFailed('lighthouse', route.route, auditPage, url, {playwrightSelectors: false})) {
+          if (login !== null && await loginFailed()) {
             lhFailures.push(`DESIGN_LIGHTHOUSE_FAILED ${route.route} ${formFactor} sessão não confirmada na rota`);
             continue;
           }
@@ -1590,6 +1614,7 @@ async function main() {
           if ((typeof perf === 'number' && perf < 0.5) || (typeof cls === 'number' && cls > 0.25) || (typeof lcp === 'number' && lcp > 4000)) lhFindings += 1;
           lighthouseReports.push({file: `${route.route} ${formFactor}`, route: route.route, formFactor, lhr});
         } catch (error) {
+          if (unauthorized) await loginFailed().catch(() => undefined);
           lhFailures.push(`DESIGN_LIGHTHOUSE_FAILED ${route.route} ${formFactor} ${login === null ? shortError(error) : 'falha na auditoria com sessão'}`);
         } finally {
           if (chromeSession) await chromeSession.kill().catch(() => undefined);

@@ -8,8 +8,12 @@ import type {DesignCaptureDriver, DesignCaptureTheme} from './design-capture.ts'
 import type {DesignLogin} from './design-discover.ts';
 import {assertDesignDestination, assertDesignTarget, designTrustArguments} from './design-image.ts';
 import {claimDesignContainer, makeDesignScratch, releaseDesignContainer, removeDesignScratch} from './design-containers.ts';
+// @ts-expect-error módulo compartilhado com a imagem
+import {bodyLeaksPassword, loginFormVisible, loginRoute} from '../deploy/design-tools/login-decision.mjs';
 
 type DesignPage = {
+  mainFrame(): unknown;
+  on(event: 'response', listener: (response: {status(): number; request(): {frame(): unknown; isNavigationRequest(): boolean}}) => void): void;
   url(): string;
   setViewportSize(size: {width: number; height: number}): Promise<void>;
   emulateMedia(options: {colorScheme: 'dark' | 'light'}): Promise<void>;
@@ -18,7 +22,7 @@ type DesignPage = {
   content(): Promise<string>;
   fill(selector: string, value: string): Promise<void>;
   click(selector: string): Promise<void>;
-  locator(selector: string): {all(): Promise<{isVisible(): Promise<boolean>}[]>; waitFor(options: {state: 'hidden' | 'visible'; timeout: number}): Promise<void>};
+  locator(selector: string): {waitFor(options: {state: 'hidden' | 'visible'; timeout: number}): Promise<void>};
   evaluate<T>(expression: () => T): Promise<T>;
   waitForFunction(expression: () => boolean, arg: undefined, options: {timeout: number}): Promise<unknown>;
 };
@@ -244,23 +248,20 @@ async function waitForPaint(page: DesignPage): Promise<void> {
   ).catch(() => undefined /* paint wait is best effort; the capture checks judge the page */);
 }
 
-function pathOf(url: string): string {
-  return new URL(url).pathname.replace(/\/+$/u, '') || '/';
-}
-
 async function submitDesignLogin(page: DesignPage, guard: DesignBrowserGuard, login: DesignLogin): Promise<string | undefined> {
-  const start = pathOf(page.url());
+  const start = loginRoute(new URL(page.url()));
   await page.click(login.submitSelector);
   await page.locator(login.passwordSelector).waitFor({state: 'hidden', timeout: 15000});
   if (login.successSelector !== undefined) {
     await page.locator(login.successSelector).waitFor({state: 'visible', timeout: 15000});
   }
   guard.afterLogin();
-  return pathOf(page.url()) === start ? undefined : start;
+  if (await page.evaluate(loginFormVisible)) throw new Refusal('DESIGN_CAPTURE_LOGIN_FAILED');
+  return loginRoute(new URL(page.url())) === start ? undefined : start;
 }
 
 /**
- * O host faz o login e grava o storageState em 0600.
+ * O host grava o storageState em arquivo privado e, para a imagem, concede leitura ao UID 65532.
  * Um alvo `.local` entra pela imagem, na rede de homologação: o host não resolve esse nome.
  * A senha não entra no arquivo nem na linha de comando. O chamador apaga o diretório no fim.
  */
@@ -287,12 +288,14 @@ export async function writeDesignLoginState(targetUrl: string, login: DesignLogi
     const sessionStorage = await page.evaluate(() => Object.entries(window.sessionStorage));
     const body = JSON.stringify({
       ...await context.storageState() as object,
-      designLogin: {path: loginPath, passwordSelector: login.passwordSelector, submitSelector: login.submitSelector, sessionStorage},
+      designLogin: {path: loginPath, sessionStorage},
     });
-    if (body.includes(login.password)) throw new Refusal('DESIGN_PASSWORD_LEAK');
+    if (bodyLeaksPassword(body, login.username, login.password)) throw new Refusal('DESIGN_PASSWORD_LEAK');
     const path = join(directory, 'state.json');
     await writeFile(path, body, {mode: 0o600});
-    await chmod(path, 0o600);
+    if (pinnedImage !== undefined && await commandCode('setfacl', ['-m', 'u:65532:r', path]) !== 0) {
+      throw new Error('DESIGN_LOGIN_IMAGE');
+    }
     return path;
   } catch (error) {
     await removeDesignScratch(directory);
@@ -389,13 +392,11 @@ export async function openDesignBrowser(targetUrl: string): Promise<{driver: Des
     const guard = await installDesignBrowserGuard(context, page, targetUrl);
     let closed = false;
     let loginPath: string | undefined;
-    let status: number | undefined;
-    const visible = async (selector: string) => {
-      for (const field of await page.locator(selector).all()) {
-        if (await field.isVisible()) return true;
-      }
-      return false;
-    };
+    let rejected = false;
+    page.on('response', response => {
+      const request = response.request();
+      if (response.status() === 401 && request.isNavigationRequest() && request.frame() === page.mainFrame()) rejected = true;
+    });
     const driver: DesignCaptureDriver = {
       async setViewport(width, height) {
         await page.setViewportSize({width, height});
@@ -404,7 +405,13 @@ export async function openDesignBrowser(targetUrl: string): Promise<{driver: Des
         await page.emulateMedia({colorScheme: theme === 'escuro' ? 'dark' : 'light'});
       },
       async goto(url) {
-        status = (await guard.goto(url))?.status();
+        rejected = false;
+        try {
+          await guard.goto(url);
+        } catch (error) {
+          if (rejected) throw new Refusal('DESIGN_CAPTURE_LOGIN_FAILED');
+          throw error;
+        }
         await waitForPaint(page);
       },
       async screenshot() {
@@ -423,11 +430,9 @@ export async function openDesignBrowser(targetUrl: string): Promise<{driver: Des
       async submitLogin(login) {
         loginPath = await submitDesignLogin(page, guard, login);
       },
-      async verifyAuthenticated(url, login) {
+      async verifyAuthenticated(url) {
         assertDesignDestination(url, page.url());
-        const path = pathOf(page.url());
-        if (status === 401 || path === loginPath || await visible('input[autocomplete="one-time-code"]')
-          || (await visible(login.passwordSelector) && await visible(login.submitSelector))) {
+        if (rejected || loginRoute(new URL(page.url())) === loginPath || await page.evaluate(loginFormVisible)) {
           throw new Refusal('DESIGN_CAPTURE_LOGIN_FAILED');
         }
       },

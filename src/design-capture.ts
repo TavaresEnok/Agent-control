@@ -200,6 +200,7 @@ export async function captureScreens(
     }
     const body = await driver.content();
     if (!isHtmlScreen(body)) {
+      if (login !== undefined) await driver.verifyAuthenticated?.(prepared.url, login, allowNavigation);
       skipped.push({
         screenId: plan.screenId,
         route: plan.route,

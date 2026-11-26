@@ -12,7 +12,29 @@ export function cookieChanged(before, cookies) {
 }
 
 export function samePage(a, b) {
-  return a.origin === b.origin && a.pathname.replace(/\/+$/u, '') === b.pathname.replace(/\/+$/u, '');
+  return a.origin === b.origin && loginRoute(a) === loginRoute(b);
+}
+
+export function loginRoute(url) {
+  const path = url.pathname.replace(/\/+$/u, '') || '/';
+  const fragment = /^#!?\//u.test(url.hash) ? url.hash.split('?')[0].replace(/\/+$/u, '') : '';
+  return path + fragment;
+}
+
+/** Executado no documento por Playwright e Puppeteer. */
+export function loginFormVisible() {
+  const visible = field => field.getClientRects().length > 0 && getComputedStyle(field).visibility === 'visible';
+  if ([...document.querySelectorAll('input[autocomplete="one-time-code"]')].some(visible)) return true;
+  const passwords = [...document.querySelectorAll('input[type="password"]')].filter(visible);
+  return passwords.some(password => {
+    if (password.autocomplete === 'new-password') return false;
+    const form = password.form;
+    const fields = form ? [...form.elements] : [...document.querySelectorAll('input')];
+    const inputs = fields.filter(field => field instanceof HTMLInputElement && visible(field));
+    if (inputs.filter(field => field.type === 'password').length > 1) return false;
+    return inputs.some(field => ['username', 'email'].includes(field.autocomplete)
+      || (!field.readOnly && ['text', 'email', 'tel'].includes(field.type)));
+  });
 }
 
 /**

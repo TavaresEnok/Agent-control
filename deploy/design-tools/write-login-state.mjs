@@ -2,7 +2,7 @@
 import {chmodSync, readdirSync, readFileSync, statSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {prepareTrust} from './trust.mjs';
-import {bodyLeaksPassword, cookieChanged, cookieMap, loginOpened, samePage} from './login-decision.mjs';
+import {bodyLeaksPassword, cookieChanged, cookieMap, loginOpened, loginRoute, samePage} from './login-decision.mjs';
 
 function findChrome() {
   let entries;
@@ -83,9 +83,8 @@ const browser = await playwright.chromium.launch({
 try {
   const context = await browser.newContext({serviceWorkers: 'block'});
   const page = await context.newPage();
-  const start = new URL(login.url);
   // A página de login pedida, no mesmo host; sem caminho, a raiz.
-  await page.goto(`${origin}${start.pathname}${start.search}`, {waitUntil: 'domcontentloaded', timeout: 30000});
+  await page.goto(login.url, {waitUntil: 'domcontentloaded', timeout: 30000});
   if (new URL(page.url()).origin !== origin) process.exit(1);
   await page.fill(login.usernameSelector, login.username);
   await page.fill(login.passwordSelector, login.password);
@@ -128,9 +127,7 @@ try {
   const state = await context.storageState();
   const sessionStorage = await page.evaluate(() => Object.entries(window.sessionStorage));
   const body = JSON.stringify({...state, designLogin: {
-    ...(samePage(new URL(page.url()), loginPage) ? {} : {path: loginPage.pathname.replace(/\/+$/u, '') || '/'}),
-    passwordSelector: login.passwordSelector,
-    submitSelector: login.submitSelector,
+    ...(samePage(new URL(page.url()), loginPage) ? {} : {path: loginRoute(loginPage)}),
     sessionStorage,
   }});
   if (bodyLeaksPassword(body, login.username, login.password)) process.exit(2);
