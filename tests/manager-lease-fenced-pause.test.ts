@@ -248,3 +248,25 @@ test('four fenced transactions in a row ahead of the heartbeat fit the ceiling s
   assert.ok(stale(capped.heartbeat),'the heartbeat behind the queue finds the lease expired');
  }finally{await db.close();await isolated.close();}
 });
+
+// Fourth review (low): the ceiling is written twice, in fencedExtensionCeilingSeconds and in the commit's SQL. The database
+// must apply exactly what the function says, for more than one evaluation_limit (the floor and above it).
+test('the ceiling applied by the database equals fencedExtensionCeilingSeconds for several evaluation limits',async()=>{
+ const {fencedExtensionCeilingSeconds}=await import('../src/ledger.ts');
+ const {Capacity}=await import('../src/capacity.ts');
+ const {db,isolated,principal,context}=await setup('lease_ceiling_eq');
+ try{
+  await db.pool.query('INSERT INTO ac_control_admins VALUES($1) ON CONFLICT DO NOTHING',['synthetic-capacity-administrator']);
+  await new Capacity(db).configure('synthetic-capacity-administrator',{programmingLimit:8,evaluationLimit:1});
+  const authority=await db.acquire(principal,context,randomUUID(),'personal-verify',60);
+  for(const limit of [1,4,5,8,12]){
+   await db.pool.query('UPDATE ac_capacity_config SET evaluation_limit=$1 WHERE id=1',[limit]);
+   const ceiling=fencedExtensionCeilingSeconds(limit);
+   // 0.05 s under the function's ceiling; a 0.3 s pause then stops exactly at the ceiling the database applies.
+   await db.pool.query('UPDATE ac_managers SET extended_seconds=$2,heartbeat_at=clock_timestamp() WHERE context_id=$1',[context,ceiling-0.05]);
+   await db.tx(async c=>{await db.fence(c,authority,true);await sleep(300);});
+   const applied=Number((await db.pool.query('SELECT extended_seconds FROM ac_managers WHERE context_id=$1',[context])).rows[0].extended_seconds);
+   assert.ok(Math.abs(applied-ceiling)<1e-6,`evaluation_limit ${limit}: database ${applied}, function ${ceiling}`);
+  }
+ }finally{await db.close();await isolated.close();}
+});
