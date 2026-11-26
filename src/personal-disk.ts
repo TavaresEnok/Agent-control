@@ -62,8 +62,19 @@ async function dockerStorageUsedPercent(): Promise<number | undefined> {
   }
 }
 
+/** A fixed reading a test injects in place of the host disk; undefined (always, in production) means the real statfs. */
+let testMeasure: ((paths: readonly string[]) => Promise<number>) | undefined;
+/** Tests only: every disk reading of the product (launch gate, verify-db pressure, watch) returns `measure` until the
+ * returned function restores the real reading. The product never calls it, so the 95% guard keeps reading the real disk. */
+export function useDiskMeasureForTests(measure: (paths: readonly string[]) => Promise<number>): () => void {
+  const previous = testMeasure;
+  testMeasure = measure;
+  return () => { testMeasure = previous; };
+}
+
 /** Highest use among the volumes. A path that cannot be measured makes the whole figure unavailable. */
 export async function diskUsedPercent(paths: string | readonly string[]): Promise<number> {
+  if (testMeasure) return testMeasure(typeof paths === 'string' ? [paths] : paths);
   const list = typeof paths === 'string' ? [paths] : paths;
   const measured = (await Promise.all(list.map(path => path === DOCKER_STORAGE_VOLUME ? dockerStorageUsedPercent() : volumeUsedPercent(path)))).filter((used): used is number => used !== undefined);
   if (measured.length === 0) throw new Refusal('PERSONAL_DISK_UNAVAILABLE', 503);

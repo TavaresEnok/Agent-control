@@ -4,7 +4,8 @@ import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {test} from 'node:test';
 import {Ledger} from '../src/ledger.ts';
-import {assertDiskSpaceForLaunch, diskUsedPercent, installationVolumes, usedDiskPercent} from '../src/personal-disk.ts';
+import {assertDiskSpaceForLaunch, diskUsedPercent, installationVolumes, useDiskMeasureForTests, usedDiskPercent} from '../src/personal-disk.ts';
+import {statfs} from 'node:fs/promises';
 import {diskNotice} from '../src/personal-health.ts';
 
 test('limites do volume consideram os blocos reservados e permitem retomar assim que há espaço', async () => {
@@ -92,4 +93,26 @@ test('o armazenamento do Docker entra na medição quando existe e é ignorado q
     near(await diskUsedPercent([root, DOCKER_STORAGE_VOLUME]), plain, 'só o volume comum conta');
     await assert.rejects(diskUsedPercent([join(root, 'arquivo', 'filho'), DOCKER_STORAGE_VOLUME]), {code: 'PERSONAL_DISK_UNAVAILABLE'});
   } finally { useDockerStorageProbeForTests(); await rm(root, {recursive: true, force: true}); }
+});
+
+// Tests that are not about the disk inject a fixed reading (tests/fixtures/fixed-disk.ts) so a server disk near 95% never
+// refuses their flows. The injection must reach every reading the gates use, and the real reading must come back after it:
+// production never injects, so the 95% guard keeps reading the host disk there.
+test('a leitura injetada nos testes vale para os portões e, restaurada, volta a leitura real do disco', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'personal-disk-hook-'));
+  try {
+    const seen: (readonly string[])[] = [];
+    const restore = useDiskMeasureForTests(async paths => { seen.push(paths); return 96; });
+    try {
+      assert.equal(await diskUsedPercent(root), 96);
+      // The default measure of the launch gate is the injected one: 96% refuses, as the real guard would.
+      await assert.rejects(assertDiskSpaceForLaunch([root]), {code: 'PERSONAL_DISK_FULL'});
+      assert.deepEqual(seen.at(-1), [root]);
+    } finally { restore(); }
+    const nested = useDiskMeasureForTests(async () => 50);
+    try { await assertDiskSpaceForLaunch([root]); } finally { nested(); }
+    // Restored: the real statfs reading of the volume again.
+    const real = usedDiskPercent(await statfs(root));
+    assert.ok(Math.abs(await diskUsedPercent(root) - real) < 0.5, 'real reading after restore');
+  } finally { await rm(root, {recursive: true, force: true}); }
 });
