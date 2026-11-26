@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {Refusal} from '../src/contracts.ts';
-import {designCliFailureText} from '../src/personal-design-cli.ts';
+import {designCliFailureText, designExamStatus} from '../src/personal-design-cli.ts';
 
 const leaked = 'secret-token-xyz /home/app/private';
 const redacted = 'O exame de design falhou.';
@@ -60,4 +60,11 @@ test('DESIGN_CREATE_PROMPT_TOO_LARGE explica o limite de 100000 caracteres e ori
   assert.equal(text.includes('secret-token-xyz'), false);
   assert.equal(text.includes('/home/app/private'), false);
   assert.equal(designCliFailureText(new Error('DESIGN_CREATE_PROMPT_TOO_LARGE')), text);
+});
+
+test('uma rota que perde a sessão mantém o relatório e reprova a execução do design', () => {
+  assert.deepEqual(designExamStatus({captureLoginFailed: true}), {
+    code: 1,
+    lines: ['Uma ou mais rotas falharam na captura autenticada. Consulte o relatório de design.'],
+  });
 });

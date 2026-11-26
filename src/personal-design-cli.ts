@@ -41,6 +41,7 @@ const messages: Record<string, string> = {
   DESIGN_TARGET_ESCAPE: 'A URL aponta para outro destino.',
   DESIGN_TARGET_UNREACHABLE: 'O contêiner não alcança o localhost do host. Use --servir <pasta>.',
   DESIGN_SERVE_INVALID: 'A pasta de --servir tem que ser um diretório.',
+  DESIGN_CAPTURE_LOGIN_FAILED: 'A autenticação da captura de design falhou.',
   DESIGN_LOGIN_MODE: 'O arquivo de login tem que estar no modo 0600.',
   DESIGN_LOGIN_INVALID: 'O arquivo de login não tem os campos esperados.',
   DESIGN_COMMIT_INVALID: 'Não foi possível ler o commit do repositório.',
@@ -90,6 +91,7 @@ export function designCliFailureText(error: unknown): string {
 /** The report is already on disk. A stale login or an incomplete visual exam still exits non-zero. */
 export function designExamStatus(result: {
   loginStale?: boolean;
+  captureLoginFailed?: boolean;
   visualUnjudged?: boolean;
   visualRequested?: number;
   visualJudged?: number;
@@ -97,6 +99,7 @@ export function designExamStatus(result: {
 }): {code: number; lines: string[]} {
   const lines: string[] = [];
   if (result.loginStale) lines.push(EXAM_LOGIN_STALE_TEXT);
+  if (result.captureLoginFailed) lines.push('Uma ou mais rotas falharam na captura autenticada. Consulte o relatório de design.');
   if (result.visualUnjudged) {
     if (result.visualRequested === 0) {
       lines.push(messages.DESIGN_VISUAL_NO_SCREENS!);

@@ -18,6 +18,8 @@ type DesignPage = {
   content(): Promise<string>;
   fill(selector: string, value: string): Promise<void>;
   click(selector: string): Promise<void>;
+  locator(selector: string): {first(): {isVisible(): Promise<boolean>}; waitFor(options: {state: 'hidden' | 'visible'; timeout: number}): Promise<void>};
+  evaluate<T>(expression: () => T): Promise<T>;
   waitForFunction(expression: () => boolean, arg: undefined, options: {timeout: number}): Promise<unknown>;
 };
 
@@ -239,6 +241,21 @@ async function waitForPaint(page: DesignPage): Promise<void> {
   ).catch(() => undefined /* paint wait is best effort; the capture checks judge the page */);
 }
 
+function pathOf(url: string): string {
+  return new URL(url).pathname.replace(/\/+$/u, '') || '/';
+}
+
+async function submitDesignLogin(page: DesignPage, guard: DesignBrowserGuard, login: DesignLogin): Promise<string | undefined> {
+  const start = pathOf(page.url());
+  await page.click(login.submitSelector);
+  await page.locator(login.passwordSelector).waitFor({state: 'hidden', timeout: 15000});
+  if (login.successSelector !== undefined) {
+    await page.locator(login.successSelector).waitFor({state: 'visible', timeout: 15000});
+  }
+  guard.afterLogin();
+  return pathOf(page.url()) === start ? undefined : start;
+}
+
 /**
  * O host faz o login e grava o storageState em 0600.
  * Um alvo `.local` entra pela imagem, na rede de homologação: o host não resolve esse nome.
@@ -260,12 +277,15 @@ export async function writeDesignLoginState(targetUrl: string, login: DesignLogi
     const context = await browser.newContext(designBrowserContextOptions);
     const page = await context.newPage();
     const guard = await installDesignBrowserGuard(context, page, targetUrl);
-    await guard.goto(assertDesignTarget(targetUrl).origin);
+    await guard.goto(targetUrl);
     await guard.fill(login.usernameSelector, login.username);
     await guard.fill(login.passwordSelector, login.password);
-    await page.click(login.submitSelector);
-    guard.afterLogin();
-    const body = JSON.stringify(await context.storageState());
+    const loginPath = await submitDesignLogin(page, guard, login);
+    const sessionStorage = await page.evaluate(() => Object.entries(window.sessionStorage));
+    const body = JSON.stringify({
+      ...await context.storageState() as object,
+      designLogin: {path: loginPath, passwordSelector: login.passwordSelector, submitSelector: login.submitSelector, sessionStorage},
+    });
     if (body.includes(login.password)) throw new Refusal('DESIGN_PASSWORD_LEAK');
     const path = join(directory, 'state.json');
     await writeFile(path, body, {mode: 0o600});
@@ -365,6 +385,7 @@ export async function openDesignBrowser(targetUrl: string): Promise<{driver: Des
     const page = await context.newPage();
     const guard = await installDesignBrowserGuard(context, page, targetUrl);
     let closed = false;
+    let loginPath: string | undefined;
     const driver: DesignCaptureDriver = {
       async setViewport(width, height) {
         await page.setViewportSize({width, height});
@@ -387,13 +408,20 @@ export async function openDesignBrowser(targetUrl: string): Promise<{driver: Des
       },
       async click(selector) {
         await page.click(selector);
-        await page.waitForFunction(
-          () => document.querySelector('input[name="password"]') === null,
-          undefined,
-          {timeout: 15000},
-        ).catch(() => undefined /* a login form that stays is caught by the next capture check */);
-        // Login can navigate while the password field disappears.
         guard.afterLogin();
+      },
+      async submitLogin(login) {
+        loginPath = await submitDesignLogin(page, guard, login);
+      },
+      async verifyAuthenticated(url, login, allowNavigation) {
+        guard.afterLogin();
+        const path = pathOf(page.url());
+        if (path === loginPath || (!allowNavigation && path !== pathOf(url))
+          || await page.locator('input[autocomplete="one-time-code"]').first().isVisible()
+          || (await page.locator(login.passwordSelector).first().isVisible()
+            && await page.locator(login.submitSelector).first().isVisible())) {
+          throw new Refusal('DESIGN_CAPTURE_LOGIN_FAILED');
+        }
       },
     };
     return {

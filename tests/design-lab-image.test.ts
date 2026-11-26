@@ -169,7 +169,8 @@ test('a imagem real encontra os defeitos plantados do laboratório', {skip: !ena
       || file.startsWith('/painel ') || file.startsWith('/item/42 ');
     const onCorrect = parsed.findings.filter(item => (item.tool === 'régua' || item.tool === 'teclado') && correct(item.file ?? ''));
     assert.deepEqual(onCorrect.map(item => `${item.tool} ${item.rule} ${item.file} ${item.snippet}`), []);
-    assert.match(readme, /redirecionou para \/entrar/);
+    assert.match(readme, /sessão não confirmada na rota.*\/lab\/privado/);
+    assert.equal(result.captureLoginFailed, true);
     assert.match(readme, /indisponível \(tela de erro do servidor de desenvolvimento\)/);
     assert.match(coverage, /\| régua \|/);
     assert.match(coverage, /\| teclado \|/);

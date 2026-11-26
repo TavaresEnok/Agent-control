@@ -135,6 +135,7 @@ function readBody(req) {
 function sendLoggedHome(res) {
   try {
     const html = readFileSync(join(root, 'public/index.html'), 'utf8')
+      .replace(/<form id="login"[\s\S]*?<\/form>/, '')
       .replace('</body>', '<h1 id="conta">Conta de ada aberta</h1></body>');
     res.writeHead(200, {'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store'});
     res.end(html);

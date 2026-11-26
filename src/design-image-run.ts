@@ -79,6 +79,7 @@ export type DesignImageExecution = {
   notes: string[];
   document: unknown;
   declaredFindings: DesignRawFinding[];
+  captureLoginFailed: boolean;
   /** Régua da página renderizada. Entra pelo collect, com a rota trocada pelo arquivo. */
   render: DesignRenderCell[];
   /** Caminho real do Tab, uma rota por item. */
@@ -191,6 +192,7 @@ export function interpretDesignImageDocument(document: unknown): Omit<DesignImag
     document,
     shotMeta,
     declaredFindings: declared,
+    captureLoginFailed: listOf(root.unavailable).some(item => item.status === 401),
     render: parseRenderCells(reports.render),
     keyboard: parseFocusWalks(reports.keyboard),
     computedBlocks,
@@ -395,7 +397,7 @@ export async function executeDesignImage(input: {
     const parsed = await readContainerJson(join(output, 'achados-brutos.json'));
     if (parsed === undefined) {
       // Saída 3: a cadeia da homologação não fechou na CA de --ca.
-      const code = spawned.code === null ? 'DESIGN_IMAGE_TIMEOUT' : spawned.code === 3 ? 'DESIGN_TRUST_CA_FAILED' : 'DESIGN_IMAGE_FAILED';
+      const code = spawned.code === null ? 'DESIGN_IMAGE_TIMEOUT' : spawned.code === 3 ? 'DESIGN_TRUST_CA_FAILED' : spawned.code === 4 ? 'DESIGN_CAPTURE_LOGIN_FAILED' : 'DESIGN_IMAGE_FAILED';
       const note = spawned.stderr.trim().slice(0, 180);
       return {
         ok: false,
@@ -429,6 +431,7 @@ export async function executeDesignImage(input: {
       notes,
       document: interpreted.document,
       declaredFindings: interpreted.declaredFindings,
+      captureLoginFailed: interpreted.captureLoginFailed,
       render: interpreted.render,
       keyboard: interpreted.keyboard,
       computedBlocks: interpreted.computedBlocks,
@@ -479,6 +482,7 @@ function emptyExecution(code: string): Omit<DesignImageExecution, 'ok' | 'code' 
     notes: [],
     document: null,
     declaredFindings: [],
+    captureLoginFailed: false,
     render: [],
     keyboard: [],
     computedBlocks: [],

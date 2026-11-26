@@ -64,6 +64,8 @@ export type DesignCaptureDriver = {
   content(): Promise<string>;
   fill?(selector: string, value: string): Promise<void>;
   click?(selector: string): Promise<void>;
+  submitLogin?(login: DesignLogin): Promise<void>;
+  verifyAuthenticated?(url: string, login: DesignLogin, allowNavigation: boolean): Promise<void>;
   /** Opcional. Sem este método, `esperar` não vira captura. */
   waitForSelector?(selector: string): Promise<void>;
 };
@@ -99,6 +101,7 @@ export type DesignCaptureMetadata = {
 
 export type DesignCaptureOptions = {
   login?: DesignLogin;
+  loginUrl?: string;
 };
 
 /**
@@ -159,10 +162,15 @@ export async function captureScreens(
   }
   const root = resolve(outputDir);
   if (login !== undefined && driver.fill !== undefined && driver.click !== undefined) {
-    await driver.goto(baseUrl);
-    await driver.fill(login.usernameSelector, login.username);
-    await driver.fill(login.passwordSelector, login.password);
-    await driver.click(login.submitSelector);
+    try {
+      await driver.goto(options?.loginUrl ?? baseUrl);
+      await driver.fill(login.usernameSelector, login.username);
+      await driver.fill(login.passwordSelector, login.password);
+      if (driver.submitLogin === undefined) await driver.click(login.submitSelector);
+      else await driver.submitLogin(login);
+    } catch {
+      throw new Refusal('DESIGN_CAPTURE_LOGIN_FAILED');
+    }
   }
   const captures: DesignCaptureRecord[] = [];
   const skipped: DesignCaptureSkip[] = [];
@@ -183,7 +191,10 @@ export async function captureScreens(
     await driver.setViewport(plan.viewport, DESIGN_CAPTURE_HEIGHT[plan.viewport]);
     await driver.emulateMedia(plan.theme);
     await driver.goto(prepared.url);
+    if (login !== undefined) await driver.verifyAuthenticated?.(prepared.url, login, false);
     await runSteps(driver, prepared.steps);
+    const allowNavigation = (prepared.steps?.length ?? 0) > 0;
+    if (login !== undefined && allowNavigation) await driver.verifyAuthenticated?.(prepared.url, login, true);
     const body = await driver.content();
     if (!isHtmlScreen(body)) {
       skipped.push({
@@ -197,6 +208,7 @@ export async function captureScreens(
       continue;
     }
     const bytes = await driver.screenshot(true);
+    if (login !== undefined) await driver.verifyAuthenticated?.(prepared.url, login, allowNavigation);
     captures.push({
       screenId: plan.screenId,
       route: plan.route,
