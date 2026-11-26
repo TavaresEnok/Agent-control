@@ -113,6 +113,7 @@
   "managed-retirement-restart.test.ts",
   "manager-discipline.test.ts",
   "manager-lifecycle.test.ts",
+  "manager-lease-fenced-pause.test.ts",
   "managers.test.ts",
   "module-arquitetura.test.ts",
   "module-banco-exame.lab.test.ts",
