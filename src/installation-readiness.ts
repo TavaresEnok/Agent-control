@@ -6,7 +6,7 @@ import {join,resolve,sep} from 'node:path';
 import type {Ledger} from './ledger.ts';
 import type {Installation} from './installation.ts';
 import {projectRepositoryIdentity} from './project-repository.ts';
-import {digest} from './contracts.ts';
+import {digest,Refusal} from './contracts.ts';
 import pg from 'pg';
 
 type Status='ok'|'blocked'|'unknown';
@@ -62,6 +62,29 @@ async function migrationDigests(){
   values.set(version,digest(await readFile(new URL(name,dir),'utf8')));}
  return values;
 }
+type AppliedMigration={version:number;digest:string};
+const appliedMigrationsQuery='SELECT version,digest FROM ac_schema_migrations ORDER BY version';
+async function migrationRefusal(loadApplied:()=>Promise<{rows:AppliedMigration[]}>){
+ const expected=await timed(migrationDigests());
+ let applied:AppliedMigration[];
+ try{applied=(await loadApplied()).rows;}
+ catch(error){
+  if((error as {code?:string}).code==='42P01')return 'MIGRATIONS_PENDING';
+  throw error;
+ }
+ const recorded=new Map(applied.map(row=>[Number(row.version),row.digest]));
+ for(const [version,checksum] of expected){
+  if(recorded.has(version)&&recorded.get(version)!==checksum)return 'MIGRATION_CHANGED';
+ }
+ if([...expected.keys()].some(version=>!recorded.has(version)))return 'MIGRATIONS_PENDING';
+ if(recorded.size!==expected.size)return 'MIGRATIONS_AHEAD';
+}
+export async function assertInstallationMigrations(ledger:Ledger){
+ const code=await migrationRefusal(()=>ledger.pool.query<AppliedMigration>(appliedMigrationsQuery));
+ if(code)throw new Refusal(code,503);
+}
+export const migrationsPendingText='Há migrações pendentes. Faça um backup com npm run personal:backup -- <instalação.json> /caminho/vazio e depois execute node --import tsx src/server-main.ts initialize <instalação.json>.';
+
 function filesystemStatus(fn:()=>Promise<boolean>):Promise<Status>{return timed(fn()).then(ok=>ok?'ok':'blocked',error=>{
  const code=(error as NodeJS.ErrnoException).code;
  if((error as Error).message==='READINESS_TIMEOUT'||code==='EACCES'||code==='EPERM')return 'unknown';
@@ -80,17 +103,15 @@ export async function inspectInstallationReadiness(ledger:Ledger,config:Installa
  let client:DatabaseClient|undefined;
  try{
   if(ledger.pool.options.connectionString!==config.databaseUrl)throw Error('READINESS_DATABASE_MISMATCH');
-  client=options?.clientFactory?.(config.databaseUrl)??new pg.Client({connectionString:config.databaseUrl,connectionTimeoutMillis:timeoutMs,query_timeout:timeoutMs,statement_timeout:timeoutMs});
+  const connected=client=options?.clientFactory?.(config.databaseUrl)??new pg.Client({connectionString:config.databaseUrl,connectionTimeoutMillis:timeoutMs,query_timeout:timeoutMs,statement_timeout:timeoutMs});
   const databaseCall=async<T>(promise:Promise<T>)=>{
    try{return await timed(promise);}catch(error){if((error as Error).message==='READINESS_TIMEOUT')client?.connection.stream.destroy();throw error;}
   };
   await databaseCall(client.connect());
   await databaseCall(client.query('SELECT 1'));database='ok';
   try{
-   const expected=await timed(migrationDigests());
-   const result=await databaseCall(client.query('SELECT version,digest FROM ac_schema_migrations ORDER BY version'));
-   migrations=result.rows.length===expected.size&&result.rows.every(row=>expected.get(Number(row.version))===row.digest)?'ok':'blocked';
-  }catch(error){migrations=(error as {code?:string}).code==='42P01'?'blocked':'unknown';}
+   migrations=await migrationRefusal(()=>databaseCall(connected.query<AppliedMigration>(appliedMigrationsQuery)))?'blocked':'ok';
+  }catch{migrations='unknown';}
   try{
    const result=await databaseCall(client.query({text:`SELECT count(*)::int AS matched FROM unnest($1::uuid[],$2::text[],$3::text[]) AS e(id,repo,owner)
     JOIN ac_projects p ON p.id=e.id JOIN ac_project_repositories r ON r.project_id=p.id AND r.repo=e.repo

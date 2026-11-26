@@ -5,6 +5,7 @@ import {finishExamIntent,withExamSignals} from './exam-intent.ts';
 import {EXAM_LOGIN_BUSY_TEXT,EXAM_LOGIN_RESTORE_FAILED_TEXT,EXAM_LOGIN_STALE_TEXT} from './exam-login.ts';
 import {clearExamContextCapacityWaits} from './exam-provider.ts';
 import {loadInstallation} from './installation.ts';
+import {migrationsPendingText} from './installation-readiness.ts';
 import {beginPersonalVerification,resolvePersonalVerification,type VerifyJobOutcome} from './verify-command.ts';
 import {removeSecurityReport} from './verify-report.ts';
 import {VERIFY_RECHECK_NEW_EXAM_GUIDANCE,VERIFY_RECHECK_NEW_EXAM_REQUIRED} from './verify-remediate.ts';
@@ -44,6 +45,7 @@ const messages:Record<string,string>={
 
 export function verifyCliFailureText(error:unknown):string{
  const code=error instanceof Refusal?error.code:error instanceof Error?error.message:'';
+ if(code==='MIGRATIONS_PENDING')return `${code}. ${migrationsPendingText}`;
  return messages[code]??(code||'A verificação falhou.');
 }
 

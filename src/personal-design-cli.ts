@@ -20,6 +20,7 @@ import {readReferenceFiles} from './design-reference-files.ts';
 import {approveDesignBaseline} from './design-regression.ts';
 import {readDesignCaptureFiles} from './design-report.ts';
 import {loadInstallation} from './installation.ts';
+import {assertInstallationMigrations,migrationsPendingText} from './installation-readiness.ts';
 import {Ledger} from './ledger.ts';
 import {containFailure} from './failure-log.ts';
 import {assertInternalDesignNetwork, readDesignTrustCa, stageDesignTrustCa} from './design-trust.ts';
@@ -79,6 +80,7 @@ export function designCliFailureText(error: unknown): string {
   if (error instanceof UnstartedExamRetirementPending) return `A retirada do job ${error.jobId} ficou pendente. Verifique o Docker e repita: npm run personal:maintenance -- <instalação.json> --abandonar-design ${error.jobId}`;
   if (error instanceof DesignCreateModelFailure) return `O modelo não devolveu as telas. Causa: ${error.causeCode}.`;
   const code = error instanceof Refusal ? error.code : error instanceof Error ? error.message : '';
+  if (code === 'MIGRATIONS_PENDING') return `${code}. ${migrationsPendingText}`;
   if (Object.hasOwn(messages, code)) return messages[code]!;
   // Um código de recusa só tem letras maiúsculas e sublinhado: mostrá-lo não vaza caminho nem segredo e diz onde olhar.
   if (error instanceof Refusal && /^[A-Z][A-Z0-9_]{2,63}$/.test(code)) return `O exame de design falhou (código ${code}).`;
@@ -322,6 +324,7 @@ async function runPrepare(invocation: {installationPath: string; projectId: stri
   if (!project) throw new Refusal('NOT_FOUND', 404);
   const ledger = new Ledger(config.databaseUrl, config.installationAuthority?.token, undefined, installationVolumes(config));
   try {
+    await assertInstallationMigrations(ledger);
     const report = await prepareDesignSpecialist({
       ledger,
       owner: project.owner,

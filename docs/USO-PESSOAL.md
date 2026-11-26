@@ -437,7 +437,15 @@ O registro e a retenção de worktrees de trabalhadores, imagens candidatas de m
 
 Logs do gateway: `docker compose -f deploy/compose.personal.yml logs -f gateway`.
 
-Atualizar: `git pull` no servidor, `npm install`, suba o compose de novo. Não use `git push --force`.
+Para atualizar uma instalação em systemd, faça `git pull` no servidor e `npm install`. Execute os comandos na ordem abaixo e avance só quando o comando anterior passar.
+
+```sh
+npm run personal:backup -- <instalação.json> /caminho/vazio
+node --import tsx src/server-main.ts initialize <instalação.json>
+systemctl --user restart agent-control-gateway-<nome>
+```
+
+Em uma instalação em Compose, depois do backup, aplique as migrações com `docker compose -f deploy/compose.personal.yml run --rm gateway node --import tsx src/server-main.ts initialize /data/installation.json` para acessar o banco pela rede interna. Em seguida, suba o Compose de novo. Não use `git push --force`.
 
 ## Servidor SSH com usuário e senha
 

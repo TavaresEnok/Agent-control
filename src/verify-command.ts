@@ -9,6 +9,7 @@ import {Capacity} from './capacity.ts';
 import {Id, Refusal, type Authority} from './contracts.ts';
 import {examLoginBusyNote, examLoginStaleNote} from './exam-login.ts';
 import {loadInstallation, readPrivateFile, type Installation} from './installation.ts';
+import {assertInstallationMigrations} from './installation-readiness.ts';
 import {Ledger} from './ledger.ts';
 import {endRound, trackRoundTemp, type RoundScope} from './personal-artifact-hooks.ts';
 import {personalAccountRoot} from './personal-health.ts';
@@ -922,6 +923,7 @@ export async function resolvePersonalVerification(
   const ledger = new Ledger(config.databaseUrl, config.installationAuthority?.token, undefined, installationVolumes(config));
   let authority: Authority | undefined;
   try {
+    await assertInstallationMigrations(ledger);
     const commit = await readHead(project.repo);
     const principal = project.owner;
     const exam = await ledger.ensureExamContext(principal, project.id, 'verify');
