@@ -149,7 +149,7 @@ test('a origem da conta não muda e só o mount do exame é somente leitura', as
     await writeFile(join(source, '.codex', 'sessions', 'chat.json'), '{"big":true}\n');
     await mkdir(join(source, '.grok'), {mode: 0o700});
     await writeFile(join(source, '.grok', 'auth.json'), '{"token":"grok"}\n', {mode: 0o600});
-    await writeFile(join(source, '.grok', 'config.toml'), 'model = "grok-4.7"\n', {mode: 0o600});
+    await writeFile(join(source, '.grok', 'config.toml'), 'model = "grok-4.6"\n', {mode: 0o600});
     await mkdir(join(source, '.grok', 'sessions'), {mode: 0o700});
     await writeFile(join(source, '.grok', 'sessions', 'chat.json'), '{"big":true}\n');
     await writeFile(join(source, '.claude.json'), '{"user":"exam"}\n', {mode: 0o600});
@@ -186,7 +186,7 @@ test('a origem da conta não muda e só o mount do exame é somente leitura', as
     assert.equal(await readFile(join(copy, '.codex', 'auth.json'), 'utf8'), '{"token":"exam-login"}\n');
     assert.equal(await readFile(join(copy, '.codex', 'config.toml'), 'utf8'), 'model = "gpt-6.1-sol"\n');
     assert.equal(await readFile(join(copy, '.grok', 'auth.json'), 'utf8'), '{"token":"grok"}\n');
-    assert.equal(await readFile(join(copy, '.grok', 'config.toml'), 'utf8'), 'model = "grok-4.7"\n');
+    assert.equal(await readFile(join(copy, '.grok', 'config.toml'), 'utf8'), 'model = "grok-4.6"\n');
     assert.equal(await readFile(join(copy, '.claude.json'), 'utf8'), '{"user":"exam"}\n');
     for (const absent of [
       join(copy, 'cache', 'blob.bin'), join(copy, 'cache'), join(copy, 'auth.json'),
@@ -261,14 +261,14 @@ test('o argv do Codex e do Grok no exame não aponta config de projeto', () => {
   const savedExam = process.env.AC_VERIFY_EXAM;
   delete process.env.AC_VERIFY_EXAM;
   try {
-    const plain = grokProgrammerArgs('grok-4.7', 'high', 'examine the tree', 'specialist');
+    const plain = grokProgrammerArgs('grok-4.6', 'high', 'examine the tree', 'specialist');
     assert.equal(plain.includes('--always-approve'), true);
     process.env.AC_VERIFY_EXAM = '1';
-    const grok = grokProgrammerArgs('grok-4.7', 'high', 'examine the tree', 'specialist');
+    const grok = grokProgrammerArgs('grok-4.6', 'high', 'examine the tree', 'specialist');
     assert.equal(grok.some(arg => arg.includes('.grok') || arg.includes('GROK.md') || arg.includes('--config')), false);
     assert.equal(grok.includes('--always-approve'), false);
-    assert.deepEqual(grok, ['-p', grok[1], '--model', 'grok-4.7', '--reasoning-effort', 'high', '--output-format', 'plain', '--cwd', '/planning', '--no-plan']);
-    const programmer = grokProgrammerArgs('grok-4.7', 'high', 'implement the change', 'programmer');
+    assert.deepEqual(grok, ['-p', grok[1], '--model', 'grok-4.6', '--reasoning-effort', 'high', '--output-format', 'plain', '--cwd', '/planning', '--no-plan']);
+    const programmer = grokProgrammerArgs('grok-4.6', 'high', 'implement the change', 'programmer');
     assert.equal(programmer[programmer.length - 1], '--always-approve');
     assert.equal(programmer[programmer.indexOf('--cwd') + 1], '/work');
   } finally {

@@ -126,6 +126,9 @@ export function createModuleExamReservations(input: ReservationInput): Pick<Requ
     let hadRuntimeProvider = false;
     let hadAllowedIntersection = false;
     let onlyExaminerProvider = false;
+    // Distinct providers with allowed accounts that this reservation tried, and that the exam had taken out entirely.
+    let triedProvider = false;
+    let skippedProvider = false;
     for (const [provider, rawAccounts] of input.supportedSeats) {
       if (provider === avoid?.provider && rawAccounts.size && intersectAccounts(rawAccounts).size) onlyExaminerProvider = true;
       if (provider === avoid?.provider || !rawAccounts.size) continue;
@@ -133,6 +136,12 @@ export function createModuleExamReservations(input: ReservationInput): Pick<Requ
       const accounts = intersectAccounts(rawAccounts);
       if (!accounts.size) continue;
       hadAllowedIntersection = true;
+      // Seats the exam stopped using: the whole provider, or the accounts named.
+      const skipped = target?.skip?.filter(seat => seat.provider === provider) ?? [];
+      if (skipped.some(seat => !seat.accountId)) { skippedProvider = true; continue; }
+      for (const seat of skipped) accounts.delete(seat.accountId!);
+      if (!accounts.size) { skippedProvider = true; continue; }
+      triedProvider = true;
       lastProvider = provider;
       try {
         const seat = await reserveWithCapacityQueue({
@@ -169,6 +178,8 @@ export function createModuleExamReservations(input: ReservationInput): Pick<Requ
     // The project allows only the examiner's provider (one Claude account, say): there is no distinct provider to review.
     // That is a reviewer gap, not a missing account. The finding stays probable with the reason and the exam goes on;
     // PROJECT_ACCOUNTS_UNAVAILABLE here stopped the whole module at its first reviewed finding.
+    // Only the exam's own exclusions left nothing: the caller keeps the reason it took those seats out.
+    if (skippedProvider && !triedProvider) throw new Refusal('MODULE_EXAM_REVIEWER_SEATS_SKIPPED');
     if (allowedSet && !hadAllowedIntersection && onlyExaminerProvider) throw new Refusal('MODULE_EXAM_REVIEWER_UNAVAILABLE');
     if (allowedSet && (!hadAllowedIntersection || !hadRuntimeProvider)) {
       throw new Refusal('PROJECT_ACCOUNTS_UNAVAILABLE', 409);

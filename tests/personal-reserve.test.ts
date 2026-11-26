@@ -1,3 +1,6 @@
+// The host disk is not what this file proves: a fixed reading keeps a server disk near 95% from refusing these flows.
+import {useFixedDisk} from './fixtures/fixed-disk.ts';
+useFixedDisk();
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {mkdtemp,rm} from 'node:fs/promises';
@@ -21,7 +24,7 @@ test('reserve yield is quota exhaustion or a required login',()=>{
  assert.equal(reserveYieldReason(null),false);
  assert.equal(reserveAssumptionText('claude','manager','gpt-6.1-sol'),'Cota de claude esgotada: Gerente segue com gpt-6.1-sol.');
  assert.equal(reserveAssumptionText('grok','programmer','gpt-6.1-sol'),'Cota de grok esgotada: Programador segue com gpt-6.1-sol.');
- assert.equal(reserveAssumptionText('codex','reviewer','grok-4.7'),'Cota de codex esgotada: Revisor segue com grok-4.7.');
+ assert.equal(reserveAssumptionText('codex','reviewer','grok-4.6'),'Cota de codex esgotada: Revisor segue com grok-4.6.');
 });
 
 test('each programmer level keeps its own reserve chain',()=>{
@@ -39,12 +42,12 @@ const proved:PersonalCombo={
  name:'reserva-prova',
  roles:{
   manager:{provider:'claude',model:'claude-opus-5-5',effort:'high',count:1,reserve:{provider:'codex',model:'gpt-6.1-sol',effort:'high'}},
-  reviewer:{provider:'claude',model:'claude-opus-5-5',effort:'high',count:1,reserve:{provider:'grok',model:'grok-4.7',effort:'high'}},
+  reviewer:{provider:'claude',model:'claude-opus-5-5',effort:'high',count:1,reserve:{provider:'grok',model:'grok-4.6',effort:'high'}},
   programmer:{
-   standard:[{provider:'codex',model:'gpt-6.1-sol',effort:'high',count:3,reserve:{provider:'grok',model:'grok-4.7',effort:'high'}}],
-   basic:[{provider:'grok',model:'grok-4.7',effort:'high',count:1,reserve:{provider:'codex',model:'gpt-6.1-sol',effort:'high'}}],
+   standard:[{provider:'codex',model:'gpt-6.1-sol',effort:'high',count:3,reserve:{provider:'grok',model:'grok-4.6',effort:'high'}}],
+   basic:[{provider:'grok',model:'grok-4.6',effort:'high',count:1,reserve:{provider:'codex',model:'gpt-6.1-sol',effort:'high'}}],
   },
-  qa:{provider:'grok',model:'grok-4.7',effort:'high',count:1,reserve:{provider:'claude',model:'claude-sonnet-5-5',effort:'medium'}},
+  qa:{provider:'grok',model:'grok-4.6',effort:'high',count:1,reserve:{provider:'claude',model:'claude-sonnet-5-5',effort:'medium'}},
  },
 };
 
@@ -139,7 +142,7 @@ test('preferredProfileId, avoidProfiles e provider selecionam perfil específico
   await capacity.configure(principal,{programmingLimit:10,evaluationLimit:4});
   await capacity.registerModel(principal,{provider:'claude',model:'claude-opus-5-5',efforts:['medium'],roles:['specialist'],source:'synthetic://spec'});
   await capacity.registerModel(principal,{provider:'claude',model:'claude-sonnet-5-5',efforts:['medium'],roles:['specialist'],source:'synthetic://spec'});
-  await capacity.registerModel(principal,{provider:'grok',model:'grok-4.7',efforts:['medium'],roles:['specialist'],source:'synthetic://spec'});
+  await capacity.registerModel(principal,{provider:'grok',model:'grok-4.6',efforts:['medium'],roles:['specialist'],source:'synthetic://spec'});
   const claudeA=randomUUID(),grokA=randomUUID();
   await capacity.addAccount(principal,project,{id:claudeA,provider:'claude',label:'claude-a',resourceIdentity:`claude:${claudeA}`,mode:'synthetic',eligibility:'documented_supported',eligibilitySource:'synthetic://spec',maxConcurrent:4});
   await capacity.addAccount(principal,project,{id:grokA,provider:'grok',label:'grok-a',resourceIdentity:`grok:${grokA}`,mode:'synthetic',eligibility:'documented_supported',eligibilitySource:'synthetic://spec',maxConcurrent:4});
@@ -148,7 +151,7 @@ test('preferredProfileId, avoidProfiles e provider selecionam perfil específico
   const pOpus=randomUUID(),pSonnet=randomUUID(),pGrok=randomUUID();
   await capacity.addProfile(principal,project,{id:pOpus,accountId:claudeA,model:'claude-opus-5-5',effort:'medium',role:'specialist'});
   await capacity.addProfile(principal,project,{id:pSonnet,accountId:claudeA,model:'claude-sonnet-5-5',effort:'medium',role:'specialist'});
-  await capacity.addProfile(principal,project,{id:pGrok,accountId:grokA,model:'grok-4.7',effort:'medium',role:'specialist'});
+  await capacity.addProfile(principal,project,{id:pGrok,accountId:grokA,model:'grok-4.6',effort:'medium',role:'specialist'});
   const rev=await capacity.publish(principal,project,0,{
    schemaVersion:1,maxProgrammersPerContext:1,maxEvaluatorsPerContext:2,
    roles:{specialist:{regular:[pGrok,pOpus],emergency:[pSonnet]}},
@@ -378,7 +381,7 @@ test('reserveSpecialistExamSeat lê metadados na reserva (sem janela) e trata fa
   await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
   await capacity.configure(principal,{programmingLimit:10,evaluationLimit:4});
   await capacity.registerModel(principal,{provider:'claude',model:'claude-sonnet-5-5',efforts:['medium'],roles:['specialist'],source:'synthetic://leak'});
-  await capacity.registerModel(principal,{provider:'grok',model:'grok-4.7',efforts:['medium'],roles:['specialist'],source:'synthetic://leak'});
+  await capacity.registerModel(principal,{provider:'grok',model:'grok-4.6',efforts:['medium'],roles:['specialist'],source:'synthetic://leak'});
   const claudeId=randomUUID(),grokId=randomUUID();
   for(const [id,provider] of [[claudeId,'claude'],[grokId,'grok']] as const){
    await capacity.addAccount(principal,project,{id,provider,label:provider,resourceIdentity:`${provider}:${id}`,mode:'synthetic',eligibility:'documented_supported',eligibilitySource:'synthetic://leak',maxConcurrent:4});
@@ -387,7 +390,7 @@ test('reserveSpecialistExamSeat lê metadados na reserva (sem janela) e trata fa
   const pExaminer=randomUUID(),pReviewer=randomUUID(),pGrok=randomUUID();
   await capacity.addProfile(principal,project,{id:pExaminer,accountId:claudeId,model:'claude-sonnet-5-5',effort:'medium',role:'specialist'});
   await capacity.addProfile(principal,project,{id:pReviewer,accountId:claudeId,model:'claude-sonnet-5-5',effort:'medium',role:'specialist'});
-  await capacity.addProfile(principal,project,{id:pGrok,accountId:grokId,model:'grok-4.7',effort:'medium',role:'specialist'});
+  await capacity.addProfile(principal,project,{id:pGrok,accountId:grokId,model:'grok-4.6',effort:'medium',role:'specialist'});
   const rev=await capacity.publish(principal,project,0,{
    schemaVersion:1,maxProgrammersPerContext:1,maxEvaluatorsPerContext:2,
    roles:{specialist:{regular:[pExaminer],emergency:[pReviewer]}},

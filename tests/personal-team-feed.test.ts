@@ -26,8 +26,8 @@ test('each role reports who ran it and what it produced',async()=>{
  const base={provider:'claude',model:'claude-sonnet-5-5',effort:'medium',base:null};
  const review=await teamMessage({...base,id:reviewer,kind:'reviewer',state:'completed',receipt:{}},{executionHost:root,repo});
  assert.match(review!.text,/^Revisor \(claude · claude-sonnet-5-5 · medium\) rejeitou:\n• \[high\] falta teste/);
- const prog=await teamMessage({...base,provider:'grok',model:'grok-4.7',id:programmer,kind:'programmer',state:'completed',receipt:{payload:{artifact:null}}},{executionHost:root,repo});
- assert.match(prog!.text,/Programador \(grok · grok-4.7 · medium\) terminou\.\n«Adicionei a seção\.»/);
+ const prog=await teamMessage({...base,provider:'grok',model:'grok-4.6',id:programmer,kind:'programmer',state:'completed',receipt:{payload:{artifact:null}}},{executionHost:root,repo});
+ assert.match(prog!.text,/Programador \(grok · grok-4.6 · medium\) terminou\.\n«Adicionei a seção\.»/);
  const check=await teamMessage({id:qa,kind:'qa',state:'completed',provider:null,model:null,effort:null,base:null,receipt:{status:'passed'}},{executionHost:root,repo});
  assert.equal(check!.text,'QA passou: QA files checked: 3, failures: 0.');
  const running=await teamMessage({...base,id:programmer,kind:'programmer',state:'running',receipt:null},{executionHost:root,repo});
@@ -49,7 +49,7 @@ test('the programmer report diffs only the intent repository',async()=>{
  };
  try{
   const a=await prepare(repoA,'only-a.txt'),b=await prepare(repoB,'only-b.txt'),intent=randomUUID();
-  const job={id:randomUUID(),kind:'programmer' as const,state:'completed',provider:'grok',model:'grok-4.7',effort:'medium',base:null,intentId:intent,receipt:{payload:{artifact:{base:b.base,commit:b.commit}}}};
+  const job={id:randomUUID(),kind:'programmer' as const,state:'completed',provider:'grok',model:'grok-4.6',effort:'medium',base:null,intentId:intent,receipt:{payload:{artifact:{base:b.base,commit:b.commit}}}};
   const pool=(repo?:string)=>({query:async()=>({rows:repo?[{repo}]:[]})}) as never;
   const shown=await teamMessage(job,{executionHost:root,repo:repoA,pool:pool(repoB)});
   assert.match(shown!.text,/only-b\.txt/);
@@ -70,8 +70,8 @@ test('equipe and status ask for the team panel',()=>{
  const text=describeAppliedCombo({name:combo.name,revision:3,maxProgrammersPerContext:4,qaModel:true,manager:[],reviewer:[],programmerStandard:[],programmerBasic:[],qa:[],combo});
  assert.match(text,/Combo complexo em uso/);
  assert.match(text,/Gerente: 1 × claude · claude-opus-5-5 · high; reserva: codex · gpt-6.1-sol · high/);
- assert.match(text,/Programadores padrão: 3 × codex · gpt-6.1-sol · high; reserva: grok · grok-4.7 · high/);
- assert.match(text,/Programadores básicos: 1 × grok · grok-4.7 · high/);
+ assert.match(text,/Programadores padrão: 3 × codex · gpt-6.1-sol · high; reserva: grok · grok-4.6 · high/);
+ assert.match(text,/Programadores básicos: 1 × grok · grok-4.6 · high/);
  assert.match(text,/Programadores por contexto: 4/);
 });
 
@@ -81,12 +81,12 @@ test('equipe names the reserve stored on the project policy',async()=>{
  const known:Record<string,{provider:string;model:string;effort:string}>={
   [manager]:{provider:'claude',model:'claude-sonnet-5-5',effort:'high'},
   [managerReserve]:{provider:'codex',model:'gpt-6.1-sol',effort:'medium'},
-  [programmer]:{provider:'grok',model:'grok-4.7',effort:'medium'},
+  [programmer]:{provider:'grok',model:'grok-4.6',effort:'medium'},
   [programmerReserve]:{provider:'codex',model:'gpt-6.1-sol',effort:'medium'},
   [reviewer]:{provider:'codex',model:'gpt-6.1-sol',effort:'high'},
   [reviewerReserve]:{provider:'claude',model:'claude-sonnet-5-5',effort:'high'},
   [qa]:{provider:'claude',model:'claude-sonnet-5-5',effort:'medium'},
-  [qaReserve]:{provider:'grok',model:'grok-4.7',effort:'medium'},
+  [qaReserve]:{provider:'grok',model:'grok-4.6',effort:'medium'},
  };
  const snapshot={schemaVersion:1,maxProgrammersPerContext:3,maxEvaluatorsPerContext:2,combo:'intermediário',qaModel:true,roles:{
   manager:{regular:[manager],emergency:[managerReserve]},
@@ -102,9 +102,9 @@ test('equipe names the reserve stored on the project policy',async()=>{
  const text=await teamStatus(pool,randomUUID(),{executionHost:'/tmp/none'});
  assert.match(text,/Combo atual: intermediário/);
  assert.match(text,/• Gerente: claude · claude-sonnet-5-5 · high\n {2}reserva: codex · gpt-6.1-sol · medium/);
- assert.match(text,/• Programador: grok · grok-4.7 · medium\n {2}reserva: codex · gpt-6.1-sol · medium/);
+ assert.match(text,/• Programador: grok · grok-4.6 · medium\n {2}reserva: codex · gpt-6.1-sol · medium/);
  assert.match(text,/• Revisor: codex · gpt-6.1-sol · high\n {2}reserva: claude · claude-sonnet-5-5 · high/);
- assert.match(text,/• QA: claude · claude-sonnet-5-5 · medium\n {2}reserva: grok · grok-4.7 · medium/);
+ assert.match(text,/• QA: claude · claude-sonnet-5-5 · medium\n {2}reserva: grok · grok-4.6 · medium/);
  const fallback={query:async(sql:string)=>{
   if(sql.includes('ac_policy_revisions'))return {rows:[]};
   if(sql.includes('p.enabled'))return {rows:[{role:'manager',provider:'claude',model:'claude-sonnet-5-5',effort:'medium'}]};
@@ -118,10 +118,10 @@ test('equipe names the reserve stored on the project policy',async()=>{
 
 test('the app model picker lists the team, once',async()=>{
  const {teamModelsMetadata}=await import('../src/personal-team-feed.ts');
- const pool={query:async()=>({rows:[{role:'manager',model:'claude-sonnet-5-5',effort:'medium'},{role:'programmer',model:'grok-4.7',effort:'medium'}]})} as any;
+ const pool={query:async()=>({rows:[{role:'manager',model:'claude-sonnet-5-5',effort:'medium'},{role:'programmer',model:'grok-4.6',effort:'medium'}]})} as any;
  const next=await teamModelsMetadata(pool,{name:'ispagent',flavor:'claude'},1);
  assert.equal((next as Record<string,unknown>).name,'ispagent');
- assert.deepEqual(next!.sessionModelsV1,{v:1,provider:'claude',updatedAt:1,currentModelId:'agent-control-team',availableModels:[{id:'agent-control-team',name:'Equipe Agent Control',description:'Gerente claude-sonnet-5-5 medium · Programador grok-4.7 medium'}]});
+ assert.deepEqual(next!.sessionModelsV1,{v:1,provider:'claude',updatedAt:1,currentModelId:'agent-control-team',availableModels:[{id:'agent-control-team',name:'Equipe Agent Control',description:'Gerente claude-sonnet-5-5 medium · Programador grok-4.6 medium'}]});
  assert.equal(await teamModelsMetadata(pool,next!,2),null);
 });
 

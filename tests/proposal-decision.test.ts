@@ -167,7 +167,9 @@ test('manual approve/approve, approve/discard and a repeat after a lost response
  try{
   const {db,contextId}=f;
   const bridge=await f.open();
-  const propose=async(text:string)=>{await f.say(bridge,text);await bridge.tick();};
+  // tick() reads the owner's pending messages at most once a second (conversation.ts): without the wait the second and third
+  // requests stay queued, revision 2 is never planned and both answers fall on the already decided revision 1.
+  const propose=async(text:string)=>{await f.say(bridge,text);await new Promise(done=>setTimeout(done,1100));await bridge.tick();};
   const answer=(word:string)=>bridge.accept({localId:personalPanelLocalId('a'+randomUUID().slice(0,10)),text:word});
   // revision 1: approve and approve at the same time
   await propose('primeiro pedido de mudança');

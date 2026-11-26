@@ -94,9 +94,25 @@ async function clearFailedRuns(rows: readonly AbandonedRow[], dataDirectory: str
   }
 }
 
+/** The periodic sweep, without the context anchor. A fenced transaction holds the manager row (`FOR UPDATE OF x,m`) and
+ * gives the lease back the time it held the anchor only at commit, so the committed `lease_until` may look expired in the
+ * middle of a long Docker call. Each run is therefore failed only with its manager row locked here: a row held by a fenced
+ * transaction is skipped (`SKIP LOCKED`), and a row extended by a commit after this statement's snapshot is re-checked on
+ * its newest version (the row lock re-evaluates the condition in READ COMMITTED). Run rows are locked the same way, so the
+ * sweep never waits on a lock and cannot deadlock with the exam. A context with no manager row at all is abandoned. */
+const FailAbandonedSweep = `WITH expired AS (
+  SELECT r.id FROM ac_verify_runs r JOIN ac_managers m ON m.context_id = r.context_id
+  WHERE r.status='running' AND m.lease_until <= clock_timestamp() FOR UPDATE OF r, m SKIP LOCKED
+), unmanaged AS (
+  SELECT r.id FROM ac_verify_runs r WHERE r.status='running'
+  AND NOT EXISTS (SELECT 1 FROM ac_managers m WHERE m.context_id = r.context_id) FOR UPDATE OF r SKIP LOCKED
+)
+UPDATE ac_verify_runs SET status='failed', finished_at=clock_timestamp() WHERE status='running'
+  AND id IN (SELECT id FROM expired UNION SELECT id FROM unmanaged)`;
+
 /** Runs left `running` without a live manager lease are failed, and their progress files are removed. */
 export async function failAbandonedVerifyRuns(ledger: VerifyRunLedger, dataDirectory: string): Promise<void> {
-  const result = await ledger.pool.query(FailAbandoned + ' RETURNING id, project_id');
+  const result = await ledger.pool.query(FailAbandonedSweep + ' RETURNING id, project_id');
   await clearFailedRuns(result.rows,dataDirectory);
 }
 

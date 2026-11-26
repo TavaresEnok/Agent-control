@@ -1,9 +1,10 @@
 import {constants} from 'node:fs';
 import {open,readFile,lstat,mkdtemp} from 'node:fs/promises';
 import {join} from 'node:path';
-import {createPublicKey,verify,createHmac,timingSafeEqual} from 'node:crypto';
+import {createHash,createPublicKey,verify,createHmac,timingSafeEqual} from 'node:crypto';
 import {z} from 'zod';
-import {canonical,digest} from './contracts.ts';
+import {canonical,digest,Refusal} from './contracts.ts';
+import {grokAccessExpiresAt} from './exam-login.ts';
 
 /** Fixed-path workers use these helpers after admission by their supervisor. */
 export function initializeNativeWorkerEnvironment(proxyUrl?:'http://provider-egress:8080'){
@@ -41,6 +42,16 @@ export async function readMountedCredentialSecrets(provider:'codex'|'claude'|'gr
  try{
   const strings=(value:unknown):string[]=>typeof value==='string'?[value]:Array.isArray(value)?value.flatMap(strings):value&&typeof value==='object'?Object.values(value).flatMap(strings):[];
   return strings(JSON.parse(bytes.toString('utf8'))).filter(value=>value.length>8);
+ }finally{bytes.fill(0);}
+}
+/** The Grok CLI login (`.grok/auth.json`) read once with the private-file checks: a copy of its bytes, their digest,
+ * the secret leaves for redaction and the earliest expiry. The caller zeroes `bytes`. Unreadable JSON is a stale login. */
+export async function readGrokLogin(accountRoot='/account'){
+ const bytes=await readPrivateWorkerFile(join(accountRoot,'.grok','auth.json'),65536);
+ try{
+  let auth:unknown;try{auth=JSON.parse(bytes.toString('utf8'));}catch{throw new Refusal('EXAM_LOGIN_STALE');}
+  const strings=(value:unknown):string[]=>typeof value==='string'?[value]:Array.isArray(value)?value.flatMap(strings):value&&typeof value==='object'?Object.values(value).flatMap(strings):[];
+  return {bytes:Buffer.from(bytes),digest:createHash('sha256').update(bytes).digest('hex'),secrets:strings(auth).filter(value=>value.length>8),expiresAt:grokAccessExpiresAt(auth)};
  }finally{bytes.fill(0);}
 }
 /** The subject is an account identifier digest, not an OAuth token or balance. */

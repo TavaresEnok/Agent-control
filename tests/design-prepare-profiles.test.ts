@@ -231,7 +231,7 @@ test('preparar não alarga catálogo misto: prévia aponta modelo, esforço e pa
       provider: 'claude', model: 'claude-sonnet-5-5', efforts: ['medium'], roles: ['programmer', 'specialist'], source: 'custom://sonnet-legacy',
     });
     await fx.capacity.registerModel(fx.principal, {
-      provider: 'grok', model: 'grok-4.7', efforts: ['low'], roles: ['programmer'], source: 'custom://grok',
+      provider: 'grok', model: 'grok-4.6', efforts: ['low'], roles: ['programmer'], source: 'custom://grok',
     });
     await fx.addClaude();
     const catalogBefore = await fx.catalogRows();
@@ -491,7 +491,7 @@ test('preparar migra política antiga com outros provedores intercalados e vári
     for (const model of ['claude-opus-5-5', 'claude-sonnet-5-5']) {
       await capacity.registerModel(principal, {provider: 'claude', model, efforts: ['low', 'medium', 'high'], roles: [...roles], source: 'personal://account-add'});
     }
-    await capacity.registerModel(principal, {provider: 'grok', model: 'grok-4.7', efforts: ['medium', 'high'], roles: ['specialist', 'programmer'], source: 'custom://grok'});
+    await capacity.registerModel(principal, {provider: 'grok', model: 'grok-4.6', efforts: ['medium', 'high'], roles: ['specialist', 'programmer'], source: 'custom://grok'});
     await capacity.registerModel(principal, {provider: 'gemini', model: 'gemini-4-hydrogen-high', efforts: ['high'], roles: ['specialist'], source: 'custom://gemini'});
 
     // Pro tem UUID menor: sem a regra da primária anterior, cairia como primária.
@@ -510,15 +510,15 @@ test('preparar migra política antiga com outros provedores intercalados e vári
       await capacity.addProfile(principal, project, {id, accountId, model, effort, role});
       return id;
     };
-    const grokFirst = await profile(grokAccount, 'grok-4.7', 'high');
+    const grokFirst = await profile(grokAccount, 'grok-4.6', 'high');
     const proSonnet = await profile(proAccount, 'claude-sonnet-5-5', 'medium');
     const geminiMiddle = await profile(geminiAccount, 'gemini-4-hydrogen-high', 'high');
     const maxOpusMedium = await profile(maxAccount, 'claude-opus-5-5', 'medium');
-    const grokLast = await profile(grokAccount, 'grok-4.7', 'medium');
+    const grokLast = await profile(grokAccount, 'grok-4.6', 'medium');
     const proReviewer = await profile(proAccount, 'claude-sonnet-5-5', 'medium');
-    const grokEmergency = await profile(grokAccount, 'grok-4.7', 'medium');
+    const grokEmergency = await profile(grokAccount, 'grok-4.6', 'medium');
     const manager = await profile(maxAccount, 'claude-sonnet-5-5', 'high', 'manager');
-    const programmer = await profile(grokAccount, 'grok-4.7', 'high', 'programmer');
+    const programmer = await profile(grokAccount, 'grok-4.6', 'high', 'programmer');
 
     const rev1 = await capacity.publish(principal, project, 0, CapacityPolicy.parse({
       schemaVersion: 1,

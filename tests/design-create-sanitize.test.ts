@@ -1,3 +1,6 @@
+// The host disk is not what this file proves: a fixed reading keeps a server disk near 95% from refusing these flows.
+import {useFixedDisk} from './fixtures/fixed-disk.ts';
+useFixedDisk();
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {mkdtemp, readFile, rm} from 'node:fs/promises';

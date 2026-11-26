@@ -4,6 +4,7 @@ import {Authority,Id,Refusal,digest} from './contracts.ts';
 import {RemoteDevelopment} from './remote-development.ts';
 import type {Quality} from './quality.ts';
 import type {ProjectAdmin} from './project-admin.ts';
+import {watchLedgerSessions} from './ledger-session-errors.ts';
 const Base={schemaVersion:z.literal(1),intentId:Id,deliveryAttemptId:Id};
 const Scope={projectId:Id,contextId:Id};
 export const RemoteDevelopmentAdminCommands=[
@@ -27,8 +28,12 @@ export async function executeRemoteDevelopmentAdmin(admin:ProjectAdmin,principal
  // Keep the human authority transaction off the shared adapter pool. Every
  // adapter step may acquire a shared client while these locks remain held.
  const pool=new pg.Pool({...admin.ledger.pool.options,max:1,connectionTimeoutMillis:3000,statement_timeout:10000,query_timeout:11000});
+ // The copied options carry the ledger's idle-in-transaction timeout: a session ended while this transaction waits on the
+ // adapter steps must not take the process down, and the dead client must not hide the transaction's own error.
+ watchLedgerSessions(pool);
  try{
  const c=await pool.connect();
+ let broken=false;
  try{
  await c.query('BEGIN');
  const result=await (async()=>{
@@ -68,7 +73,7 @@ export async function executeRemoteDevelopmentAdmin(admin:ProjectAdmin,principal
   return result;
  })();
  await c.query('COMMIT');return result;
- }catch(error){await c.query('ROLLBACK');throw error;}finally{c.release();}
+ }catch(error){try{await c.query('ROLLBACK');}catch{broken=true;}throw error;}finally{c.release(broken||undefined);}
  }finally{await pool.end();}
 }
 

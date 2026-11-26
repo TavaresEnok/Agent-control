@@ -380,7 +380,7 @@ test('preparar acrescenta perfis que faltam à cadeia specialist existente sem s
       provider: 'claude', model: 'claude-sonnet-5-5', efforts: ['low', 'medium', 'high'], roles: [...roles], source: 'personal://account-add',
     });
     await capacity.registerModel(principal, {
-      provider: 'grok', model: 'grok-4.7', efforts: ['medium'], roles: ['specialist'], source: 'personal://account-add',
+      provider: 'grok', model: 'grok-4.6', efforts: ['medium'], roles: ['specialist'], source: 'personal://account-add',
     });
     const claudeAccount = randomUUID();
     const grokAccount = randomUUID();
@@ -395,9 +395,9 @@ test('preparar acrescenta perfis que faltam à cadeia specialist existente sem s
     const oldGrokRegular = randomUUID();
     const oldClaudeRegular = randomUUID();
     const oldGrokEmergency = randomUUID();
-    await capacity.addProfile(principal, project, {id: oldGrokRegular, accountId: grokAccount, model: 'grok-4.7', effort: 'medium', role: 'specialist'});
+    await capacity.addProfile(principal, project, {id: oldGrokRegular, accountId: grokAccount, model: 'grok-4.6', effort: 'medium', role: 'specialist'});
     await capacity.addProfile(principal, project, {id: oldClaudeRegular, accountId: claudeAccount, model: 'claude-sonnet-5-5', effort: 'high', role: 'specialist'});
-    await capacity.addProfile(principal, project, {id: oldGrokEmergency, accountId: grokAccount, model: 'grok-4.7', effort: 'medium', role: 'specialist'});
+    await capacity.addProfile(principal, project, {id: oldGrokEmergency, accountId: grokAccount, model: 'grok-4.6', effort: 'medium', role: 'specialist'});
     const revision1 = await capacity.publish(principal, project, 0, {
       schemaVersion: 1,
       maxProgrammersPerContext: 1,

@@ -30,7 +30,7 @@ const slot=(provider:ComboSlot['provider'],model:string,effort:ComboSlot['effort
  ({provider,model,effort,count,...(reserve?{reserve}:{})});
 
 const sol=(effort:ComboSlot['effort']):ComboReserve=>({provider:'codex',model:'gpt-6.1-sol',effort});
-const grokReserve=(effort:ComboSlot['effort']):ComboReserve=>({provider:'grok',model:'grok-4.7',effort});
+const grokReserve=(effort:ComboSlot['effort']):ComboReserve=>({provider:'grok',model:'grok-4.6',effort});
 const sonnet=(effort:ComboSlot['effort']):ComboReserve=>({provider:'claude',model:'claude-sonnet-5-5',effort});
 /** The three teams the owner asked for. Counts are explicit so the JSON stays stable. */
 export const builtinCombos:PersonalCombo[]=[
@@ -39,15 +39,15 @@ export const builtinCombos:PersonalCombo[]=[
   reviewer:slot('claude','claude-opus-5-5','high',1,grokReserve('high')),
   programmer:{
    standard:[slot('codex','gpt-6.1-sol','high',3,grokReserve('high'))],
-   basic:[slot('grok','grok-4.7','high',1,sol('high'))],
+   basic:[slot('grok','grok-4.6','high',1,sol('high'))],
   },
-  qa:slot('grok','grok-4.7','high',1,sonnet('medium')),
+  qa:slot('grok','grok-4.6','high',1,sonnet('medium')),
  }},
  {name:'intermediário',roles:{
   manager:slot('claude','claude-sonnet-5-5','high',1,sol('medium')),
   reviewer:slot('codex','gpt-6.1-sol','high',1,sonnet('high')),
   programmer:{standard:[
-   slot('grok','grok-4.7','medium',2,sol('medium')),
+   slot('grok','grok-4.6','medium',2,sol('medium')),
    slot('codex','gpt-6.1-sol','medium',1,grokReserve('medium')),
   ]},
   qa:slot('claude','claude-sonnet-5-5','medium',1,grokReserve('medium')),
@@ -56,7 +56,7 @@ export const builtinCombos:PersonalCombo[]=[
   manager:slot('claude','claude-sonnet-5-5','medium',1,grokReserve('medium')),
   reviewer:slot('codex','gpt-6.1-terra','high',1,sonnet('low')),
   programmer:{standard:[
-   slot('grok','grok-4.7','medium',2,{provider:'codex',model:'gpt-6.1-terra',effort:'medium'}),
+   slot('grok','grok-4.6','medium',2,{provider:'codex',model:'gpt-6.1-terra',effort:'medium'}),
    slot('codex','gpt-6.1-terra','medium',1,grokReserve('medium')),
   ]},
  }},

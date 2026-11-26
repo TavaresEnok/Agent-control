@@ -41,7 +41,9 @@ test('runs running sem lease viram failed e o andamento é limpo', async () => {
     await failAbandonedVerifyRuns(ledger([{id: run, project_id: project}, {id: linkRun, project_id: project}], sql), root);
     assert.match(sql.text, /UPDATE ac_verify_runs SET status='failed', finished_at=clock_timestamp\(\)/);
     assert.match(sql.text, /status='running'/);
-    assert.match(sql.text, /NOT EXISTS \(SELECT 1 FROM ac_managers m WHERE m.context_id = ac_verify_runs.context_id AND m.lease_until > clock_timestamp\(\)\)/);
+    // The lease is judged only with the manager row locked here: a fenced transaction holding it is skipped.
+    assert.match(sql.text, /m\.lease_until <= clock_timestamp\(\) FOR UPDATE OF r, m SKIP LOCKED/);
+    assert.match(sql.text, /NOT EXISTS \(SELECT 1 FROM ac_managers m WHERE m.context_id = r.context_id\) FOR UPDATE OF r SKIP LOCKED/);
     assert.match(sql.text, /RETURNING id, project_id/);
     await assert.rejects(() => stat(join(dir, `${run}.json`)));
     await assert.rejects(() => stat(join(dir, `${linkRun}.json`)));

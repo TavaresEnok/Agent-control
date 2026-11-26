@@ -3,6 +3,7 @@ import {fenceInstallationContext,type InstallationFenceToken} from './installati
 import { randomUUID } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import pg from 'pg';
+import {watchLedgerSessions} from './ledger-session-errors.ts';
 import { acceptedCommandDigest, Authority, Checkpoint, Command, digest, Id, Refusal, Projection } from './contracts.ts';
 import {CONVERSATION_CHANNEL} from './conversation-transport.ts';
 import { workflowFor } from './workflows.ts';
@@ -33,13 +34,64 @@ export type ExamContext = {
 
 export type Intent = { id: string; context_id: string; operation_id: string; run_id: string;
   manager_epoch: string; plan_revision: number; state: string; command: Command; parent_intent_id?:string|null;parent_unit_id?:string|null };
+/** Leases a transaction proved with `fence`: the row value and the instant it was read, per context. Keyed by the client,
+ * so a Ledger built without its constructor (test doubles) shares the same bookkeeping. */
+/** Twice the heartbeat lease: the most a fence may lag the last heartbeat (pauses given back excluded) and still give the
+ * lease back its pause. */
+export const FENCED_EXTENSION_HEARTBEAT_SECONDS = 30;
+/** Ends a session left idle inside a transaction (a stuck caller holding the context anchor or the manager row). Above the
+ * longest legitimate fenced transaction: a Docker call on a saturated disk took about 80 s on 25/11/2026. */
+export const IDLE_IN_TRANSACTION_TIMEOUT_MS = 10 * 60 * 1000;
+/** The slowest fenced Docker call the ceiling is sized for: 1.5x the ~80 s of the incident. */
+export const FENCED_WORST_CALL_SECONDS = 120;
+/** Floor of the ceiling, aligned with the idle-in-transaction timeout. */
+export const FENCED_EXTENSION_TOTAL_SECONDS = IDLE_IN_TRANSACTION_TIMEOUT_MS / 1000;
+const HEARTBEAT_LEASE_SECONDS = 15;
+/** Absolute ceiling of the time given back since the last real heartbeat. Every exam slot (`evaluation_limit`) may queue one
+ * worst-case fenced call ahead of the heartbeat, plus one lease of slack; never below the idle-in-transaction timeout. A
+ * manager whose heartbeat stopped still loses the lease once this much was given back by chaining fenced transactions. */
+export function fencedExtensionCeilingSeconds(evaluationLimit: number) {
+  const slots = Number.isInteger(evaluationLimit) && evaluationLimit > 0 ? evaluationLimit : 1;
+  return Math.max(FENCED_EXTENSION_TOTAL_SECONDS, slots * FENCED_WORST_CALL_SECONDS + HEARTBEAT_LEASE_SECONDS);
+}
+const fencedLeases = new WeakMap<pg.PoolClient, Map<string, {instanceId: string; epoch: number; leaseUntil: string; fencedAt: string}>>();
 export class Ledger {
   readonly pool: pg.Pool;
-  constructor(connectionString: string,readonly installationAuthority?:InstallationFenceToken,readonly runtimeIdentity?:RuntimeIdentity,/** Volumes the installation writes to; the capacity gate measures these before admitting a new worker. */readonly launchVolumes?:readonly string[]) { if(runtimeIdentity)RuntimeIdentity.parse(runtimeIdentity);this.pool = new pg.Pool({ connectionString, max: 8 }); }
+  constructor(connectionString: string,readonly installationAuthority?:InstallationFenceToken,readonly runtimeIdentity?:RuntimeIdentity,/** Volumes the installation writes to; the capacity gate measures these before admitting a new worker. */readonly launchVolumes?:readonly string[]) { if(runtimeIdentity)RuntimeIdentity.parse(runtimeIdentity);this.pool = new pg.Pool({ connectionString, max: 8, idle_in_transaction_session_timeout: IDLE_IN_TRANSACTION_TIMEOUT_MS });
+    // A session ended by the server (the idle-in-transaction timeout, a restart) emits 'error' on its client; the pool's own
+    // listener is detached while the client is lent. Without these, that is an unhandled 'error' event and the whole process
+    // goes down with every exam slot. The failing transaction is undone by its next query; the pool drops the dead client.
+    watchLedgerSessions(this.pool); }
   async tx<T>(fn: (c: pg.PoolClient) => Promise<T>): Promise<T> {
     const c = await this.pool.connect();
-    try { await c.query('BEGIN'); const v = await fn(c); await c.query('COMMIT'); return v; }
-    catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }
+    let broken = false;
+    try {
+      // A pooled client is reused: a fence made outside tx() on it never extends a later transaction.
+      fencedLeases.delete(c); await c.query('BEGIN'); const v = await fn(c);
+      // From fence to commit this transaction holds the context anchor and the manager row: acquire, heartbeat, orphan
+      // recovery and key changes all wait on them, so nobody can take the lease over meanwhile. That time does not consume
+      // the lease: a Docker call made under the fence (effect, reconcile, retirement) may outlive it on a saturated disk, and
+      // the heartbeat queued behind it must not then find the lease expired. Skipped when the transaction changed the lease
+      // itself (heartbeat, release, key change) and on rollback. The same pause moves heartbeat_at, so a later fence queued
+      // behind this one does not count it against the heartbeat; the total given back since the last real heartbeat is capped.
+      for (const [contextId, held] of fencedLeases.get(c) ?? []) {
+        // The same ceiling as fencedExtensionCeilingSeconds, from the installation's evaluation_limit.
+        await c.query(`WITH cap AS (SELECT GREATEST($6::double precision,
+            COALESCE((SELECT evaluation_limit FROM ac_capacity_config WHERE id=1), 1)*$7::double precision+$8::double precision) seconds),
+          g AS (SELECT LEAST(clock_timestamp()-$4::timestamptz,
+            GREATEST(0, cap.seconds-m.extended_seconds)*interval '1 second') pause FROM ac_managers m, cap WHERE m.context_id=$1)
+          UPDATE ac_managers m SET lease_until=m.lease_until+g.pause,heartbeat_at=m.heartbeat_at+g.pause,
+            extended_seconds=m.extended_seconds+extract(epoch FROM g.pause)
+          FROM g WHERE m.context_id=$1 AND m.instance_id=$2 AND m.epoch=$3 AND m.lease_until=$5::timestamptz`,
+        [contextId, held.instanceId, held.epoch, held.fencedAt, held.leaseUntil, FENCED_EXTENSION_TOTAL_SECONDS, FENCED_WORST_CALL_SECONDS, HEARTBEAT_LEASE_SECONDS]);
+      }
+      await c.query('COMMIT'); return v;
+    }
+    catch (e) {
+      // A session the server ended cannot roll back: keep the transaction's own error and destroy the client.
+      try { await c.query('ROLLBACK'); } catch { broken = true; }
+      throw e;
+    } finally { fencedLeases.delete(c); c.release(broken || undefined); }
   }
   async migrate() {
     const folder = new URL('../db/migrations/', import.meta.url);
@@ -150,7 +202,7 @@ export class Ledger {
         }
         const r = await c.query(`INSERT INTO ac_managers VALUES($1,$2,$3,1,clock_timestamp()+$4*interval '1 second')
           ON CONFLICT(context_id) DO UPDATE SET instance_id=excluded.instance_id,profile_id=excluded.profile_id,
-          epoch=ac_managers.epoch+1,lease_until=excluded.lease_until
+          epoch=ac_managers.epoch+1,lease_until=excluded.lease_until,heartbeat_at=excluded.heartbeat_at,extended_seconds=0
           WHERE ac_managers.lease_until<=clock_timestamp() RETURNING epoch`, [contextId, instanceId, profileId, leaseSeconds]);
         if (!r.rowCount) throw new Refusal('MANAGER_ACTIVE');
         await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'manager.acquired',$2)",
@@ -170,20 +222,25 @@ export class Ledger {
     await lockWorkflowProjectShared(c,a.contextId);
     // Context anchor precedes manager/domain locks in acquire and fence alike.
     await c.query('SELECT id FROM ac_contexts WHERE id=$1 FOR UPDATE',[a.contextId]);
-    const r = await c.query(`SELECT x.paused,m.epoch FROM ac_contexts x JOIN ac_managers m ON m.context_id=x.id
+    const r = await c.query(`SELECT x.paused,m.epoch,m.lease_until::text lease_until,clock_timestamp()::text fenced_at,
+      clock_timestamp()-m.heartbeat_at<=$4*interval '1 second' heartbeat_recent FROM ac_contexts x JOIN ac_managers m ON m.context_id=x.id
       WHERE x.id=$1 AND m.instance_id=$2 AND m.epoch=$3 AND m.lease_until>clock_timestamp() FOR UPDATE OF x,m`,
-    [a.contextId, a.instanceId, a.epoch]);
+    [a.contextId, a.instanceId, a.epoch, FENCED_EXTENSION_HEARTBEAT_SECONDS]);
     if (!r.rowCount) throw new Refusal('STALE_MANAGER');
     await assertGenerationFence(c,a.contextId,allowPaused);
     await fenceInstallationContext(c,a.contextId,this.installationAuthority,allowPaused);
     if (r.rows[0].paused && !allowPaused) throw new Refusal('HUMAN_PAUSED');
     const admission=(await c.query('SELECT enabled FROM ac_admission_control WHERE id=1 FOR SHARE')).rows[0];
     if (!admission?.enabled && !allowPaused) throw new Refusal('ADMISSION_CLOSED');
+    const held = fencedLeases.get(c) ?? new Map();
+    // Only a manager whose heartbeat is recent gets the pause back; one whose heartbeat stopped loses the lease on time.
+    if (r.rows[0].heartbeat_recent && !held.has(a.contextId)) held.set(a.contextId, {instanceId: a.instanceId, epoch: a.epoch, leaseUntil: r.rows[0].lease_until, fencedAt: r.rows[0].fenced_at});
+    fencedLeases.set(c, held);
   }
   async heartbeat(a: Authority) {
     await this.tx(async c => {
       await this.fence(c, a, true);
-      await c.query("UPDATE ac_managers SET lease_until=clock_timestamp()+interval '15 seconds' WHERE context_id=$1", [a.contextId]);
+      await c.query("UPDATE ac_managers SET lease_until=clock_timestamp()+interval '15 seconds',heartbeat_at=clock_timestamp(),extended_seconds=0 WHERE context_id=$1", [a.contextId]);
     });
   }
   /** Ends this manager's lease without deleting the row or changing its epoch. */

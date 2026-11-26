@@ -17,15 +17,15 @@ test('xhigh stays on Claude and becomes high on Grok and Codex',()=>{
 test('Claude argv keeps --effort xhigh and Grok argv caps at high',()=>{
  const claude=managerChatCommand('claude','claude-opus-5-5','xhigh','ping');
  assert.deepEqual(claude.args.slice(claude.args.indexOf('--effort'),claude.args.indexOf('--effort')+2),['--effort','xhigh']);
- const grok=managerChatCommand('grok','grok-4.7','xhigh','ping');
+ const grok=managerChatCommand('grok','grok-4.6','xhigh','ping');
  assert.deepEqual(grok.args.slice(grok.args.indexOf('--reasoning-effort'),grok.args.indexOf('--reasoning-effort')+2),['--reasoning-effort','high']);
  const codex=managerChatCommand('codex','gpt-6.1-sol','max','ping');
  assert.ok(codex.args.includes('model_reasoning_effort=high'));
- assert.deepEqual(grokProgrammerArgs('grok-4.7','max','task').slice(4,6),['--reasoning-effort','high']);
+ assert.deepEqual(grokProgrammerArgs('grok-4.6','max','task').slice(4,6),['--reasoning-effort','high']);
 });
 
 test('Grok evaluators work in the read-only copy at /planning, the programmer in /work',()=>{
- const at=(role?:string)=>{const args=grokProgrammerArgs('grok-4.7','high','task',role);return args[args.indexOf('--cwd')+1];};
+ const at=(role?:string)=>{const args=grokProgrammerArgs('grok-4.6','high','task',role);return args[args.indexOf('--cwd')+1];};
  assert.equal(at('programmer'),'/work');assert.equal(at(),'/work');
  assert.equal(at('qa'),'/planning');assert.equal(at('reviewer'),'/planning');
 });

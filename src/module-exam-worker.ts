@@ -1,22 +1,23 @@
 import type {UsageCountersValue} from './native-usage.ts';
 import {spawn} from 'node:child_process';
 import {constants} from 'node:fs';
-import {mkdir, mkdtemp, open, writeFile} from 'node:fs/promises';
+import {mkdir, mkdtemp, open, rm, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
+import {isDeepStrictEqual} from 'node:util';
 import {z} from 'zod';
 import type {UsageWindowsObservation} from '../upstream/cezar/packages/contract/src/usage-windows.ts';
 import {redactSecrets} from '../upstream/cezar/packages/cezar/dist/core/secret-redaction.js';
 import {Refusal} from './contracts.ts';
 import {runnerEffort, type Effort} from './effort.ts';
-import {examLoginNeedsRefresh, grokAccessExpiresAt, providerFailureCode} from './exam-login.ts';
+import {examLoginNeedsRefresh, providerFailureCode} from './exam-login.ts';
 import {requestModuleExamCodex} from './module-exam-codex.ts';
 import {moduleExamSocket, monitorModuleExamEgress, startModuleExamLoopback, type ModuleExamProvider} from './module-exam-egress.ts';
-import {assertCodexSubscriptionIdentity, readPrivateWorkerFile} from './native-worker-security.ts';
+import {assertCodexSubscriptionIdentity, readGrokLogin} from './native-worker-security.ts';
 import {claudeLimitFromText} from './quota-exhaustion.ts';
 
 type Input = {
   jobId: string; sessionId: string; providerSubjectDigest: string; model: string; effort: Effort;
-  provider: ModuleExamProvider; task: string; timeoutMs: number; oauthAccessToken?: string;
+  provider: ModuleExamProvider; task: string; timeoutMs: number; oauthAccessToken?: string; moduleExamLoginDigest?: string;
 };
 const maxOutput = 200_000;
 const singleMarkdownJsonFence = /^```(?:json)?[ \t]*\r?\n([\s\S]*)\r?\n[ \t]*```$/i;
@@ -246,73 +247,92 @@ const GrokResult = z.object({
   modelUsage: z.record(z.string(), z.unknown()).optional(),
 }).passthrough();
 
+/** `modelUsage` names the reserved model or its `-build` serving name, as Grok 1.0.70 reported `grok-4.7-build` for grok-4.7 (the reserved model is now `grok-4.6`). */
+export function isModuleExamGrokModel(name: string, model: string): boolean {
+  return name === model || name === model + '-build';
+}
+
+export type ModuleExamGrokResponse = {succeeded: boolean; output: string;
+  /** Messages of the CLI's own `{"type":"error"}` document: the only text a failure code is read from. */
+  errors: string[];
+  /** Stop reason and stderr tail, for the log only. */
+  diagnostics: string[]; counters: UsageCountersValue | null};
+
 /** One JSON document from `grok --output-format json`. Only a single-turn `end_turn` of the reserved model counts:
- * a second turn would mean a tool round trip, and `cancelled` is the plan-mode stop on a network attempt. */
-export function readModuleExamGrokOutput(stdout: string, model: string): {succeeded: boolean; output: string; diagnostics: string[];
-  counters: UsageCountersValue | null} {
+ * a second turn would mean a tool round trip, and `cancelled` is the plan-mode stop on a network attempt.
+ * The verdict is the answer `text`, read with the duplicate-key check, and it must equal `structuredOutput`. */
+export function readModuleExamGrokOutput(stdout: string, model: string): ModuleExamGrokResponse {
+  const refused = (diagnostics: string[] = [], errors: string[] = []) => ({succeeded: false, output: '', errors, diagnostics, counters: null});
   let value: unknown;
-  try { value = JSON.parse(stdout); } catch { return {succeeded: false, output: '', diagnostics: [stdout.slice(0, 2000)], counters: null}; }
+  try { value = JSON.parse(stdout); } catch { return refused([stdout.slice(0, 2000)]); }
   const failure = z.object({type: z.literal('error'), message: z.string()}).safeParse(value);
-  if (failure.success) return {succeeded: false, output: '', diagnostics: [failure.data.message], counters: null};
+  if (failure.success) return refused([], [failure.data.message]);
   const parsed = GrokResult.safeParse(value);
-  if (!parsed.success) return {succeeded: false, output: '', diagnostics: [], counters: null};
+  if (!parsed.success) return refused();
   const result = parsed.data;
   const count = (v: unknown) => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : null;
   const u = result.usage, read = count(u?.cache_read_input_tokens), write = count(u?.cache_creation_input_tokens);
   const counters = u ? {input: count(u.input_tokens), output: count(u.output_tokens),
     cache: read !== null && write !== null ? read + write : null, reasoning: count(u.reasoning_tokens)} : null;
   const models = Object.keys(result.modelUsage ?? {});
-  const sameModel = models.length > 0 && models.every(name => name === model || name.startsWith(model + '-'));
-  const structured = result.structuredOutput;
-  const output = structured && typeof structured === 'object' && !Array.isArray(structured) ? JSON.stringify(structured) : result.text ?? '';
-  const succeeded = result.stopReason === 'end_turn' && result.num_turns === 1 && sameModel;
-  return {succeeded, output: succeeded ? output : '', diagnostics: succeeded ? [] : [result.stopReason], counters};
+  const sameModel = models.length > 0 && models.every(name => isModuleExamGrokModel(name, model));
+  const answer = parseModuleExamJsonObject(result.text ?? '');
+  const agrees = answer !== null && (result.structuredOutput === undefined || isDeepStrictEqual(answer.value, result.structuredOutput));
+  const succeeded = result.stopReason === 'end_turn' && result.num_turns === 1 && sameModel && agrees;
+  return {succeeded, output: succeeded ? answer!.text : '', errors: [], diagnostics: succeeded ? [] : [result.stopReason], counters};
 }
 
-const GROK_LIMIT = /usage.?limit|rate.?limit|quota|\b429\b|too many requests|out of credits/i;
-const GROK_AUTH = /not signed in|unauthori[sz]ed|\b401\b|token (?:has )?expired|grok login/i;
+const GROK_LIMIT = /\b(?:usage|rate)[ _-]?limit\b|\b429\b|\btoo many requests\b|\bout of credits\b|\bquota (?:exceeded|reached)\b/i;
+const GROK_AUTH = /^not signed in\b|\bunauthori[sz]ed\b|\b401\b|\btoken (?:has )?expired\b/i;
 
 export function resolveModuleExamGrokResult(
-  response: {succeeded: boolean; output: string; diagnostics: string[]},
+  response: Pick<ModuleExamGrokResponse, 'succeeded' | 'output' | 'errors'>,
   secrets: string[],
 ): {output: string; failureCode: string | null} {
   if (response.succeeded) {
     const redacted = redactSecrets(response.output.trim(), secrets);
     return {output: parseModuleExamJsonObject(redacted)?.text ?? redacted, failureCode: null};
   }
-  const text = response.diagnostics.join('\n');
-  const failureCode = GROK_LIMIT.test(text) ? 'PROVIDER_USAGE_LIMIT'
-    : GROK_AUTH.test(text) ? 'PROVIDER_AUTH_FAILED'
-      : providerFailureCode(text) ?? 'MODULE_EXAM_PROVIDER_FAILED';
+  // Only the CLI's structured error is classified: a log line on stderr never turns a failure into a quota stop.
+  const text = response.errors.join('\n');
+  const failureCode = !text ? 'MODULE_EXAM_PROVIDER_FAILED'
+    : GROK_LIMIT.test(text) ? 'PROVIDER_USAGE_LIMIT'
+      : GROK_AUTH.test(text) ? 'PROVIDER_AUTH_FAILED'
+        : providerFailureCode(text) ?? 'MODULE_EXAM_PROVIDER_FAILED';
   return {output: '', failureCode};
 }
 
-/** The read-only login mounted at /account/.grok/auth.json is copied into a private home. Refresh is not possible:
- * the login hosts stay closed, so a login near expiry is stale before the CLI runs. */
-async function grokText(input: Input, signal: AbortSignal) {
-  const bytes = await readPrivateWorkerFile('/account/.grok/auth.json', 65536);
-  let secrets: string[];
+export type ModuleExamGrokPaths = {bin: string; accountRoot: string; tmpRoot: string};
+const grokPaths: ModuleExamGrokPaths = {bin: '/usr/local/bin/grok', accountRoot: '/account', tmpRoot: '/tmp'};
+
+/** Runs the Grok reviewer on the read-only login mounted under `accountRoot`, which must be the login the supervisor
+ * checked (`moduleExamLoginDigest`). The login is copied into a private home removed afterwards. Refresh is not
+ * possible, since the login hosts stay closed, so a login near expiry is stale before the CLI runs. The child gets
+ * only PATH, the private HOME and the loopback proxy, runs in an empty directory and reads the request from a file. */
+export async function runModuleExamGrok(input: Pick<Input, 'model' | 'effort' | 'task' | 'timeoutMs' | 'moduleExamLoginDigest'>,
+  signal: AbortSignal, paths: ModuleExamGrokPaths = grokPaths) {
+  const login = await readGrokLogin(paths.accountRoot);
+  let home: string | undefined, empty: string | undefined;
   try {
-    const auth: unknown = JSON.parse(bytes.toString('utf8'));
-    if (examLoginNeedsRefresh(grokAccessExpiresAt(auth), Date.now(), input.timeoutMs)) throw new Refusal('EXAM_LOGIN_STALE');
-    const strings = (value: unknown): string[] => typeof value === 'string' ? [value]
-      : Array.isArray(value) ? value.flatMap(strings) : value && typeof value === 'object' ? Object.values(value).flatMap(strings) : [];
-    secrets = strings(auth).filter(value => value.length > 8);
-    const home = await mkdtemp('/tmp/ac-module-exam-');
+    if (!input.moduleExamLoginDigest || input.moduleExamLoginDigest !== login.digest) throw new Refusal('EXAM_LOGIN_STALE');
+    if (examLoginNeedsRefresh(login.expiresAt, Date.now(), input.timeoutMs)) throw new Refusal('EXAM_LOGIN_STALE');
+    home = await mkdtemp(join(paths.tmpRoot, 'ac-module-exam-'));
     await mkdir(join(home, '.grok'), {mode: 0o700});
-    await writeFile(join(home, '.grok', 'auth.json'), bytes, {mode: 0o600, flag: 'wx'});
-    process.env.HOME = home;
-    const empty = await mkdtemp('/tmp/ac-module-exam-cwd-');
+    await writeFile(join(home, '.grok', 'auth.json'), login.bytes, {mode: 0o600, flag: 'wx'});
+    empty = await mkdtemp(join(paths.tmpRoot, 'ac-module-exam-cwd-'));
     const promptFile = join(home, 'pedido.txt');
     await writeFile(promptFile, MODULE_EXAM_GROK_PREAMBLE + input.task, {mode: 0o600, flag: 'wx'});
-    const child = spawn('/usr/local/bin/grok', moduleExamGrokArgs(input, promptFile, empty), {
-      cwd: empty, signal, env: {...process.env, HOME: home, NO_COLOR: '1'}, stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let stdout = '', stderr = '';
+    const env: Record<string, string> = {HOME: home, NO_COLOR: '1'};
+    for (const name of ['PATH', 'HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy']) {
+      const value = process.env[name];
+      if (value) env[name] = value;
+    }
+    const child = spawn(paths.bin, moduleExamGrokArgs(input, promptFile, empty), {cwd: empty, signal, env, stdio: ['ignore', 'pipe', 'pipe']});
+    let stdout = '', stderr = '', overflow = false;
     const receive = (chunk: string, stream: 'stdout' | 'stderr') => {
       if (stream === 'stdout') stdout += chunk;
       else stderr += chunk;
-      if (stdout.length + stderr.length > maxOutput) child.kill('SIGKILL');
+      if (stdout.length + stderr.length > maxOutput) { overflow = true; child.kill('SIGKILL'); }
     };
     child.stdout.setEncoding('utf8').on('data', chunk => receive(chunk, 'stdout'));
     child.stderr.setEncoding('utf8').on('data', chunk => receive(chunk, 'stderr'));
@@ -320,10 +340,14 @@ async function grokText(input: Input, signal: AbortSignal) {
       child.once('close', resolve);
       child.once('error', () => resolve(null));
     });
+    if (signal.aborted) throw new Refusal('MODULE_EXAM_INTERRUPTED');
     const result = readModuleExamGrokOutput(stdout, input.model);
     return {response: {...result, diagnostics: [...result.diagnostics, stderr.slice(-4000)],
-      succeeded: result.succeeded && status === 0 && stdout.length + stderr.length <= maxOutput}, secrets};
-  } finally { bytes.fill(0); }
+      succeeded: result.succeeded && status === 0 && !overflow}, secrets: login.secrets};
+  } finally {
+    login.bytes.fill(0);
+    for (const dir of [home, empty]) if (dir) await rm(dir, {recursive: true, force: true});
+  }
 }
 
 export async function runModuleExamWorker(input: Input) {
@@ -350,7 +374,7 @@ export async function runModuleExamWorker(input: Input) {
       closeProxy = proxy.close;
       Object.assign(process.env, {HTTPS_PROXY: proxy.url, HTTP_PROXY: proxy.url, https_proxy: proxy.url, http_proxy: proxy.url});
       if (abort.signal.aborted) throw new Refusal('MODULE_EXAM_INTERRUPTED');
-      const {response, secrets} = await grokText(input, abort.signal);
+      const {response, secrets} = await runModuleExamGrok(input, abort.signal);
       ({output, failureCode} = resolveModuleExamGrokResult(response, secrets));
       usageCounters = response.counters;
     } else {
