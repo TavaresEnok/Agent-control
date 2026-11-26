@@ -192,9 +192,12 @@ export async function captureScreens(
     await driver.emulateMedia(plan.theme);
     await driver.goto(prepared.url);
     if (login !== undefined) await driver.verifyAuthenticated?.(prepared.url, login, false);
-    await runSteps(driver, prepared.steps);
     const allowNavigation = (prepared.steps?.length ?? 0) > 0;
-    if (login !== undefined && allowNavigation) await driver.verifyAuthenticated?.(prepared.url, login, true);
+    try {
+      await runSteps(driver, prepared.steps);
+    } finally {
+      if (login !== undefined && allowNavigation) await driver.verifyAuthenticated?.(prepared.url, login, true);
+    }
     const body = await driver.content();
     if (!isHtmlScreen(body)) {
       skipped.push({

@@ -71,7 +71,7 @@ test('uma rota que perde a sessão mantém o relatório e reprova a execução d
 });
 
 test('cada auditoria que perde a sessão reprova o CLI com as capturas disponíveis', () => {
-  for (const tool of ['pa11y', 'lighthouse']) {
+  for (const tool of ['pa11y', 'lighthouse', 'render', 'keyboard']) {
     const result = interpretDesignImageDocument({
       screenshots: [{fileName: 'painel.png', route: '/painel', viewport: 375}],
       unavailable: [],

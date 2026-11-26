@@ -13,12 +13,12 @@ type DesignPage = {
   url(): string;
   setViewportSize(size: {width: number; height: number}): Promise<void>;
   emulateMedia(options: {colorScheme: 'dark' | 'light'}): Promise<void>;
-  goto(url: string, options: {waitUntil: 'domcontentloaded'; timeout: number}): Promise<unknown>;
+  goto(url: string, options: {waitUntil: 'domcontentloaded'; timeout: number}): Promise<DesignNavigationResponse>;
   screenshot(options: {fullPage: true; type: 'png'}): Promise<Buffer>;
   content(): Promise<string>;
   fill(selector: string, value: string): Promise<void>;
   click(selector: string): Promise<void>;
-  locator(selector: string): {first(): {isVisible(): Promise<boolean>}; waitFor(options: {state: 'hidden' | 'visible'; timeout: number}): Promise<void>};
+  locator(selector: string): {all(): Promise<{isVisible(): Promise<boolean>}[]>; waitFor(options: {state: 'hidden' | 'visible'; timeout: number}): Promise<void>};
   evaluate<T>(expression: () => T): Promise<T>;
   waitForFunction(expression: () => boolean, arg: undefined, options: {timeout: number}): Promise<unknown>;
 };
@@ -37,9 +37,11 @@ type DesignBrowserResponse = {
   text(): Promise<string>;
 };
 
+type DesignNavigationResponse = {status(): number} | null | void;
+
 export type DesignBrowserGuardPage = {
   url(): string;
-  goto(url: string, options: {waitUntil: 'domcontentloaded'; timeout: number}): Promise<unknown>;
+  goto(url: string, options: {waitUntil: 'domcontentloaded'; timeout: number}): Promise<DesignNavigationResponse>;
   fill(selector: string, value: string): Promise<void>;
 };
 
@@ -58,7 +60,7 @@ export type DesignBrowserGuardContext = {
 };
 
 export type DesignBrowserGuard = {
-  goto(url: string): Promise<void>;
+  goto(url: string): Promise<DesignNavigationResponse>;
   fill(selector: string, value: string): Promise<void>;
   afterLogin(): void;
   /** Raw document when the response is not HTML. Undefined for an HTML page. */
@@ -139,8 +141,9 @@ export async function installDesignBrowserGuard(
   return {
     async goto(url: string) {
       rawDocument = undefined;
-      await page.goto(url, {waitUntil: 'domcontentloaded', timeout: 30000});
+      const response = await page.goto(url, {waitUntil: 'domcontentloaded', timeout: 30000});
       assertDesignDestination(targetUrl, page.url());
+      return response;
     },
     async fill(selector: string, value: string) {
       assertDesignDestination(targetUrl, page.url());
@@ -386,6 +389,13 @@ export async function openDesignBrowser(targetUrl: string): Promise<{driver: Des
     const guard = await installDesignBrowserGuard(context, page, targetUrl);
     let closed = false;
     let loginPath: string | undefined;
+    let status: number | undefined;
+    const visible = async (selector: string) => {
+      for (const field of await page.locator(selector).all()) {
+        if (await field.isVisible()) return true;
+      }
+      return false;
+    };
     const driver: DesignCaptureDriver = {
       async setViewport(width, height) {
         await page.setViewportSize({width, height});
@@ -394,7 +404,7 @@ export async function openDesignBrowser(targetUrl: string): Promise<{driver: Des
         await page.emulateMedia({colorScheme: theme === 'escuro' ? 'dark' : 'light'});
       },
       async goto(url) {
-        await guard.goto(url);
+        status = (await guard.goto(url))?.status();
         await waitForPaint(page);
       },
       async screenshot() {
@@ -413,13 +423,11 @@ export async function openDesignBrowser(targetUrl: string): Promise<{driver: Des
       async submitLogin(login) {
         loginPath = await submitDesignLogin(page, guard, login);
       },
-      async verifyAuthenticated(url, login, allowNavigation) {
-        guard.afterLogin();
+      async verifyAuthenticated(url, login) {
+        assertDesignDestination(url, page.url());
         const path = pathOf(page.url());
-        if (path === loginPath || (!allowNavigation && path !== pathOf(url))
-          || await page.locator('input[autocomplete="one-time-code"]').first().isVisible()
-          || (await page.locator(login.passwordSelector).first().isVisible()
-            && await page.locator(login.submitSelector).first().isVisible())) {
+        if (status === 401 || path === loginPath || await visible('input[autocomplete="one-time-code"]')
+          || (await visible(login.passwordSelector) && await visible(login.submitSelector))) {
           throw new Refusal('DESIGN_CAPTURE_LOGIN_FAILED');
         }
       },

@@ -193,7 +193,8 @@ export function interpretDesignImageDocument(document: unknown): Omit<DesignImag
     shotMeta,
     declaredFindings: declared,
     captureLoginFailed: listOf(root.unavailable).some(item => item.status === 401)
-      || listOf(root.auditLoginFailures).some(item => item.tool === 'pa11y' || item.tool === 'lighthouse'),
+      || listOf(root.auditLoginFailures).some(item =>
+        item.tool === 'pa11y' || item.tool === 'lighthouse' || item.tool === 'render' || item.tool === 'keyboard'),
     render: parseRenderCells(reports.render),
     keyboard: parseFocusWalks(reports.keyboard),
     computedBlocks,

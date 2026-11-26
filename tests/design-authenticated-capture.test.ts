@@ -39,18 +39,29 @@ test('captura e ferramentas usam sessão em todas as rotas e descartam a tela de
           return res.end('<script>localStorage.lab = "local"; sessionStorage.lab = "session"; location.replace("/painel");</script>');
         }
         if (req.url === '/acesso') return send(res, form);
+        if (req.url === '/publico') return redirect('/pt-BR/publico');
+        if (req.url === '/pt-BR/publico') return send(res, form);
         if (req.url === '/expirada' || req.headers.cookie !== 'lab=opened') return redirect('/acesso');
+        if (req.url === '/painel') return redirect('/pt-BR/painel');
         if (req.url === '/formulario') return send(res, form);
-        if (['/so-pa11y', '/so-lighthouse'].includes(req.url)) {
+        if (['/so-pa11y', '/so-lighthouse', '/so-regua', '/so-teclado'].includes(req.url)) {
           const visit = (visits.get(req.url) ?? 0) + 1;
           visits.set(req.url, visit);
           // Playwright faz a captura e três passagens de régua/teclado.
           // Depois vêm os dois runners do Pa11y e os dois formatos do Lighthouse.
           if (req.url === '/so-pa11y' && visit >= 5 && visit <= 6) return send(res, form);
           if (req.url === '/so-lighthouse' && visit >= 7) return send(res, form);
+          if (req.url === '/so-regua' && visit === 2) return redirect('/acesso?voltar=/so-regua');
+          if (req.url === '/so-regua' && visit === 4) {
+            return send(res, '<h1>Painel autenticado</h1><script>setTimeout(() => location.replace("/acesso"), 300)</script>');
+          }
+          if (req.url === '/so-teclado' && visit === 3) {
+            res.writeHead(401, {'content-type': 'text/html'}); return res.end('<h1>Sessão expirada</h1>');
+          }
         }
+        if (req.url.startsWith('/acesso?')) return send(res, '<h1>Entre novamente</h1>');
         if (req.url === '/spa') return send(res, '<h1>SPA autenticada</h1><script>if (localStorage.lab !== "local" || sessionStorage.lab !== "session") location.replace("/acesso");</script>');
-        return send(res, '<h1>Painel autenticado</h1>');
+        return send(res, '<h1>Painel autenticado</h1><a href="/painel">Painel</a><a href="/spa">SPA</a>');
       }).listen(8080, '127.0.0.1');
     `);
     const loginDir = join(directory, 'login');
@@ -60,11 +71,16 @@ test('captura e ferramentas usam sessão em todas as rotas e descartam a tela de
       usernameSelector: '#user', passwordSelector: '#pass', submitSelector: 'text=Entrar',
       successSelector: 'h1',
     }), {mode: 0o600});
-    const accepted = ['/painel', '/so-lighthouse', '/so-pa11y', '/spa'];
+    const accepted = ['/painel', '/so-lighthouse', '/so-pa11y', '/so-regua', '/so-teclado', '/spa'];
     const rejected = ['/expirada', '/formulario'];
     await writeFile(join(directory, 'pedido.json'), JSON.stringify({
       routes: [...accepted, ...rejected].map(route => ({route, states: ['padrao']})),
       viewports: [375],
+    }));
+    const publicDir = join(directory, 'publico');
+    await mkdir(publicDir);
+    await writeFile(join(publicDir, 'pedido.json'), JSON.stringify({
+      routes: [{route: '/publico', states: ['padrao']}], viewports: [375],
     }));
     const mounts = ['run-exam.mjs', 'write-login-state.mjs', 'login-decision.mjs'].flatMap(name => [
       '-v', `${join(tools, name)}:/opt/design-tools/${name}:ro`,
@@ -78,30 +94,52 @@ test('captura e ferramentas usam sessão em todas as rotas e descartam a tela de
         node /opt/design-tools/write-login-state.mjs
         cp /output/state.json /login/state.json
         rm /output/state.json
-        node /opt/design-tools/run-exam.mjs`,
-    ], {timeout: 360_000});
+        node /opt/design-tools/run-exam.mjs
+        rm /login/state.json
+        mv /output/capturas /output/achados-brutos.json /output/pedido.json /tmp/
+        cp /output/publico/pedido.json /output/pedido.json
+        node /opt/design-tools/run-exam.mjs
+        mv /output/capturas /output/achados-brutos.json /output/publico/
+        mv /tmp/capturas /tmp/achados-brutos.json /output/`,
+    ], {timeout: 480_000});
     const raw = await readFile(join(directory, 'achados-brutos.json'), 'utf8');
     assert.equal(raw.includes(password), false);
     const doc = JSON.parse(raw) as {
       screenshots: {route: string; fileName: string; state: string}[];
       unavailable: {route: string; status: number}[];
       auditLoginFailures: {tool: string; route: string}[];
-      reports: Record<'axe' | 'pa11y' | 'lighthouse' | 'render', {route: string}[]>;
+      reports: Record<'axe' | 'pa11y' | 'lighthouse', {route: string}[]> & {
+        render: {route: string; viewport: number; motion?: unknown}[];
+        keyboard: {file: string}[];
+      };
       computed: {route: string}[];
     };
     assert.deepEqual(doc.screenshots.map(row => [row.route, row.state]), accepted.map(route => [route, 'padrao']));
     assert.deepEqual((await readdir(join(directory, 'capturas'))).sort(), doc.screenshots.map(row => row.fileName).sort());
     assert.deepEqual(doc.unavailable.map(row => [row.route, row.status]), rejected.map(route => [route, 401]));
-    for (const [tool, reports] of Object.entries({...doc.reports, computed: doc.computed})) {
-      if (!['axe', 'pa11y', 'lighthouse', 'render', 'computed'].includes(tool)) continue;
+    const {axe, pa11y, lighthouse, render} = doc.reports;
+    for (const [tool, reports] of Object.entries({axe, pa11y, lighthouse, render, computed: doc.computed})) {
       assert.deepEqual([...new Set(reports.map(row => row.route))].sort(), accepted.filter(route => route !== `/so-${tool}`), tool);
     }
-    for (const tool of ['pa11y', 'lighthouse']) {
-      const failures = doc.auditLoginFailures.filter(row => row.route === `/so-${tool}`);
-      assert.deepEqual(failures, [{route: `/so-${tool}`, tool}]);
-      const result = interpretDesignImageDocument({...doc, unavailable: [], auditLoginFailures: failures});
-      assert.equal(designExamStatus(result).code, 1, tool);
+    assert.ok(doc.reports.render.some(row => row.route === '/painel' && row.viewport === 320));
+    assert.ok(doc.reports.keyboard.some(row => row.file.startsWith('/painel ')));
+    assert.ok(doc.reports.render.some(row => row.route === '/so-regua' && row.viewport === 375));
+    assert.equal(doc.reports.render.some(row => row.route === '/so-regua' && (row.viewport === 320 || row.motion)), false);
+    assert.equal(doc.reports.keyboard.some(row => row.file.startsWith('/so-teclado ')), false);
+    const failures = [
+      {route: '/so-regua', tool: 'render'},
+      {route: '/so-teclado', tool: 'keyboard'},
+      {route: '/so-pa11y', tool: 'pa11y'},
+      {route: '/so-lighthouse', tool: 'lighthouse'},
+    ];
+    for (const failure of failures) {
+      assert.deepEqual(doc.auditLoginFailures.filter(row => row.route === failure.route), [failure]);
+      const result = interpretDesignImageDocument({...doc, unavailable: [], auditLoginFailures: [failure]});
+      assert.equal(designExamStatus(result).code, 1, failure.tool);
     }
+    const publicDoc = interpretDesignImageDocument(JSON.parse(await readFile(join(publicDir, 'achados-brutos.json'), 'utf8')));
+    assert.deepEqual(publicDoc.shotMeta.map(row => row.route), ['/publico']);
+    assert.equal(designExamStatus(publicDoc).code, 0);
   } finally {
     await rm(directory, {recursive: true, force: true});
   }
