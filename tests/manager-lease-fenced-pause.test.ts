@@ -177,3 +177,15 @@ test('a manager whose heartbeat stopped still loses the lease once the total giv
   await db.heartbeat(next);
  }finally{await db.close();await isolated.close();}
 });
+
+// Second review (observation): a stuck session idle inside a transaction would hold the anchor or the manager row forever and
+// block the abandoned-run sweep. The pool ends such sessions after a generous timeout, above any legitimate fenced call.
+test('the ledger pool ends sessions left idle inside a transaction',async()=>{
+ const {IDLE_IN_TRANSACTION_TIMEOUT_MS}=await import('../src/ledger.ts');
+ const {db,isolated}=await setup('lease_idle_tx');
+ try{
+  const shown=(await db.pool.query("SELECT setting::bigint ms FROM pg_settings WHERE name='idle_in_transaction_session_timeout'")).rows[0];
+  assert.equal(Number(shown.ms),IDLE_IN_TRANSACTION_TIMEOUT_MS);
+  assert.ok(IDLE_IN_TRANSACTION_TIMEOUT_MS>=5*60*1000,'well above the 80 s Docker call of the incident');
+ }finally{await db.close();await isolated.close();}
+});

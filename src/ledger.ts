@@ -41,10 +41,13 @@ export const FENCED_EXTENSION_HEARTBEAT_SECONDS = 30;
 /** Absolute ceiling of the time given back since the last real heartbeat: a manager whose heartbeat stopped cannot keep the
  * lease longer than this by chaining fenced transactions with short gaps. */
 export const FENCED_EXTENSION_TOTAL_SECONDS = 300;
+/** Ends a session left idle inside a transaction (a stuck caller holding the context anchor or the manager row). Above the
+ * longest legitimate fenced transaction: a Docker call on a saturated disk took about 80 s on 25/11/2026. */
+export const IDLE_IN_TRANSACTION_TIMEOUT_MS = 10 * 60 * 1000;
 const fencedLeases = new WeakMap<pg.PoolClient, Map<string, {instanceId: string; epoch: number; leaseUntil: string; fencedAt: string}>>();
 export class Ledger {
   readonly pool: pg.Pool;
-  constructor(connectionString: string,readonly installationAuthority?:InstallationFenceToken,readonly runtimeIdentity?:RuntimeIdentity,/** Volumes the installation writes to; the capacity gate measures these before admitting a new worker. */readonly launchVolumes?:readonly string[]) { if(runtimeIdentity)RuntimeIdentity.parse(runtimeIdentity);this.pool = new pg.Pool({ connectionString, max: 8 }); }
+  constructor(connectionString: string,readonly installationAuthority?:InstallationFenceToken,readonly runtimeIdentity?:RuntimeIdentity,/** Volumes the installation writes to; the capacity gate measures these before admitting a new worker. */readonly launchVolumes?:readonly string[]) { if(runtimeIdentity)RuntimeIdentity.parse(runtimeIdentity);this.pool = new pg.Pool({ connectionString, max: 8, idle_in_transaction_session_timeout: IDLE_IN_TRANSACTION_TIMEOUT_MS }); }
   async tx<T>(fn: (c: pg.PoolClient) => Promise<T>): Promise<T> {
     const c = await this.pool.connect();
     try {
