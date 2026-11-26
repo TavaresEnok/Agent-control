@@ -39,6 +39,7 @@
   "design-module-wiring.test.ts",
   "design-project-config.test.ts",
   "design-render.test.ts",
+  "design-authenticated-capture.test.ts",
   "design-browser-guard.test.ts",
   "design-browser-redirect.test.ts",
   "design-capture-stage.test.ts",
