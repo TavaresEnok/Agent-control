@@ -1,5 +1,5 @@
 import {findHostCollector} from './simple-host-tools.ts';
-import {simpleToolsImage} from './simple-tools-image.ts';
+import {isInstalledCommonImage,simpleToolsImage} from './simple-tools-image.ts';
 import {sharedSimpleWorktree} from './simple-worktree.ts';
 import {containFailure} from './failure-log.ts';
 import {withInstallationImageLock} from './personal-image-lock.ts';
@@ -286,7 +286,8 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       preparedDir,
       image,
     });
-    return {image,intentId,commonTools:commonImage!==undefined&&commonImage===image};
+    const commonTools=Boolean(commonImage&&commonImage===image||input.isolation==='simple'&&needImage&&input.image&&!localCollector&&await isInstalledCommonImage(input.image));
+    return {image,intentId,commonTools};
   });
 
   let shared: Awaited<ReturnType<typeof sharedSimpleWorktree>> | undefined;

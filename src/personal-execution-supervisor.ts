@@ -112,6 +112,7 @@ export class PersonalExecutionSupervisor extends NativeExecutionSupervisor{
     const ctx=(await this.ledger.pool.query('SELECT project_id FROM ac_contexts WHERE id=$1',[authority.contextId])).rows[0];
     await releaseIdleSharedWorktrees(this.config.dataDirectory,await this.jobRepository(this.ledger.pool,ctx.project_id),true,input.base);
    }
+   await rm(join(p.root,'cli-tmp'),{recursive:true,force:true});
    await rm(join(p.root,'host-job.json'),{force:true});
    await writeFile(join(p.root,'worker-terminal.log'),(result.failureCode??'completed')+'\n',{mode:0o600});
    const physical={isolation:'simple',jobId:input.jobId,unit:unit(input.jobId),state:'exited',exitCode:result.exitCode,workerExitCode:result.exitCode,normalizedTokensUsed:result.normalizedTokensUsed,failureCode:result.failureCode};

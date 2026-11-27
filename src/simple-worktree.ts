@@ -10,7 +10,7 @@ import {withInstallationImageLock} from './personal-image-lock.ts';
 const exec=promisify(execFile);
 export async function worktreeGit(repository:string,args:string[]){
  const {stdout}=await exec('/usr/bin/git',['-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false','-C',repository,...args],{
-  env:{PATH:'/usr/bin:/bin',LC_ALL:'C',GIT_CONFIG_GLOBAL:'/dev/null',GIT_CONFIG_NOSYSTEM:'1',GIT_TERMINAL_PROMPT:'0',
+  env:{PATH:'/usr/bin:/bin',LC_ALL:'C',GIT_CONFIG_GLOBAL:'/dev/null',GIT_CONFIG_NOSYSTEM:'1',GIT_TERMINAL_PROMPT:'0',GIT_OPTIONAL_LOCKS:'0',
    GIT_AUTHOR_NAME:'Agent Control',GIT_AUTHOR_EMAIL:'agent-control@localhost',GIT_COMMITTER_NAME:'Agent Control',GIT_COMMITTER_EMAIL:'agent-control@localhost'},
   timeout:600000,maxBuffer:16*1024*1024});
  return stdout;

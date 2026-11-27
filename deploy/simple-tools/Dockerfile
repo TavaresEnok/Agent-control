@@ -2,6 +2,7 @@
 # The performance observer runs directly in its original runtime. Its browser
 # installation is shared with QA (both recipes pin the same Playwright base).
 FROM desempenho
+LABEL io.agent-control.simple-tools=1
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends proot util-linux && rm -rf /var/lib/apt/lists/*
 # The collectors require different system libraries, absolute paths and tool

@@ -125,6 +125,8 @@ test('the personal module CLI runs the provider in its account HOME and records 
   await writeFile(join(bin,'claude'),`#!${process.execPath}
 const fs=require('node:fs');
 if(!fs.existsSync(process.env.HOME+'/.credentials.json')||process.env.HOME!==process.env.CLAUDE_CONFIG_DIR)process.exit(2);
+try{fs.appendFileSync('index.ts','attempt');process.exit(3);}catch(error){if(error.code!=='EACCES'&&error.code!=='EPERM')throw error;}
+fs.writeFileSync(process.env.TMPDIR+'/scratch','ok');
 const task=JSON.parse(fs.readFileSync(0,'utf8').split('\\nReturn JSON matching ')[0]);
 console.log(JSON.stringify({structured_output:{kind:'exame',binding:task.binding,filesRead:[task.file],checklist:['qa'],routesReviewed:[],findings:[]}}));
 `,{mode:0o755});

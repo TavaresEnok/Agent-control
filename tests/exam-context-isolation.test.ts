@@ -399,7 +399,7 @@ test('verificação pessoal via CLI usa contexto dedicado verify, convive com ge
     await mkdir(databasesDirectory, {recursive: true, mode: 0o700});
     // A published stamp has its manifest; the exam confirms it after claiming the stamp.
     await writeFile(join(databasesDirectory, 'manifest.json'), '{}\n');
-    await writeFile(join(dataDirectory, 'verify-image.json'), JSON.stringify({image: `sha256:${'ab'.repeat(32)}`}), {mode: 0o600});
+    await writeFile(join(dataDirectory, 'simple-tools-image.json'), JSON.stringify({image: `sha256:${'ab'.repeat(32)}`}), {mode: 0o600});
     await writeFile(
       join(dataDirectory, 'verify-db', 'current.json'),
       JSON.stringify({directory: databasesDirectory, fetchedAt: new Date().toISOString(), manifestSha256: 'c'.repeat(64)}),
@@ -513,7 +513,7 @@ test('exame de design, criar e validador deixam intenção em failed na falha e 
     await mkdir(databasesDirectory, {recursive: true, mode: 0o700});
     // A published stamp has its manifest; the exam confirms it after claiming the stamp.
     await writeFile(join(databasesDirectory, 'manifest.json'), '{}\n');
-    await writeFile(join(dataDirectory, 'verify-image.json'), JSON.stringify({image: `sha256:${'ab'.repeat(32)}`}), {mode: 0o600});
+    await writeFile(join(dataDirectory, 'simple-tools-image.json'), JSON.stringify({image: `sha256:${'ab'.repeat(32)}`}), {mode: 0o600});
     await writeFile(
       join(dataDirectory, 'verify-db', 'current.json'),
       JSON.stringify({directory: databasesDirectory, fetchedAt: new Date().toISOString(), manifestSha256: 'c'.repeat(64)}),

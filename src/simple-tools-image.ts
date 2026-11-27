@@ -18,3 +18,12 @@ export async function simpleToolsImage(dataDirectory:string){
  if(!/^sha256:[a-f0-9]{64}$/.test(id))throw new Refusal('VERIFY_IMAGE_UNPINNED');
  return id;
 }
+
+/** A remeasurement can request the previous common image after its tag moves. */
+export async function isInstalledCommonImage(image:string){
+ if(!/^sha256:[a-f0-9]{64}$/.test(image))return false;
+ try{
+  const {stdout}=await exec('docker',['image','inspect','--format','{{index .Config.Labels "io.agent-control.simple-tools"}}',image]);
+  return stdout.trim()==='1';
+ }catch{return false /* absence is reported by the normal collector image check */;}
+}

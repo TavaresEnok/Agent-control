@@ -7,7 +7,7 @@ import {withInstallationImageLock} from './personal-image-lock.ts';
 import {Ledger} from './ledger.ts';
 import type {Installation} from './installation.ts';
 import {inventoryJobWork,releaseRegisteredDirectory} from './native-work-retention.ts';
-import {releaseIdleSharedWorktrees} from './simple-worktree.ts';
+import {releaseIdleSharedWorktrees,removeSimpleWorktree,worktreeGit} from './simple-worktree.ts';
 import {terminalWorkLockKey} from './native-execution-shared.ts';
 import {defaultProcessInside,mountedInside,protectedDigests} from './personal-artifact-retention.ts';
 
@@ -118,15 +118,31 @@ async function retainDockerResources(config:Installation,apply:boolean){
 }
 
 const protectedTempName=(name:string)=>protectedName(name)||/backup|verifica[cç][oõ]es|^PG_VERSION$|^basebackup|\.(?:dump|sql|backup)(?:\.|$)/i.test(name);
-export async function discardableTempContents(path:string,device:bigint,cutoff:number):Promise<boolean>{
+export async function discardableTempContents(path:string,device:bigint,cutoff:number,reviewRoot=false):Promise<boolean>{
  const entries=await opendir(path);
  for await(const entry of entries){
-  if(entry.name==='.git'||protectedTempName(entry.name))return false;
+  if(entry.name==='.git'&&!(reviewRoot&&entry.isFile())||protectedTempName(entry.name))return false;
   const child=join(path,entry.name),info=await lstat(child,{bigint:true});
   if(info.dev!==device||info.uid!==BigInt(process.getuid!())||Number(info.mtimeMs)>cutoff)return false;
   if(info.isDirectory()&&!await discardableTempContents(child,device,cutoff))return false;
  }
  return true;
+}
+
+async function oldReviewerRepository(config:Installation,path:string){
+ const git=await lstat(join(path,'.git')).catch((e:NodeJS.ErrnoException)=>{if(e.code!=='ENOENT')throw e;});
+ if(!git?.isFile())return;
+ for(const project of [config.project,...config.projects]){
+  const list=await worktreeGit(project.repo,['worktree','list','--porcelain','-z']).catch(()=>'' /* absent project cannot own the checkout */);
+  const record=list.split('\0\0').slice(1).find(row=>row.startsWith('worktree '+path+'\0'));
+  if(!record||record.includes('\0locked')||record.includes('\0prunable'))continue;
+  const tip=record.split('\0').find(field=>field.startsWith('HEAD '))?.slice(5);
+  if(!tip||!/^([a-f0-9]{40})$/.test(tip))continue;
+  const status=await worktreeGit(path,['status','--porcelain','-z','--untracked-files=all','--ignored']);
+  if(status)continue;
+  try{await worktreeGit(project.repo,['merge-base','--is-ancestor',tip,'HEAD']);}catch{continue;}
+  return project.repo;
+ }
 }
 
 export async function simpleTempRetention(config:Installation,apply:boolean){
@@ -141,8 +157,12 @@ export async function simpleTempRetention(config:Installation,apply:boolean){
   // Git checkouts may be unmerged worker branches. Registered worker worktrees
   // use the existing merge and clean-tree checks in artifact retention.
   if(entry.isDirectory()){
-   if(!await discardableTempContents(path,info.dev,Date.now()-day).catch(()=>false /* unreadable content must be preserved */))continue;
-   if(apply)await releaseRegisteredDirectory(path,{dev:String(info.dev),ino:String(info.ino)});
+   const review=/(?:review|revis[aã]o|revisor)/i.test(entry.name)?await oldReviewerRepository(config,path):undefined;
+   if(!await discardableTempContents(path,info.dev,Date.now()-day,Boolean(review)).catch(()=>false /* unreadable content must be preserved */))continue;
+   if(apply){
+    if(review)await removeSimpleWorktree(review,path);
+    else await releaseRegisteredDirectory(path,{dev:String(info.dev),ino:String(info.ino)});
+   }
   }else{
    if(/\.(?:tar|gz|xz|zst|zip|7z|oci)(?:\.|$)/i.test(entry.name))continue;
    const current=await lstat(path,{bigint:true});

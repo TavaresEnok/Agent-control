@@ -1,7 +1,7 @@
 import {execFile} from 'node:child_process';
-import {readFile,writeFile,rename} from 'node:fs/promises';
+import {mkdir,readFile,rm,writeFile,rename} from 'node:fs/promises';
 import {dirname,join,resolve} from 'node:path';
-import {pathToFileURL} from 'node:url';
+import {fileURLToPath,pathToFileURL} from 'node:url';
 import {NativeExecutionRequest,Result,type Input} from './native-execution-shared.ts';
 import {cliEffort,Effort} from './effort.ts';
 import {extractJsonObject} from './codex-personal.ts';
@@ -17,10 +17,10 @@ import {providerFailureCode} from './exam-login.ts';
 
 export type HostJob={input:Input;repo:string;dataDirectory:string;home:string;reviewBase?:string;provider:'codex'|'claude'|'grok';model:string;effort:string};
 
-async function runCli(job:HostJob,cwd:string,task:string){
+async function runCli(job:HostJob,cwd:string,task:string,scratch:string){
  const {input,provider,model,home}=job;
  const effort=cliEffort(provider,Effort.parse(job.effort)),writer=input.role==='programmer';
- const env={HOME:home,PATH:process.env.PATH,LANG:'C.UTF-8',CLAUDE_CONFIG_DIR:home,CODEX_HOME:join(home,'.codex'),TMPDIR:process.env.TMPDIR??'/tmp'};
+ const env={HOME:home,PATH:process.env.PATH,LANG:'C.UTF-8',CLAUDE_CONFIG_DIR:home,CODEX_HOME:join(home,'.codex'),TMPDIR:scratch};
  let args:string[];
  if(provider==='claude'){
   args=['--print','--model',model,'--effort',effort,'--output-format','json','--no-session-persistence',
@@ -34,7 +34,8 @@ async function runCli(job:HostJob,cwd:string,task:string){
    ...(writer?['--no-plan','--always-approve']:['--permission-mode','plan',...(input.moduleExam?['--tools','']:[])]),'--output-format','plain','-p',task];
  }
  const stdout=await new Promise<string>((done,fail)=>{
-  const child=execFile(provider,args,{cwd,env,timeout:input.timeoutMs,killSignal:'SIGKILL',maxBuffer:4*1024*1024},(error,out,err)=>{
+  const wrapper=fileURLToPath(new URL('../scripts/personal-readonly-cli.py',import.meta.url));
+  const child=execFile(writer?provider:'/usr/bin/python3',writer?args:['-I','-S',wrapper,provider,...args],{cwd,env,timeout:input.timeoutMs,killSignal:'SIGKILL',maxBuffer:4*1024*1024},(error,out,err)=>{
    if(error){const limit=claudeLimitFromText([err,out]);fail(new Refusal(limit?.failureCode??providerFailureCode(err)??'EXECUTION_NATIVE_FAILED'));}
    else done(out);
   });
@@ -82,10 +83,11 @@ export async function finalizeSimpleWork(repo:string,cwd:string,input:Input,secr
 
 export async function runSimpleWorker(root:string,job:HostJob,invoke=runCli){
  const input=NativeExecutionRequest.parse(job.input);
- const dir=join(root,'output'),work=join(root,'work');
+ const dir=join(root,'output'),work=join(root,'work'),scratch=join(root,'cli-tmp');
  let release:(()=>Promise<unknown>)|undefined;
  let result:ReturnType<typeof Result.parse>={schemaVersion:1,jobId:input.jobId,output:'',exitCode:1,failureCode:'EXECUTION_NATIVE_FAILED',nativeSessionId:null,normalizedTokensUsed:null,usageWindows:null};
  try{
+  await mkdir(scratch,{mode:0o700});
   const secrets=await readMountedCredentialSecrets(job.provider,job.home);
   assertNoNativeTaskSecrets(input.task,secrets);
   let cwd=work;
@@ -101,14 +103,14 @@ export async function runSimpleWorker(root:string,job:HostJob,invoke=runCli){
    (change.truncated?'\nInspect the remaining changed files in the current checkout.':''):'';
   const task=input.task+material+(input.outputSchema?'\nReturn JSON matching '+JSON.stringify(input.outputSchema):'');
   assertNoNativeTaskSecrets(task,secrets);
-  const response=await invoke(job,cwd,task);
+  const response=await invoke(job,cwd,task,scratch);
   if(input.role==='programmer'){
    const artifact=await finalizeSimpleWork(job.repo,cwd,input,secrets);
    await writeFile(join(dir,'artifact.json'),JSON.stringify(artifact),{flag:'wx',mode:0o600});
   }
   result=Result.parse({...result,...response,output:redactSecrets(response.output,secrets),exitCode:0,failureCode:null});
  }catch(error){result.failureCode=error instanceof Refusal?error.code:'EXECUTION_NATIVE_FAILED';}
- finally{await release?.();}
+ finally{try{await release?.();}finally{await rm(scratch,{recursive:true,force:true});}}
  const pending=join(dir,'result.pending');
  await writeFile(pending,JSON.stringify(result),{mode:0o600});
  await rename(pending,join(dir,'execution-result.json'));

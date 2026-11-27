@@ -12,9 +12,9 @@ export type HostCollector={module:Module;identity:string;command:string[]};
 const exec=promisify(execFile);
 const files:Record<Exclude<Module,'desempenho'>,string[]>={
  verify:['/opt/agent-control/verify-tools.lock.json','/opt/agent-control/rules/seguranca.yaml'],
- qa:['/opt/qa-tools/tools.lock.json','/opt/qa-tools/collect.mjs'],
+ qa:['/opt/qa-tools/qa-tools.lock.json','/opt/qa-tools/collect.mjs'],
  arquitetura:['/opt/arquitetura-tools/tools.lock.json','/opt/arquitetura-tools/collect.mjs'],
- dependencias:['/opt/dependencias-tools/tools.lock.json','/opt/dependencias-tools/collect.mjs'],
+ dependencias:['/opt/dependencias-tools/dependencias-tools.lock.json','/opt/dependencias-tools/collect.mjs'],
  banco:['/opt/banco/tools.sha256','/opt/banco/collector.rb'],
  prontidao:['/opt/prontidao/tools.lock.json','/opt/prontidao/run-collector.mjs'],
  documentacao:['/opt/documentacao-tools/tools.lock.json','/opt/documentacao-tools/collect.mjs'],
