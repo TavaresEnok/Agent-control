@@ -45,6 +45,7 @@ test('cookie mudado ou novo é detectado; páginas iguais ignoram a barra final'
   assert.equal(samePage(new URL('https://a.local/entrar?view=console'), new URL('https://a.local/entrar')), true);
   assert.equal(samePage(new URL('https://a.local/entrar?returnTo=%2Fpainel'), new URL('https://a.local/entrar')), true);
   assert.equal(samePage(new URL('https://a.local/entrar#formulario'), new URL('https://a.local/entrar')), true);
+  assert.equal(samePage(new URL('https://a.local/#!/privado'), new URL('https://a.local/')), true);
 });
 
 test('a decisão da captura usa os caminhos sem query e o marcador apenas nas rotas declaradas', async () => {
@@ -56,13 +57,17 @@ test('a decisão da captura usa os caminhos sem query e o marcador apenas nas ro
     locator: (selector: string) => ({filter: () => ({count: () => Number(shown.has(selector))})}),
     childFrames: () => [],
   };
-  const check = (requested: string, final: string) => pageShowsLogin(
-    {...frame, mainFrame: () => frame, url: () => origin + final}, origin + requested, login);
+  const check = (requested: string, final: string, successRoutes = login.successRoutes) => pageShowsLogin(
+    {...frame, mainFrame: () => frame, url: () => origin + final}, origin + requested, {...login, successRoutes});
   shown.add('#email');
   assert.equal(await check('/protegida', '/?destino=protegida'), true);
-  assert.equal(await check('/protegida', '/?destino=protegida#/email'), true);
+  assert.equal(await check('/protegida', '/?destino=protegida#/email'), false);
+  assert.equal(await check('/#/privado', '/?reauth=1'), true);
   assert.equal(await check('/', '/?locale=pt'), false);
   assert.equal(await check('/painel', '/painel?origem=inicio'), true);
+  assert.equal(await check('/#/privado', '/#/privado', ['/']), false);
+  assert.equal(await check('/', '/?locale=pt#formulario', ['/']), true);
+  assert.equal(await check('/#/privado', '/?locale=pt#/privado?aba=1', ['/#/privado']), true);
   shown.add('#painel-pronto');
   assert.equal(await check('/painel', '/painel'), false);
   assert.equal(await check('/protegida', '/'), true);

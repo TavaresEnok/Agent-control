@@ -1,1 +1,1 @@
-localhost:5000/ac-design:captura-sessao-d@sha256:ba73fbd5fe92500d7a686b4f4a8194d66d3a62184d8d7f0fa650a877866b92f1
+localhost:5000/ac-design:captura-sessao-d-hash@sha256:025f623bc50e30b0b741ae1a0abaedff12e2fdfd76ef8adf97eddf7b2eabf4b5

@@ -19,10 +19,10 @@ export function samePage(a, b) {
   return a.origin === b.origin && loginRoute(a) === loginRoute(b);
 }
 
-export function loginRoute(url, hashRoute = true) {
+export function loginRoute(url) {
   const path = url.pathname.replace(/\/+$/u, '') || '/';
   const fragment = url.hash.split('?')[0];
-  return path + (hashRoute && /^#!?\//u.test(fragment) ? fragment.replace(/\/+$/u, '') : '');
+  return path + (fragment.startsWith('#/') ? fragment.replace(/\/+$/u, '') : '');
 }
 
 async function visible(frame, selector) {
@@ -47,11 +47,11 @@ export async function pageShowsLogin(page, requestedUrl, login) {
   const final = new URL(page.url());
   const requested = new URL(requestedUrl);
   if (final.origin !== requested.origin) return true;
-  const usesHash = login.path?.includes('#') === true;
-  if (loginRoute(final, usesHash) === login.path && loginRoute(requested, usesHash) !== login.path) return true;
+  const finalRoute = loginRoute(final);
+  if (finalRoute === login.path && loginRoute(requested) !== login.path) return true;
   const selectors = [login.usernameSelector, login.passwordSelector, login.submitSelector].filter(Boolean);
   if (selectors.length && await formVisible(page.mainFrame(), selectors)) return true;
-  return Boolean(login.successSelector && login.successRoutes?.some(route => loginRoute(final, route.includes('#')) === route)
+  return Boolean(login.successSelector && login.successRoutes?.includes(finalRoute)
     && !await visible(page, login.successSelector));
 }
 

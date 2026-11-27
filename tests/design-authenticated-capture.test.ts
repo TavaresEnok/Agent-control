@@ -188,6 +188,8 @@ test('Chromium no host reconhece a perda de sessão e o UID da imagem lê seu es
   const directory = await mkdtemp(join(tmpdir(), 'design-auth-host-'));
   const visits = new Set<string>();
   let renewVisits = 0;
+  let hashSessionExpired = true;
+  let reauthVisits = 0;
   const server = createServer(async (req, res) => {
     visits.add(req.url ?? '');
     const form = '<form><input id="user"><input id="pass" type="password"><button type="button">Entrar</button></form>';
@@ -198,7 +200,11 @@ test('Chromium no host reconhece a perda de sessão e o UID da imagem lê seu es
       res.writeHead(status, {'content-type': 'text/html'}).end('<!doctype html><html><div id="root">' + body + '</div></html>');
     };
     if (req.url === '/' && req.headers.cookie === 'lab=opened') {
-      html('<h1>Painel autenticado na URL do login</h1>');
+      html('<h1>Painel autenticado na URL do login</h1>' + (hashSessionExpired
+        ? '<script>if (location.hash === "#/privado") location.replace("/?reauth=1")</script>' : ''));
+    } else if (req.url === '/?reauth=1') {
+      reauthVisits++;
+      html('<h1>Entre novamente</h1>');
     } else if (req.url === '/?email=1') {
       assert.equal(req.headers.cookie, 'lab=opened');
       html('<form><input type="email"><button>Continuar</button></form>');
@@ -295,6 +301,17 @@ test('Chromium no host reconhece a perda de sessão e o UID da imagem lê seu es
     await t.test('marcador usado apenas para confirmar a entrada não é exigido na raiz autenticada', async () => {
       assert.equal((await capture([plan('/')], {...login, successRoutes: undefined})).captures.length, 1);
     });
+    const privatePlan = {...plan('/#/privado'), fileName: 'privado.png'};
+    await t.test('rota com fragmento que volta ao login renova uma vez e descarta a captura', async () => {
+      await assert.rejects(capture([privatePlan], noMarker), {code: 'DESIGN_CAPTURE_LOGIN_FAILED'});
+      assert.equal(reauthVisits, 2);
+      assert.equal((await readdir(directory)).includes(privatePlan.fileName), false);
+    });
+    await t.test('sessão válida em /#/privado dispensa o marcador configurado para /', async () => {
+      hashSessionExpired = false;
+      const result = await capture([privatePlan], {...login, successRoutes: ['/']});
+      assert.deepEqual(result.captures.map(row => row.route), ['/#/privado']);
+    });
     assert.deepEqual((await capture(accepted.map(plan))).captures.map(row => row.route), accepted);
     const failures = {
       '/expirada': 'redirecionamento ao login sem campo de senha',
@@ -315,7 +332,7 @@ test('Chromium no host reconhece a perda de sessão e o UID da imagem lê seu es
     }]), {code: 'DESIGN_CAPTURE_LOGIN_FAILED'});
     assert.ok(visits.has('/negada'));
     assert.equal(renewVisits, 2);
-    assert.deepEqual((await readdir(directory)).sort(), ['2fa.png', 'capturas.json', 'inicio.png', 'renovavel.png', 'senha-apenas.png', 'trocar-senha.png']);
+    assert.deepEqual((await readdir(directory)).sort(), ['2fa.png', 'capturas.json', 'inicio.png', 'privado.png', 'renovavel.png', 'senha-apenas.png', 'trocar-senha.png']);
   } finally {
     server.close();
     if (state) await rm(dirname(state), {recursive: true, force: true});
