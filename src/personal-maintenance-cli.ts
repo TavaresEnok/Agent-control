@@ -3,11 +3,11 @@ import {resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {Refusal} from './contracts.ts';
 import {ModuleExamRecoveryPreserved,type ModuleExamRecoveryReason} from './native-execution-supervisor.ts';
-import {RetentionIncomplete,runPersonalMaintenance} from './personal-maintenance.ts';
+import {MaintenanceIncomplete,RetentionIncomplete,runPersonalMaintenance} from './personal-maintenance.ts';
 
 const messages:Record<string,string>={
  ...artifactCliMessages,
- MAINTENANCE_USAGE:'Uso: npm run personal:maintenance -- <instalação.json> [--vagas-da-conta <contaId> <1-8> | --abandonar-design <jobId> | --recuperar-exame-passivo <jobId> | --recuperar-exame-orfao <jobId> | --liberar-work-exames (--projeto <id> [--limite N] [--apos <id>] | --job <id>...) [--aplicar] | --retencao-automatica [--aplicar]]\n'+ARTIFACT_USAGE,
+ MAINTENANCE_USAGE:'Uso: npm run personal:maintenance -- <instalação.json> [--dependencias-docker | --vagas-da-conta <contaId> <1-8> | --abandonar-design <jobId> | --recuperar-exame-passivo <jobId> | --recuperar-exame-orfao <jobId> | --liberar-work-exames (--projeto <id> [--limite N] [--apos <id>] | --job <id>...) [--aplicar] | --retencao-automatica [--aplicar]]\n'+ARTIFACT_USAGE,
  NATIVE_ORPHAN_ACTIVE_LEASE:'O contexto ainda tem um lease válido. O job e a vaga foram preservados.',
  NATIVE_ORPHAN_CONTAINER_PRESENT:'O worker ou o contêiner de ferramentas está ativo ou a identidade dele não foi confirmada. O job e a vaga foram preservados.',
  NATIVE_EXECUTION_JOB_NOT_FOUND:'Job de exame não encontrado nesta instalação.',
@@ -59,6 +59,7 @@ const preservedReasons:Record<ModuleExamRecoveryReason,string>={
 };
 
 export function maintenanceCliFailureText(error:unknown):string{
+ if(error instanceof MaintenanceIncomplete)return 'A manutenção terminou com etapa(s) em falha. Veja as linhas acima.';
  if(error instanceof RetentionIncomplete)return 'A retenção terminou com etapa(s) em falha; as demais etapas rodaram. Veja as linhas acima.';
  if(error instanceof ModuleExamRecoveryPreserved)return `A reserva da tentativa foi mantida: ${preservedReasons[error.reason]}.${error.removed.length?` Contêineres já removidos: ${error.removed.join(', ')}.`:''} Nada foi iniciado.`;
  const code=error instanceof Refusal?error.code:'';

@@ -15,11 +15,13 @@ import {recoverPersonalOrphanedExams} from './personal-orphaned-exams.ts';
 import {inventoryJobWork,readRetentionCursor,rotateAfter,writeRetentionCursor} from './native-work-retention.ts';
 import {composePersonalExecutionSupervisors} from './personal-runtime.ts';
 import {readCurrentVerifyDatabase,refreshVerifyDatabases,runVerifyDatabaseRetention} from './verify-db.ts';
+import {checkPersonalDockerDependencies} from './personal-docker-dependencies.ts';
 
 const imageId=/^sha256:[a-f0-9]{64}$/;
 type Pair={workerImage:string;toolsImage:string};
 
 export type MaintenanceDeps={
+ dockerDependencies?:typeof checkPersonalDockerDependencies;
  /** Runs a fixed docker command and returns its exit code. */
  docker?:(args:string[])=>Promise<number>;
  /** Whether Docker still has this image. */
@@ -507,7 +509,7 @@ export async function runPersonalJobRetention(config:Installation,apply:boolean,
 // bases (vulnerability databases), retention (work copies, worktrees, images, temporaries) and a build cache that is cleaned ONLY
 // on a builder dedicated to this installation. The Docker daemon is shared with other projects: its own cache is never pruned.
 
-type StageKey='bases'|'retention'|'cache';
+type StageKey='docker'|'bases'|'retention'|'cache';
 type StageStatus={lastRun?:string;lastSuccess?:string;outcome?:'ok'|'failed'|'skipped'};
 type MaintenanceStatus={schemaVersion:1;stages:Partial<Record<StageKey,StageStatus>>};
 const STATUS_FILE='maintenance-status.json';
@@ -518,7 +520,7 @@ async function readMaintenanceStatus(dataDirectory:string):Promise<MaintenanceSt
  const status:MaintenanceStatus={schemaVersion:1,stages:{}};
  try{
   const raw=JSON.parse(await readFile(join(dataDirectory,STATUS_FILE),'utf8')) as {stages?:Record<string,Record<string,unknown>>};
-  for(const key of ['bases','retention','cache'] as const){
+  for(const key of ['docker','bases','retention','cache'] as const){
    const entry=raw.stages?.[key];
    if(!entry)continue;
    const outcome=entry.outcome==='ok'||entry.outcome==='failed'||entry.outcome==='skipped'?entry.outcome:undefined;
@@ -552,6 +554,7 @@ async function describeStatus(config:Installation,status:MaintenanceStatus,deps:
   }
  }catch{age='idade da base publicada indisponível';}
  const lines=[`Bases: ${stage('bases')}, ${age}.`,`Retenção: modo ${mode}, ${stage('retention')}.`,`Cache de build dedicado: ${stage('cache')}.`];
+ if(config.dockerDependencies)lines.unshift(`Dependências Docker: ${stage('docker')}.`);
  if(stale)lines.push(`ATENÇÃO: base de vulnerabilidades com mais de ${DATABASE_STALE_DAYS} dias; os exames de segurança usam dados antigos.`);
  return lines;
 }
@@ -575,6 +578,10 @@ async function runMaintenanceStages(config:Installation,file:string,deps:Mainten
   if(result.outcome==='failed')failed.push(key);
   lines.push(...result.lines);
  };
+ if(config.dockerDependencies)await stage('docker',async()=>{
+  const checked=await (deps.dockerDependencies??checkPersonalDockerDependencies)(config.dockerDependencies);
+  return {outcome:checked.failed?'failed':'ok',lines:checked.lines};
+ });
  await stage('bases',async()=>{
   try{
    await (deps.refreshDatabases??(async()=>{await refreshVerifyDatabases({dataDirectory:config.dataDirectory,simple:simpleIsolation(config)});}))(config.dataDirectory);
@@ -602,6 +609,14 @@ async function runMaintenanceStages(config:Installation,file:string,deps:Mainten
 /** Weekly: the vulnerability databases, the retention of the installation and the dedicated build cache, each as its own stage.
  * Volumes, containers and images of other projects are never touched, and the shared daemon's cache is never pruned. The gateway keeps running. */
 export async function runPersonalMaintenance(argv:string[],deps:MaintenanceDeps={}){
+ if(argv.length===2&&argv[1]==='--dependencias-docker'){
+  const config=await loadInstallation(resolve(argv[0]!));
+  if(config.activation!=='personal')throw new Refusal('MAINTENANCE_PERSONAL_REQUIRED');
+  if(!config.dockerDependencies)return ['Nenhuma dependência Docker configurada.'];
+  const checked=await (deps.dockerDependencies??checkPersonalDockerDependencies)(config.dockerDependencies);
+  if(checked.failed)throw new MaintenanceIncomplete(checked.lines,['docker']);
+  return checked.lines;
+ }
  if(argv[1]==='--limpeza-simples' && (argv.length===2 || argv.length===3&&argv[2]==='--aplicar')){
   const config=await loadInstallation(resolve(argv[0]!));
   if(!simpleIsolation(config))throw new Refusal('MAINTENANCE_PERSONAL_REQUIRED');
@@ -644,7 +659,7 @@ export async function runPersonalMaintenance(argv:string[],deps:MaintenanceDeps=
  }
  // Manual run without a flag: databases and the dedicated cache. Retention keeps its own commands and the watch.
  const lines=await runMaintenanceStages(config,file,deps,{retention:false}).catch(error=>{
-  if(error instanceof MaintenanceIncomplete)return error.lines;// a manual run reports a failed stage and still finishes
+  if(error instanceof MaintenanceIncomplete&&!error.failed.includes('docker'))return error.lines;
   throw error;
  });
  const boot=config.nativeBootstrap;

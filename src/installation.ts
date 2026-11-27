@@ -30,6 +30,11 @@ const httpsOrigin=()=>z.string().transform(value=>{
  return url.origin;
 });
 const absolute=z.string().refine(isAbsolute,'Absolute path required');
+export const DockerDependenciesConfig=z.object({
+ containers:z.array(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/)).min(1).max(16)
+  .refine(names=>new Set(names).size===names.length,'Duplicate container name'),
+ autoStart:z.boolean().default(false),
+}).strict();
 export const ProjectEconomy=z.object({map:z.boolean().default(true),measurement:z.boolean().default(true),batch:z.boolean().default(true),imageRetention:z.boolean().default(true),batchTokens:z.number().int().min(1000).max(200000).default(40000),batchFiles:z.number().int().min(1).max(32).optional(),managerDiscipline:z.boolean().default(true),managerContextTokens:z.number().int().min(500).max(20000).default(2500),
  /** Módulos 2 a 9: cada módulo examina só os arquivos do seu escopo. false volta a mandar tudo. */
  scope:z.boolean().default(true),
@@ -46,6 +51,7 @@ export const InstallationObject=z.object({schemaVersion:z.literal(1),mode:z.lite
  databaseUrl:z.string().url().refine(value=>['postgres:','postgresql:'].includes(new URL(value).protocol)),
  projectRoots:z.array(ProjectRoot.extend({path:absolute})).max(32).default([]),
  retention:z.object({automatic:z.enum(['off','preview','apply']).default('preview')}).strict().default({automatic:'preview'}),
+ dockerDependencies:DockerDependenciesConfig.optional(),
  /** Provider egress for personal workers (src/personal-egress.ts). Absent means off. */
  egress:EgressConfig.optional(),
  dataDirectory:absolute,project:projectDefinition,projects:z.array(projectDefinition).max(99).default([]),
