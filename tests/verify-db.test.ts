@@ -109,6 +109,27 @@ test('a atualização publica o manifest e o current.json sem abrir o pai', asyn
   }
 });
 
+test('a renovação simples usa a imagem instalada até a imagem comum estar disponível', async () => {
+  const data = await privateDirectory(), previousPath = process.env.PATH;
+  const common = 'sha256:' + 'b'.repeat(64);
+  try {
+    await writeFile(join(data,'verify-image.json'), JSON.stringify({image}), {mode:0o600});
+    await writeFile(join(data,'simple-tools-image.json'), JSON.stringify({image:common}), {mode:0o600});
+    process.env.PATH=data+':'+previousPath;
+    for(const expected of [image,common]){
+      await writeFile(join(data,'docker'), expected===image?'#!/bin/sh\nexit 1\n':'#!/bin/sh\necho '+common+'\n', {mode:0o700});
+      const snapshot=await refreshVerifyDatabases({dataDirectory:data,simple:true,now,spawn:async args=>{
+        assert.ok(args.includes(expected));
+        return publishingSpawn()(args);
+      }});
+      assert.deepEqual(await readCurrentVerifyDatabase(data),snapshot);
+    }
+  } finally {
+    process.env.PATH=previousPath;
+    await rm(data,{recursive:true,force:true});
+  }
+});
+
 test('uma busca que falha conserva o current.json e não publica o carimbo novo', async () => {
   const data = await privateDirectory();
   try {

@@ -6,7 +6,7 @@ import {installationVolumes} from './personal-disk.ts';
 import {serve} from '@hono/node-server';
 import {z} from 'zod';
 import {join} from 'node:path';
-import {Installation,simpleIsolation,readPrivateFile,loadInstallation,sessionKey,initializeInstallation,prepareInstallationOperator,privateDirectory,syncInstallationActivation} from './installation.ts';
+import {Installation,readPrivateFile,loadInstallation,sessionKey,initializeInstallation,prepareInstallationOperator,privateDirectory,syncInstallationActivation} from './installation.ts';
 import {assertInstallationMigrations,inspectInstallationReadiness,migrationsPendingText} from './installation-readiness.ts';
 import {Refusal} from './contracts.ts';
 import {Ledger} from './ledger.ts';
@@ -254,11 +254,9 @@ async function main(){
      const {readCurrentVerifyDatabase}=await import('./verify-db.ts');
      const databasesDirectory=(await readCurrentVerifyDatabase(config.dataDirectory))?.directory;
      if(!databasesDirectory)throw new Refusal('VERIFY_DB_REQUIRED',409);
-     const simple=simpleIsolation(config);
-     const image=simple?(await (await import('./simple-host-tools.ts')).findHostCollector('verify'))?.identity??await (await import('./simple-tools-image.ts')).simpleToolsImage(config.dataDirectory)
-      :await (await import('./verify-command.ts')).readPinnedImage(config.dataDirectory);
      const {createCapacityNativeWorker}=await import('./verify-native-launch.ts');
-     const {beginPersonalVerification,examRunOptions}=await import('./verify-command.ts');
+     const {beginPersonalVerification,examRunOptions,securityExamTools}=await import('./verify-command.ts');
+     const {simple,image}=await securityExamTools(config);
      const examOptions=examRunOptions(project.economy);
      const {personalAccountRoot}=await import('./personal-health.ts');
      const allowedAccountIds=project.allowedAccountIds!==undefined

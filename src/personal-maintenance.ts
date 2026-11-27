@@ -5,7 +5,6 @@ import {randomUUID} from 'node:crypto';
 import {chmod,lstat,readFile,rename,writeFile} from 'node:fs/promises';
 import {basename,dirname,join,resolve} from 'node:path';
 import {Id,Refusal,type Authority} from './contracts.ts';
-import {simpleToolsImage} from './simple-tools-image.ts';
 import {simpleJobRetention,simpleDockerRetention,simpleTempRetention} from './personal-simple-retention.ts';
 import {loadInstallation,simpleIsolation,type Installation} from './installation.ts';
 import {Ledger} from './ledger.ts';
@@ -578,7 +577,7 @@ async function runMaintenanceStages(config:Installation,file:string,deps:Mainten
  };
  await stage('bases',async()=>{
   try{
-   await (deps.refreshDatabases??(async()=>{await refreshVerifyDatabases({dataDirectory:config.dataDirectory,image:simpleIsolation(config)?await simpleToolsImage(config.dataDirectory):undefined});}))(config.dataDirectory);
+   await (deps.refreshDatabases??(async()=>{await refreshVerifyDatabases({dataDirectory:config.dataDirectory,simple:simpleIsolation(config)});}))(config.dataDirectory);
    return {outcome:'ok',lines:['Bases de vulnerabilidade atualizadas.']};
   }catch{return {outcome:'failed',lines:['Bases de vulnerabilidade não atualizadas. A base anterior permanece.']};}
  });

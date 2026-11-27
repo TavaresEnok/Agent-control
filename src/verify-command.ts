@@ -2,7 +2,7 @@ import {containFailure} from './failure-log.ts';
 import {findHostCollector,hostCollectorArgs} from './simple-host-tools.ts';
 import {simpleIsolation} from './installation.ts';
 import {sharedSimpleWorktree} from './simple-worktree.ts';
-import {simpleToolsImage} from './simple-tools-image.ts';
+import {availableSimpleToolsImage} from './simple-tools-image.ts';
 import {extractGitArchive,stripScannerSuppressions,suppressionNote} from './git-archive-snapshot.ts';
 import {assertDiskSpaceForLaunch,installationVolumes,launchVolumesOf} from './personal-disk.ts';
 import {execFile, spawn} from 'node:child_process';
@@ -878,6 +878,14 @@ function readHead(repoPath: string): Promise<string> {
   });
 }
 
+export async function securityExamTools(config:Pick<Installation,'activation'|'isolation'|'dataDirectory'>){
+ if(simpleIsolation(config)){
+  const image=(await findHostCollector('verify'))?.identity??await availableSimpleToolsImage(config.dataDirectory);
+  if(image)return {simple:true,image};
+ }
+ return {simple:false,image:await readPinnedImage(config.dataDirectory)};
+}
+
 export async function readPinnedImage(dataDirectory: string): Promise<string> {
   let parsed: unknown;
   try {
@@ -983,8 +991,7 @@ export async function resolvePersonalVerification(
       releaseGrant: (grantId, how) => releaseCapacityGrant(ledger, principal, authority!, grantId, how),
       pollBackoff: examRunOptions(project.economy).pollBackoff,
     });
-    const simple=simpleIsolation(config);
-    const image = simple?(await findHostCollector('verify'))?.identity??await simpleToolsImage(config.dataDirectory):await readPinnedImage(config.dataDirectory);
+    const {simple,image}=await securityExamTools(config);
     const databases = await readCurrentVerifyDatabase(config.dataDirectory);
     if (!databases) throw new Refusal('VERIFY_DB_REQUIRED', 409);
     if (parsed.url === undefined) {

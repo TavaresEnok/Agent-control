@@ -1,3 +1,4 @@
+import {availableSimpleToolsImage} from './simple-tools-image.ts';
 import {spawn as spawnProcess} from 'node:child_process';
 import {createHash, randomUUID} from 'node:crypto';
 import {constants, createReadStream} from 'node:fs';
@@ -14,6 +15,7 @@ export type VerifyDatabaseSnapshot = {
 };
 
 export type RefreshVerifyDatabasesInput = {
+  simple?: boolean;
   dataDirectory: string;
   image?: string;
   spawn?: (args: readonly string[]) => Promise<number>;
@@ -260,7 +262,7 @@ export async function refreshVerifyDatabases(input: RefreshVerifyDatabasesInput)
   const root = resolve(input.dataDirectory);
   const now = input.now ?? new Date();
   if (Number.isNaN(now.getTime())) throw new Error('VERIFY_DB_FETCH_FAILED');
-  const image = input.image ? input.image : await readInstalledImage(root);
+  const image = input.image ?? (input.simple ? await availableSimpleToolsImage(root) : undefined) ?? await readInstalledImage(root);
   const parent = join(root, 'verify-db');
   const fetchedAt = now.toISOString();
   verifyDatabaseArguments({image, output: join(parent, formatStamp(now))});
