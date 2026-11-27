@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {Refusal} from '../src/contracts.ts';
 import {parseDesignArgs, readDesignLoginFile, readDesignRepository} from '../src/design-command.ts';
-import {keepPersonalDesignLease} from '../src/personal-design-cli.ts';
+import {keepPersonalDesignLease, servedDesignTarget} from '../src/personal-design-cli.ts';
 
 const password = 'senha-que-nao-pode-vazar-9f3a';
 
@@ -175,8 +175,16 @@ test('o leitor do repositório ignora .claude, .mcp.json, .codex e .grok e não 
   }
 });
 
-test('o comando abre o navegador do exame na URL declarada', async () => {
+test('o comando vincula o navegador do host à URL efetiva do exame', async () => {
   const source = await readFile(new URL('../src/personal-design-cli.ts', import.meta.url), 'utf8');
-  assert.match(source, /openDesignBrowser\(parsed\.url\)/);
+  assert.match(source, /if \(opened !== undefined && !new URL\(targetUrl\)\.hostname\.endsWith\('\.local'\)\)\s*\{\s*browser = await openDesignBrowser\(targetUrl\)/);
   assert.doesNotMatch(source, /openDesignBrowser\(\s*\)/);
+});
+
+test('--servir usa a origem da imagem e preserva a rota de login declarada', () => {
+  const origin = 'http://design-servir.local:8080';
+  assert.equal(servedDesignTarget(origin), origin);
+  assert.equal(servedDesignTarget(origin, 'http://127.0.0.1:3000/entrar?flow=app#/senha'),
+    origin + '/entrar?flow=app#/senha');
+  assert.equal(new URL(servedDesignTarget(origin, 'http://127.0.0.1:3000//outro.local/entrar')).origin, origin);
 });

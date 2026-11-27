@@ -24,6 +24,9 @@ test('captura e ferramentas usam sessão em todas as rotas e descartam a tela de
       import {createServer} from 'node:http';
       const form = '<form method="post" action="/acesso"><input id="user" name="user"><input id="pass" name="pass" type="password"><button type="button" onclick="this.form.requestSubmit()">Entrar</button></form>';
       const visits = new Map();
+      const reauth = '<form action="/reauth"><input type="password"><button>Entrar</button></form>';
+      const db = 'const open = indexedDB.open("auth", 1); open.onupgradeneeded = () => open.result.createObjectStore("tokens");';
+      let validCookie = 'lab=opened';
       const send = (res, body) => {
         res.writeHead(200, {'content-type': 'text/html', 'cache-control': 'no-store'});
         res.end('<!doctype html><html lang="pt-BR"><title>Laboratório</title><main>' + body + '</main></html>');
@@ -38,16 +41,24 @@ test('captura e ferramentas usam sessão em todas as rotas e descartam a tela de
             return send(res, form);
           }
           res.writeHead(200, {'set-cookie': 'lab=opened; Path=/; HttpOnly', 'content-type': 'text/html'});
-          return res.end('<script>localStorage.lab = "local"; sessionStorage.lab = "session"; location.replace("/painel");</script>');
+          return res.end('<script>localStorage.lab = "local"; sessionStorage.lab = "session"; ' + db +
+            'open.onsuccess = () => { const tx = open.result.transaction("tokens", "readwrite"); tx.objectStore("tokens").put("synthetic-token", "session"); tx.oncomplete = () => location.replace("/pt-BR/painel"); };</script>');
         }
         if (req.url === '/') return send(res, '<script>if (location.hash === "#/entrar") document.currentScript.insertAdjacentHTML("afterend", ' + JSON.stringify(form) + ')</script>');
         if (req.url === '/acesso') return redirect('/#/entrar');
         if (req.url === '/publico') return redirect('/pt-BR/publico');
         if (req.url === '/pt-BR/publico') return send(res, form);
-        if (req.url === '/expirada' || req.headers.cookie !== 'lab=opened') return redirect('/acesso');
+        if (req.url === '/expirada' || req.headers.cookie !== validCookie) return redirect('/acesso');
+        if (req.url === '/painel' && validCookie === 'lab=opened') {
+          validCookie = 'lab=rotated';
+          res.setHeader('set-cookie', validCookie + '; Path=/; HttpOnly');
+        }
         if (req.url === '/painel') return redirect('/pt-BR/painel');
         if (req.url === '/formulario') return send(res, form.replace('id="pass"', 'id="outraSenha"'));
-        if (req.url === '/trocar-senha') return send(res, '<form><input id="pass" type="password"><button type="submit">Trocar senha</button></form>');
+        if (req.url === '/senha-apenas') return send(res, reauth);
+        if (req.url === '/frame') return send(res, '<iframe src="/formulario"></iframe>');
+        if (req.url === '/trocar-senha') return send(res, '<form><input id="pass" type="password"><button>Trocar senha</button></form>' +
+          '<form><h1>Configurar 2FA</h1><input autocomplete="one-time-code"><button>Salvar</button></form><iframe hidden src="/formulario"></iframe>');
         if (req.url === '/clique-401') return send(res, '<a id="acao" href="/negada">Abrir</a>');
         if (req.url === '/clique-sair') return send(res, '<a id="acao" href="/sessao-removida" onclick="sessionStorage.clear()">Sair</a>');
         if (req.url === '/sessao-removida') return send(res, '<script>if (!sessionStorage.lab) location.replace("/#/entrar?voltar=sessao")</script><h1>Painel</h1>');
@@ -71,7 +82,10 @@ test('captura e ferramentas usam sessão em todas as rotas e descartam a tela de
             res.writeHead(401, {'content-type': 'text/html'}); return res.end('<h1>Sessão expirada</h1>');
           }
         }
-        if (req.url === '/spa') return send(res, '<h1>SPA autenticada</h1><script>if (localStorage.lab !== "local" || sessionStorage.lab !== "session") location.replace("/acesso");</script>');
+        if (req.url === '/spa') return send(res, '<h1>SPA autenticada</h1><script>' + db +
+          'if (localStorage.lab !== "local" || sessionStorage.lab !== "session") location.replace("/acesso");' +
+          'open.onsuccess = () => { const read = open.result.transaction("tokens").objectStore("tokens").get("session"); read.onsuccess = () => { if (read.result !== "synthetic-token") location.replace("/acesso"); }; };' +
+          'addEventListener("resize", () => { if (innerWidth === 1280 && innerHeight === 1024) location.replace("/acesso"); });</script>');
         return send(res, '<h1>Painel autenticado</h1><a href="/painel">Painel</a><a href="/spa">SPA</a>');
       }).listen(8080, '127.0.0.1');
     `);
@@ -88,7 +102,7 @@ test('captura e ferramentas usam sessão em todas as rotas e descartam a tela de
     await exec('setfacl', ['-m', 'u:65532:r', loginFile]);
     const accepted = ['/painel', '/so-lighthouse', '/so-pa11y', '/so-regua', '/so-teclado', '/spa', '/trocar-senha'];
     const failedActions = ['/clique-401', '/clique-sair'];
-    const rejected = ['/expirada', '/formulario'];
+    const rejected = ['/expirada', '/formulario', '/senha-apenas', '/frame'];
     await writeFile(join(directory, 'pedido.json'), JSON.stringify({
       routes: [
         ...[...accepted, ...rejected].map(route => ({route, states: ['padrao']})),
@@ -109,16 +123,18 @@ test('captura e ferramentas usam sessão em todas as rotas e descartam a tela de
       '-v', `${loginDir}:/login`, '--entrypoint', 'sh', image!,
       '-ec', `trap 'chmod 0777 /output/capturas /output/publico/capturas /tmp/capturas 2>/dev/null || true' EXIT
         node /output/serve.mjs &
+        mkdir -m 0777 /output/capturas
         node /opt/design-tools/write-login-state.mjs
         mv /output/state.json /login/state.json
         /usr/local/bin/design-entrypoint.sh
         rm /login/state.json
         mv /output/capturas /output/achados-brutos.json /tmp/
+        mkdir -m 0777 /output/capturas
         cat /output/publico/pedido.json > /output/pedido.json
         /usr/local/bin/design-entrypoint.sh
         mv /output/capturas /output/achados-brutos.json /output/publico/
         mv /tmp/capturas /tmp/achados-brutos.json /output/`,
-    ], {timeout: 480_000});
+    ], {timeout: 540_000});
     const raw = await readFile(join(directory, 'achados-brutos.json'), 'utf8');
     assert.equal(raw.includes(password), false);
     const doc = JSON.parse(raw) as {
@@ -139,6 +155,8 @@ test('captura e ferramentas usam sessão em todas as rotas e descartam a tela de
       assert.deepEqual([...new Set(reports.map(row => row.route))].sort(), [...accepted, ...(['pa11y', 'lighthouse', 'render'].includes(tool) ? failedActions : [])]
         .filter(route => route !== `/so-${tool}`).sort(), tool);
     }
+    assert.equal(pa11y.filter(row => row.route === '/spa').length, 2);
+    assert.equal(lighthouse.filter(row => row.route === '/spa').length, 2);
     assert.ok(doc.reports.render.some(row => row.route === '/painel' && row.viewport === 320));
     assert.ok(doc.reports.keyboard.some(row => row.file.startsWith('/painel ')));
     assert.ok(doc.reports.render.some(row => row.route === '/so-regua' && row.viewport === 375));
@@ -179,34 +197,47 @@ test('Chromium no host reconhece a perda de sessão e o UID da imagem lê seu es
     const html = (body: string, status = 200) => {
       res.writeHead(status, {'content-type': 'text/html'}).end('<!doctype html><html><div id="root">' + body + '</div></html>');
     };
-    if (req.url === '/') {
-      html('<span>Laboratório</span><script>if (location.hash === "#/entrar") {' +
-        'document.currentScript.insertAdjacentHTML("beforebegin", ' + JSON.stringify(form) + ');' +
-        'document.querySelector("button").onclick = () => {' +
-        'if (document.querySelector("#user").value === "laboratorio" && document.querySelector("#pass").value === ' +
-        JSON.stringify(password) + ') { document.cookie = "lab=opened; Path=/"; location.replace("/alias"); } }; }</script>');
+    if (req.url === '/entrar' || req.url === '/entrar?sem-cookie=1') {
+      const cookie = req.url === '/entrar' ? 'document.cookie = "lab=opened; Path=/"; ' : '';
+      const target = req.url === '/entrar' ? '/alias' : '/painel-idb';
+      html(form + '<script>document.querySelector("button").onclick = () => {' +
+        'if (document.querySelector("#user").value !== "laboratorio" || document.querySelector("#pass").value !== ' +
+        JSON.stringify(password) + ') { location.replace("/negada"); return; }' +
+        cookie + 'const open = indexedDB.open("host-auth", 1);' +
+        'open.onupgradeneeded = () => open.result.createObjectStore("tokens");' +
+        'open.onsuccess = () => { const tx = open.result.transaction("tokens", "readwrite");' +
+        'tx.objectStore("tokens").put("synthetic-token", "session"); tx.oncomplete = () => location.replace(' + JSON.stringify(target) + '); }; };</script>');
+    } else if (req.url === '/negada') {
+      html('<h1>Sessão expirada</h1>', 401);
+    } else if (req.url === '/painel-idb') {
+      html('<h1>Painel IndexedDB</h1>');
     } else if (req.headers.cookie !== 'lab=opened' || req.url === '/expirada') {
-      redirect('/#/entrar?voltar=painel');
+      redirect('/entrar?voltar=painel');
     } else if (req.url === '/alias') {
-      redirect('/painel');
+      redirect('/entrar?view=console');
     } else if (req.url === '/trocar-senha') {
       html('<form><input id="pass" type="password"><button type="submit">Trocar senha</button></form>');
     } else if (req.url === '/formulario') {
       html(form.replace('id="pass"', 'id="outraSenha"'));
-    } else if (req.url === '/negada') {
-      html('<h1>Sessão expirada</h1>', 401);
+    } else if (req.url === '/senha-apenas') {
+      html('<form><input type="password"><button>Entrar</button></form>');
+    } else if (req.url === '/frame') {
+      html('<iframe src="/formulario"></iframe>');
+    } else if (req.url === '/2fa') {
+      html('<form><h1>Configurar 2FA</h1><input autocomplete="one-time-code"><button>Salvar</button></form>');
     } else {
       html('<h1>Painel autenticado</h1><a id="acao" href="/negada">Abrir</a>');
     }
   });
   let state: string | undefined;
+  let idbState: string | undefined;
   try {
     server.listen(0, '127.0.0.1');
     await once(server, 'listening');
     const address = server.address();
     assert.ok(address && typeof address === 'object');
     const hostOrigin = `http://127.0.0.1:${address.port}`;
-    const loginUrl = hostOrigin + '/#/entrar';
+    const loginUrl = hostOrigin + '/entrar';
     const login = {
       username: 'laboratorio', password, usernameSelector: '#user', passwordSelector: '#pass',
       submitSelector: 'text=Entrar', successSelector: 'h1',
@@ -218,7 +249,16 @@ test('Chromium no host reconhece a perda de sessão e o UID da imagem lê seu es
       '--entrypoint', 'cat', image!, '/login/state.json',
     ]);
     assert.equal(mounted.stdout.includes(password), false);
-    assert.equal(JSON.parse(mounted.stdout).designLogin.path, '/#/entrar');
+    const exported = JSON.parse(mounted.stdout);
+    assert.equal(exported.designLogin.path, '/entrar');
+    assert.equal(exported.origins[0].indexedDB[0].name, 'host-auth');
+    await assert.rejects(writeDesignLoginState(loginUrl, {...login, password: 'synthetic-wrong-password', successSelector: undefined}),
+      {message: 'DESIGN_CAPTURE_LOGIN_FAILED'});
+
+    idbState = await writeDesignLoginState(loginUrl + '?sem-cookie=1', {...login, successSelector: undefined});
+    const fromIdb = JSON.parse(await readFile(idbState, 'utf8'));
+    assert.deepEqual(fromIdb.cookies, []);
+    assert.equal(fromIdb.origins[0].indexedDB[0].name, 'host-auth');
 
     const plan = (route: string) => ({
       screenId: 'lab', route, viewport: 375, theme: 'claro', state: 'padrao', fileName: `${route.slice(1)}.png`,
@@ -231,9 +271,9 @@ test('Chromium no host reconhece a perda de sessão e o UID da imagem lê seu es
         await browser.close();
       }
     };
-    const accepted = ['/alias', '/trocar-senha'];
+    const accepted = ['/alias', '/trocar-senha', '/2fa'];
     assert.deepEqual((await capture(accepted.map(plan))).captures.map(row => row.route), accepted);
-    for (const route of ['/expirada', '/formulario']) {
+    for (const route of ['/expirada', '/formulario', '/senha-apenas', '/frame']) {
       await assert.rejects(capture([plan(route)]), {code: 'DESIGN_CAPTURE_LOGIN_FAILED'});
       assert.ok(visits.has(route), route);
     }
@@ -241,10 +281,11 @@ test('Chromium no host reconhece a perda de sessão e o UID da imagem lê seu es
       ...plan('/painel'), state: 'erro', reach: {kind: 'acoes', steps: ['clicar #acao']},
     }]), {code: 'DESIGN_CAPTURE_LOGIN_FAILED'});
     assert.ok(visits.has('/negada'));
-    assert.deepEqual((await readdir(directory)).sort(), ['alias.png', 'capturas.json', 'trocar-senha.png']);
+    assert.deepEqual((await readdir(directory)).sort(), ['2fa.png', 'alias.png', 'capturas.json', 'trocar-senha.png']);
   } finally {
     server.close();
     if (state) await rm(dirname(state), {recursive: true, force: true});
+    if (idbState) await rm(dirname(idbState), {recursive: true, force: true});
     await rm(directory, {recursive: true, force: true});
   }
 });

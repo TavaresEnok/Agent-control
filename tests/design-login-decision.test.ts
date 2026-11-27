@@ -34,6 +34,11 @@ test('o cookie do laboratório continua valendo sozinho', () => {
   assert.equal(loginOpened({...base, labOpen: true}), true);
 });
 
+test('falha HTTP impede confirmar a sessão, mesmo com seletor ou cookie de laboratório', () => {
+  assert.equal(loginOpened({...base, rejected: true, successRequired: true, successVisible: true}), false);
+  assert.equal(loginOpened({...base, rejected: true, labOpen: true}), false);
+});
+
 test('cookie mudado ou novo é detectado; páginas iguais ignoram a barra final', () => {
   const before = cookieMap([{domain: 'a.local', path: '/', name: '__Host-csrf', value: 'x'}]);
   assert.equal(cookieChanged(before, [{domain: 'a.local', path: '/', name: '__Host-csrf', value: 'x'}]), false);
@@ -42,6 +47,8 @@ test('cookie mudado ou novo é detectado; páginas iguais ignoram a barra final'
   assert.equal(samePage(new URL('https://a.local/painel'), new URL('https://a.local/entrar')), false);
   assert.equal(samePage(new URL('https://a.local/#/entrar?volta=1'), new URL('https://a.local/#/entrar/')), true);
   assert.equal(samePage(new URL('https://a.local/#/painel'), new URL('https://a.local/#/entrar')), false);
+  assert.equal(samePage(new URL('https://a.local/entrar?view=console'), new URL('https://a.local/entrar')), false);
+  assert.equal(samePage(new URL('https://a.local/entrar?returnTo=%2Fpainel'), new URL('https://a.local/entrar')), true);
   assert.equal(samePage(new URL('https://a.local/entrar#formulario'), new URL('https://a.local/entrar')), true);
 });
 

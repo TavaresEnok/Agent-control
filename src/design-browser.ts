@@ -9,11 +9,9 @@ import type {DesignLogin} from './design-discover.ts';
 import {assertDesignDestination, assertDesignTarget, designTrustArguments} from './design-image.ts';
 import {claimDesignContainer, makeDesignScratch, releaseDesignContainer, removeDesignScratch} from './design-containers.ts';
 // @ts-expect-error módulo compartilhado com a imagem
-import {bodyLeaksPassword, loginFormVisible, loginRoute} from '../deploy/design-tools/login-decision.mjs';
+import {bodyLeaksPassword, pageShowsLogin, submitLogin, watchNavigationFailure} from '../deploy/design-tools/login-decision.mjs';
 
 type DesignPage = {
-  mainFrame(): unknown;
-  on(event: 'response', listener: (response: {status(): number; request(): {frame(): unknown; isNavigationRequest(): boolean}}) => void): void;
   url(): string;
   setViewportSize(size: {width: number; height: number}): Promise<void>;
   emulateMedia(options: {colorScheme: 'dark' | 'light'}): Promise<void>;
@@ -22,8 +20,6 @@ type DesignPage = {
   content(): Promise<string>;
   fill(selector: string, value: string): Promise<void>;
   click(selector: string): Promise<void>;
-  locator(selector: string): {waitFor(options: {state: 'hidden' | 'visible'; timeout: number}): Promise<void>};
-  evaluate<T>(expression: () => T): Promise<T>;
   waitForFunction(expression: () => boolean, arg: undefined, options: {timeout: number}): Promise<unknown>;
 };
 
@@ -73,7 +69,6 @@ export type DesignBrowserGuard = {
 
 type DesignContext = DesignBrowserGuardContext & {
   newPage(): Promise<DesignPage>;
-  storageState(): Promise<unknown>;
 };
 
 type DesignBrowser = {
@@ -248,18 +243,6 @@ async function waitForPaint(page: DesignPage): Promise<void> {
   ).catch(() => undefined /* paint wait is best effort; the capture checks judge the page */);
 }
 
-async function submitDesignLogin(page: DesignPage, guard: DesignBrowserGuard, login: DesignLogin): Promise<string | undefined> {
-  const start = loginRoute(new URL(page.url()));
-  await page.click(login.submitSelector);
-  await page.locator(login.passwordSelector).waitFor({state: 'hidden', timeout: 15000});
-  if (login.successSelector !== undefined) {
-    await page.locator(login.successSelector).waitFor({state: 'visible', timeout: 15000});
-  }
-  guard.afterLogin();
-  if (await page.evaluate(loginFormVisible)) throw new Refusal('DESIGN_CAPTURE_LOGIN_FAILED');
-  return loginRoute(new URL(page.url())) === start ? undefined : start;
-}
-
 /**
  * O host grava o storageState em arquivo privado e, para a imagem, concede leitura ao UID 65532.
  * Um alvo `.local` entra pela imagem, na rede de homologação: o host não resolve esse nome.
@@ -284,12 +267,7 @@ export async function writeDesignLoginState(targetUrl: string, login: DesignLogi
     await guard.goto(targetUrl);
     await guard.fill(login.usernameSelector, login.username);
     await guard.fill(login.passwordSelector, login.password);
-    const loginPath = await submitDesignLogin(page, guard, login);
-    const sessionStorage = await page.evaluate(() => Object.entries(window.sessionStorage));
-    const body = JSON.stringify({
-      ...await context.storageState() as object,
-      designLogin: {path: loginPath, sessionStorage},
-    });
+    const body = JSON.stringify(await submitLogin(page, context, login, target.origin));
     if (bodyLeaksPassword(body, login.username, login.password)) throw new Refusal('DESIGN_PASSWORD_LEAK');
     const path = join(directory, 'state.json');
     await writeFile(path, body, {mode: 0o600});
@@ -380,7 +358,7 @@ async function loadChromium(): Promise<ChromiumLauncher> {
 
 /** Host Chrome through the Playwright already installed for the panel. The design CLI captures with this driver. */
 export async function openDesignBrowser(targetUrl: string): Promise<{driver: DesignCaptureDriver; close: () => Promise<void>}> {
-  assertDesignTarget(targetUrl);
+  const {origin} = assertDesignTarget(targetUrl);
   const chromium = await loadChromium();
   const browser = await chromium.launch({
     executablePath: CHROME,
@@ -392,11 +370,7 @@ export async function openDesignBrowser(targetUrl: string): Promise<{driver: Des
     const guard = await installDesignBrowserGuard(context, page, targetUrl);
     let closed = false;
     let loginPath: string | undefined;
-    let rejected = false;
-    page.on('response', response => {
-      const request = response.request();
-      if (response.status() === 401 && request.isNavigationRequest() && request.frame() === page.mainFrame()) rejected = true;
-    });
+    let navigation = watchNavigationFailure(page);
     const driver: DesignCaptureDriver = {
       async setViewport(width, height) {
         await page.setViewportSize({width, height});
@@ -405,11 +379,12 @@ export async function openDesignBrowser(targetUrl: string): Promise<{driver: Des
         await page.emulateMedia({colorScheme: theme === 'escuro' ? 'dark' : 'light'});
       },
       async goto(url) {
-        rejected = false;
+        navigation.stop();
+        navigation = watchNavigationFailure(page);
         try {
           await guard.goto(url);
         } catch (error) {
-          if (rejected) throw new Refusal('DESIGN_CAPTURE_LOGIN_FAILED');
+          if (navigation.failed()) throw new Refusal('DESIGN_CAPTURE_LOGIN_FAILED');
           throw error;
         }
         await waitForPaint(page);
@@ -428,11 +403,11 @@ export async function openDesignBrowser(targetUrl: string): Promise<{driver: Des
         guard.afterLogin();
       },
       async submitLogin(login) {
-        loginPath = await submitDesignLogin(page, guard, login);
+        ({designLogin: {path: loginPath}} = await submitLogin(page, context, login, origin));
       },
       async verifyAuthenticated(url) {
         assertDesignDestination(url, page.url());
-        if (rejected || loginRoute(new URL(page.url())) === loginPath || await page.evaluate(loginFormVisible)) {
+        if (navigation.failed() || await pageShowsLogin(page, origin, loginPath)) {
           throw new Refusal('DESIGN_CAPTURE_LOGIN_FAILED');
         }
       },

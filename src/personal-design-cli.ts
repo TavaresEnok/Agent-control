@@ -201,6 +201,16 @@ function servedUrl(route: string): string {
   return `http://design-servir.local:8080${path.startsWith('/') ? path : `/${path}`}`;
 }
 
+export function servedDesignTarget(origin: string, loginUrl?: string): string {
+  if (loginUrl === undefined) return origin;
+  const target = new URL(origin);
+  const requested = new URL(loginUrl);
+  target.pathname = requested.pathname;
+  target.search = requested.search;
+  target.hash = requested.hash;
+  return target.href;
+}
+
 function findingOnHtml(file: string, htmlPath: string): boolean {
   const route = `/${htmlPath}`;
   const head = file.split(/[\s?#]/)[0] ?? '';
@@ -406,8 +416,6 @@ async function main() {
     opened?.wipe();
     fail(error);
   }
-  // Um host .local só existe na rede de homologação: as capturas vêm da imagem, não do Chrome do host.
-  const hostBrowser = opened !== undefined && !new URL(parsed.url).hostname.endsWith('.local');
   let examStatus: {code: number; lines: string[]} = {code: 0, lines: []};
   let browser: Awaited<ReturnType<typeof openDesignBrowser>> | undefined;
   try {
@@ -415,41 +423,47 @@ async function main() {
     examStatus = await runDesignSession(
       resolved,
       async () => {
-        browser = hostBrowser ? await openDesignBrowser(parsed.url) : undefined;
         const pinnedImage = readPinnedImage();
         const runId = randomUUID();
         const files = await readDesignRepository(resolved.repo);
         const referenceFiles = invocation.references.length === 0 ? undefined : await readReferenceFiles(invocation.references);
-        const examAt = (targetUrl: string, routes?: readonly {route: string}[], servedFiles?: readonly {path: string; text: string}[]) => runDesignModule({
-          activation: 'personal',
-          projectId: resolved.projectId,
-          mapEnabled: resolved.economy?.map,
-          batch: resolved.economy?.batch === false ? false : {tokens: resolved.economy?.batchTokens ?? 40_000, files: resolved.economy?.batchFiles ?? 8},
-          repo: resolved.repo,
-          targetUrl,
-          dataDirectory: resolved.dataDirectory,
-          ...(resolved.ledger.launchVolumes ? {launchVolumes: resolved.ledger.launchVolumes} : {}),
-          intentId: resolved.intentId,
-          runId,
-          createdAt: new Date(),
-          commit: resolved.commit,
-          files: servedFiles !== undefined && servedFiles.length > 0 ? servedFiles : files,
-          worker: resolved.worker,
-          reserve: resolved.reserve,
-          release: resolved.release,
-          ...(browser === undefined ? {} : {driver: browser.driver}),
-          image: {pinnedImage},
-          scoreVisual: true,
-          recordStates: true,
-          regressionThreshold: invocation.threshold,
-          ...(referenceFiles === undefined ? {} : {referenceFiles}),
-          ...(opened === undefined ? {} : {login: opened.login}),
-          ...(trust === undefined ? {} : {trustCa: trust.path}),
-          ...(routes === undefined ? {} : {routes}),
-        });
+        const examAt = async (targetUrl: string, routes?: readonly {route: string}[], servedFiles?: readonly {path: string; text: string}[]) => {
+          // O servidor estático só existe na rede da imagem, inclusive quando --url aponta para loopback.
+          if (opened !== undefined && !new URL(targetUrl).hostname.endsWith('.local')) {
+            browser = await openDesignBrowser(targetUrl);
+          }
+          return runDesignModule({
+            activation: 'personal',
+            projectId: resolved.projectId,
+            mapEnabled: resolved.economy?.map,
+            batch: resolved.economy?.batch === false ? false : {tokens: resolved.economy?.batchTokens ?? 40_000, files: resolved.economy?.batchFiles ?? 8},
+            repo: resolved.repo,
+            targetUrl,
+            dataDirectory: resolved.dataDirectory,
+            ...(resolved.ledger.launchVolumes ? {launchVolumes: resolved.ledger.launchVolumes} : {}),
+            intentId: resolved.intentId,
+            runId,
+            createdAt: new Date(),
+            commit: resolved.commit,
+            files: servedFiles !== undefined && servedFiles.length > 0 ? servedFiles : files,
+            worker: resolved.worker,
+            reserve: resolved.reserve,
+            release: resolved.release,
+            ...(browser === undefined ? {} : {driver: browser.driver}),
+            image: {pinnedImage},
+            scoreVisual: true,
+            recordStates: true,
+            regressionThreshold: invocation.threshold,
+            ...(referenceFiles === undefined ? {} : {referenceFiles}),
+            ...(opened === undefined ? {} : {login: opened.login}),
+            ...(trust === undefined ? {} : {trustCa: trust.path}),
+            ...(routes === undefined ? {} : {routes}),
+          });
+        };
         const result = invocation.serveDir === undefined
           ? await examAt(parsed.url)
-          : await withServedDirectory(pinnedImage, invocation.serveDir, examAt);
+          : await withServedDirectory(pinnedImage, invocation.serveDir,
+            (origin, routes, servedFiles) => examAt(servedDesignTarget(origin, opened === undefined ? undefined : parsed.url), routes, servedFiles));
         console.log(runId);
         console.log(result.directory);
         return designExamStatus(result);

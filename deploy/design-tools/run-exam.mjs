@@ -9,7 +9,7 @@ import {mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSyn
 import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {prepareTrust} from './trust.mjs';
-import {loginFormVisible, loginRoute} from './login-decision.mjs';
+import {pageShowsLogin, watchNavigationFailure} from './login-decision.mjs';
 
 const HOST = /^(?:127\.0\.0\.1|localhost|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+local)$/;
 const AXE_TAGS = ['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa', 'best-practice'];
@@ -847,53 +847,63 @@ function readLoginState() {
   return {storageState, designLogin};
 }
 
-// Abre um documento vazio, atendido pelo navegador, para semear o storage uma vez por aba.
-const storagePage = origin => new URL('/.ac-design-storage', origin).href;
-const emptyDocument = {status: 200, contentType: 'text/html', body: '<!doctype html><html></html>'};
-
-function restoreStorage({origin, local = [], session = []}) {
-  if (window.location.origin !== origin) throw new Error('DESIGN_CAPTURE_LOGIN_FAILED');
-  for (const {name, value} of local) localStorage.setItem(name, value);
-  for (const [key, value] of session) sessionStorage.setItem(key, value);
-}
-
-async function captureLoginFailed(page, requested, login) {
-  const landed = new URL(page.url());
-  return landed.origin !== new URL(requested).origin
-    || loginRoute(landed) === login.path
-    || await page.evaluate(loginFormVisible);
-}
-
-// Uma resposta do documento principal pode chegar depois de goto, por uma ação ou pelo Lighthouse.
-function watchUnauthorized(page) {
-  let rejected = false;
-  page.on('response', response => {
-    const request = response.request();
-    if (response.status() === 401 && request.isNavigationRequest() && request.frame() === page.mainFrame()) rejected = true;
+async function openAuthenticatedExam(chromium, chrome, origin, login) {
+  // Os dois clientes usam o mesmo contexto Chromium. A rotação de cookies e o IndexedDB
+  // valem para todas as ferramentas. Cada passagem abre uma aba limpa para medir a largura pedida.
+  const {launch} = await import('chrome-launcher');
+  const puppeteer = (await import('puppeteer')).default;
+  const session = await launch({
+    chromePath: chrome ?? undefined,
+    chromeFlags: ['--headless=new', '--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
   });
-  return () => rejected;
-}
-
-async function prepareAuditPage(page, origin, login) {
-  const {storageState, designLogin} = login;
-  await page.setBypassServiceWorker(true);
-  await page.browserContext().setCookie(...storageState.cookies);
-  const local = storageState.origins.find(item => item.origin === origin)?.localStorage;
-  const session = designLogin.sessionStorage;
-  if (!(local?.length || session?.length)) return;
-  const url = storagePage(origin);
-  const serve = request => {
-    const response = request.url() === url ? request.respond(emptyDocument) : request.abort();
-    response.catch(() => undefined);
-  };
-  await page.setRequestInterception(true);
-  page.on('request', serve);
   try {
-    await page.goto(url, {waitUntil: 'domcontentloaded', timeout: 20000});
-    await page.evaluate(restoreStorage, {origin, local, session});
-  } finally {
-    page.off('request', serve);
-    await page.setRequestInterception(false);
+    const endpoint = `http://127.0.0.1:${session.port}`;
+    const browser = await chromium.connectOverCDP(endpoint);
+    const context = await browser.newContext({serviceWorkers: 'block', storageState: login.storageState});
+    const auditBrowser = await puppeteer.connect({browserURL: endpoint});
+    const seed = new URL('/.ac-design-storage', origin).href;
+    let sessionStorage = login.designLogin.sessionStorage ?? [];
+    return {
+      auditBrowser,
+      port: session.port,
+      async withPage(run, audit = false) {
+        const page = await context.newPage();
+        let navigation;
+        try {
+          if (audit || sessionStorage.length > 0) {
+            await page.route(seed, route => route.fulfill({contentType: 'text/html', body: '<!doctype html>'}), {times: 1});
+            await page.goto(seed, {waitUntil: 'domcontentloaded', timeout: 20000});
+            await page.evaluate(entries => {
+              for (const [key, value] of entries) window.sessionStorage.setItem(key, value);
+            }, sessionStorage);
+          }
+          const current = audit ? (await auditBrowser.pages()).find(candidate => candidate.url() === seed) : page;
+          if (!current) throw new Error('DESIGN_CAPTURE_LOGIN_FAILED');
+          if (audit) await current.setBypassServiceWorker(true);
+          navigation = watchNavigationFailure(current);
+          const result = await run(current, navigation.failed);
+          // Uma passagem que caiu no login não substitui o estado de sessão da última aba válida.
+          if (!navigation.failed() && !await pageShowsLogin(page, origin, login.designLogin.path)) {
+            sessionStorage = await page.evaluate(() => Object.entries(window.sessionStorage));
+          }
+          return result;
+        } finally {
+          navigation?.stop();
+          await page.close();
+        }
+      },
+      async close() {
+        try {
+          await auditBrowser.disconnect();
+          await browser.close();
+        } finally {
+          await session.kill();
+        }
+      },
+    };
+  } catch (error) {
+    await session.kill().catch(() => undefined);
+    throw error;
   }
 }
 
@@ -1095,23 +1105,6 @@ async function main() {
     });
   };
 
-  let playwright;
-  let AxeBuilder;
-  let browser;
-  const axeFailures = [];
-  try {
-    playwright = await import('playwright');
-    const axeMod = await import('@axe-core/playwright');
-    AxeBuilder = axeMod.default ?? axeMod.AxeBuilder;
-    browser = await playwright.chromium.launch({
-      executablePath: chrome ?? undefined,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
-    });
-  } catch (error) {
-    axeFailures.push(`DESIGN_AXE_FAILED ${shortError(error)}`);
-    browser = null;
-  }
-
   let login;
   try {
     login = readLoginState();
@@ -1119,6 +1112,27 @@ async function main() {
     console.error('DESIGN_CAPTURE_LOGIN_FAILED');
     process.exit(4);
   }
+
+  let AxeBuilder;
+  let browser;
+  let authenticated;
+  const axeFailures = [];
+  try {
+    const playwright = await import('playwright');
+    const axeMod = await import('@axe-core/playwright');
+    AxeBuilder = axeMod.default ?? axeMod.AxeBuilder;
+    if (login !== null) {
+      authenticated = await openAuthenticatedExam(playwright.chromium, chrome, target.origin, login);
+    } else {
+      browser = await playwright.chromium.launch({
+        executablePath: chrome ?? undefined,
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+      });
+    }
+  } catch (error) {
+    axeFailures.push(`DESIGN_AXE_FAILED ${shortError(error)}`);
+  }
+
   const loginRequested = plan.routes.some(route => route.states.some(state => state.auth));
   if (loginRequested && login === null) note('logado não capturado');
 
@@ -1159,9 +1173,9 @@ async function main() {
   const renderFailures = [];
   const keyboardFailures = [];
   const auditLoginFailures = new Map();
-  const auditLoginFailed = async (tool, route, page, url, unauthorized) => {
+  const auditLoginFailed = async (tool, route, page, unauthorized) => {
     if (login === null) return false;
-    if (!unauthorized() && !await captureLoginFailed(page, url, login.designLogin)) return false;
+    if (!unauthorized() && !await pageShowsLogin(page, target.origin, login.designLogin.path)) return false;
     auditLoginFailures.set(`${tool} ${route}`, {tool, route});
     return true;
   };
@@ -1248,7 +1262,7 @@ async function main() {
   };
 
   const passLoginFailed = async (tool, route, page, failures, label, unauthorized) => {
-    if (!await auditLoginFailed(tool, route, page, routeUrl(target.origin, route), unauthorized)) return false;
+    if (!await auditLoginFailed(tool, route, page, unauthorized)) return false;
     failures.push(`${label} sessão não confirmada na rota`);
     return true;
   };
@@ -1319,7 +1333,7 @@ async function main() {
     const url = cell.href ?? routeUrl(target.origin, cell.route);
     const lostSession = async () => {
       if (login === null) return false;
-      const lost = unauthorized() || await captureLoginFailed(page, url, login.designLogin);
+      const lost = unauthorized() || await pageShowsLogin(page, target.origin, login.designLogin.path);
       if (lost) markUnavailable(cell, 401, 'sessão não confirmada na rota');
       return lost;
     };
@@ -1426,27 +1440,11 @@ async function main() {
 
   let axeFinished = 0;
   let axeFindings = 0;
-  if (browser) {
+  if (browser || authenticated) {
     try {
-      const options = {serviceWorkers: 'block'};
-      const publicContext = login === null ? await browser.newContext(options) : null;
+      const publicContext = await browser?.newContext({serviceWorkers: 'block'});
       const publicPage = await publicContext?.newPage();
-      const withPage = async run => {
-        if (publicPage) return run(publicPage);
-        const context = await browser.newContext({...options, storageState: login.storageState});
-        try {
-          const page = await context.newPage();
-          if (login.designLogin.sessionStorage?.length > 0) {
-            const url = storagePage(target.origin);
-            await page.route(url, route => route.fulfill(emptyDocument), {times: 1});
-            await page.goto(url, {waitUntil: 'domcontentloaded', timeout: 20000});
-            await page.evaluate(restoreStorage, {origin: target.origin, session: login.designLogin.sessionStorage});
-          }
-          await run(page, watchUnauthorized(page));
-        } finally {
-          await context.close();
-        }
-      };
+      const withPage = run => publicPage ? run(publicPage) : authenticated.withPage(run);
       for (const group of routeCells) {
         for (const cell of group.cells) await withPage((page, unauthorized) => runCell(page, cell, unauthorized));
         // Uma vez por rota, depois das células: 320px, Tab e movimento reduzido.
@@ -1455,12 +1453,13 @@ async function main() {
     } catch (error) {
       if (login !== null) {
         console.error('DESIGN_CAPTURE_LOGIN_FAILED');
+        await authenticated?.close().catch(() => undefined);
         process.exitCode = 4;
         return;
       }
       axeFailures.push(`DESIGN_AXE_FAILED ${shortError(error)}`);
     } finally {
-      await browser.close().catch(() => undefined);
+      await browser?.close().catch(() => undefined);
     }
   } else {
     if (login !== null) {
@@ -1476,35 +1475,18 @@ async function main() {
   const pa11yFailures = [];
   const pa11yBin = '/opt/design-tools/node_modules/.bin/pa11y';
   const pa11yConfig = '/tmp/pa11y.json';
-  const chromeArgs = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'];
-  let auditBrowser;
-  let puppeteer;
-  try {
-    if (login !== null) puppeteer = (await import('puppeteer')).default;
-  } catch {
-    // Each authenticated audit reports its own failure without retrying anonymously.
-  }
-  const runAuthenticatedPa11y = async (route, url, viewport, runner) => {
-    if (auditBrowser === undefined) {
-      auditBrowser = await puppeteer.launch({executablePath: chrome ?? undefined, args: chromeArgs});
-    }
-    const context = await auditBrowser.createBrowserContext();
-    try {
-      const page = await context.newPage();
-      await prepareAuditPage(page, target.origin, login);
-      await page.setViewport({width: viewport, height: viewportHeight(viewport)});
-      const unauthorized = watchUnauthorized(page);
-      const response = await page.goto(url, {waitUntil: 'load', timeout: 20000}).catch(() => null);
-      const loginFailed = () => auditLoginFailed('pa11y', route, page, url, unauthorized);
-      if (await loginFailed() || !response?.ok()) return null;
-      const pa11y = (await import('pa11y')).default;
-      const result = await bounded(pa11y(url, {browser: auditBrowser, page, ignoreUrl: true, runners: [runner], timeout: 25000}), 25000)
-        .catch(() => null);
-      return await loginFailed() ? null : result?.issues ?? null;
-    } finally {
-      await context.close();
-    }
-  };
+  const runAuthenticatedPa11y = (route, url, viewport, runner) => authenticated.withPage(async (page, unauthorized) => {
+    const size = {width: viewport, height: viewportHeight(viewport)};
+    await page.setViewport(size);
+    const response = await page.goto(url, {waitUntil: 'load', timeout: 20000}).catch(() => null);
+    const loginFailed = () => auditLoginFailed('pa11y', route, page, unauthorized);
+    if (await loginFailed() || !response?.ok()) return null;
+    const pa11y = (await import('pa11y')).default;
+    const result = await bounded(pa11y(url, {
+      browser: authenticated.auditBrowser, page, viewport: size, ignoreUrl: true, runners: [runner], timeout: 25000,
+    }), 25000).catch(() => null);
+    return await loginFailed() ? null : result?.issues ?? null;
+  }, true);
   for (const route of plan.routes) {
     for (const viewport of plan.viewports) {
       let cellDone = true;
@@ -1550,8 +1532,6 @@ async function main() {
     }
   }
 
-  await auditBrowser?.close().catch(() => undefined);
-
   let lhFindings = 0;
   let mobileDone = 0;
   let desktopDone = 0;
@@ -1565,42 +1545,39 @@ async function main() {
       for (const formFactor of ['mobile', 'desktop']) {
         const mobile = formFactor === 'mobile';
         let chromeSession;
-        let auditPage;
-        let unauthorized;
         const url = routeUrl(target.origin, route.route);
-        const loginFailed = () => auditLoginFailed('lighthouse', route.route, auditPage, url, unauthorized);
+        const measure = async (auditPage, unauthorized) => {
+          const loginFailed = () => auditLoginFailed('lighthouse', route.route, auditPage, unauthorized);
+          try {
+            // O teto limita a medição quando a página não sossega.
+            const result = await bounded(lighthouse(url, {
+              port: authenticated?.port ?? chromeSession.port,
+              ...(login === null ? {} : {disableStorageReset: true}),
+              output: 'json',
+              logLevel: 'error',
+              maxWaitForLoad: 30000,
+              onlyCategories: ['accessibility', 'best-practices', 'performance', 'seo'],
+              // O atraso plantado do laboratório está no servidor. Guarda a medida observada.
+              throttlingMethod: 'provided',
+              formFactor,
+              screenEmulation: mobile
+                ? {mobile: true, width: 375, height: 812, deviceScaleFactor: 2, disabled: false}
+                : {mobile: false, width: 1350, height: 940, deviceScaleFactor: 1, disabled: false},
+            }, undefined, auditPage), LIGHTHOUSE_TIMEOUT_MS);
+            return await loginFailed() ? null : result;
+          } catch (error) {
+            if (unauthorized) await loginFailed().catch(() => undefined);
+            throw error;
+          }
+        };
         try {
-          chromeSession = await launch({
-            chromePath: chrome ?? undefined,
-            chromeFlags: ['--headless=new', '--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
-          });
-          if (login !== null) {
-            const connected = await puppeteer.connect({browserURL: `http://127.0.0.1:${chromeSession.port}`});
-            auditPage = await connected.newPage();
-            await prepareAuditPage(auditPage, target.origin, login);
-            unauthorized = watchUnauthorized(auditPage);
+          if (login === null) {
+            chromeSession = await launch({
+              chromePath: chrome ?? undefined,
+              chromeFlags: ['--headless=new', '--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+            });
           }
-          // Página com animação infinita ou rede que nunca sossega pode prender o Lighthouse.
-          // O teto fecha o Chrome e segue para a próxima rota, com a falha registrada.
-          const result = await bounded(lighthouse(url, {
-            port: chromeSession.port,
-            ...(login === null ? {} : {disableStorageReset: true}),
-            output: 'json',
-            logLevel: 'error',
-            maxWaitForLoad: 30000,
-            onlyCategories: ['accessibility', 'best-practices', 'performance', 'seo'],
-            // O atraso plantado do laboratório está no servidor. A simulação padrão
-            // reescreve esse tempo; a medida observada é a que o exame guarda.
-            throttlingMethod: 'provided',
-            formFactor,
-            screenEmulation: mobile
-              ? {mobile: true, width: 375, height: 812, deviceScaleFactor: 2, disabled: false}
-              : {mobile: false, width: 1350, height: 940, deviceScaleFactor: 1, disabled: false},
-          }, undefined, auditPage), LIGHTHOUSE_TIMEOUT_MS);
-          if (login !== null && await loginFailed()) {
-            lhFailures.push(`DESIGN_LIGHTHOUSE_FAILED ${route.route} ${formFactor} sessão não confirmada na rota`);
-            continue;
-          }
+          const result = authenticated ? await authenticated.withPage(measure, true) : await measure();
           const lhr = slimLighthouse(result?.lhr ?? null);
           if (!lhr || (login !== null && result?.lhr?.runtimeError)) {
             lhFailures.push(`DESIGN_LIGHTHOUSE_FAILED ${route.route} ${formFactor} sem LHR`);
@@ -1614,7 +1591,6 @@ async function main() {
           if ((typeof perf === 'number' && perf < 0.5) || (typeof cls === 'number' && cls > 0.25) || (typeof lcp === 'number' && lcp > 4000)) lhFindings += 1;
           lighthouseReports.push({file: `${route.route} ${formFactor}`, route: route.route, formFactor, lhr});
         } catch (error) {
-          if (unauthorized) await loginFailed().catch(() => undefined);
           lhFailures.push(`DESIGN_LIGHTHOUSE_FAILED ${route.route} ${formFactor} ${login === null ? shortError(error) : 'falha na auditoria com sessão'}`);
         } finally {
           if (chromeSession) await chromeSession.kill().catch(() => undefined);
@@ -1623,6 +1599,8 @@ async function main() {
     }
   } catch (error) {
     lhFailures.push(`DESIGN_LIGHTHOUSE_FAILED ${shortError(error)}`);
+  } finally {
+    await authenticated?.close().catch(() => undefined);
   }
 
 
