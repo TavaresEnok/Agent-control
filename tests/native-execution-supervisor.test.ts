@@ -1,7 +1,7 @@
 import {mock,test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID,generateKeyPairSync,createHash} from 'node:crypto';
-import {mkdtemp,mkdir,readFile,rm,writeFile,chmod} from 'node:fs/promises';
+import {mkdtemp,mkdir,lstat,readdir,readFile,rm,writeFile,chmod} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {execFileSync,spawnSync} from 'node:child_process';
@@ -9,12 +9,15 @@ import {Ledger} from '../src/ledger.ts';
 import {CezarRuntime} from '../src/cezar.ts';
 import {Capacity} from '../src/capacity.ts';
 import {NativeExecutionSupervisor,NativeExecutionRequest} from '../src/native-execution-supervisor.ts';
+import {PersonalExecutionSupervisor} from '../src/personal-execution-supervisor.ts';
+import {sharedSimpleWorktree} from '../src/simple-worktree.ts';
 import {nativeContainerNeverStarted} from '../src/native-execution-isolation.ts';
 import {Authority,Refusal,digest,type Command} from '../src/contracts.ts';
 import {ProviderEligibility} from '../src/provider-eligibility.ts';
 import {AccountHomes} from '../src/account-homes.ts';
 import {GitArtifacts} from '../src/git.ts';
 import {reserveDesignModel} from '../src/design-model-reservation.ts';
+import {writeDesignExamCaptures} from '../src/design-capture-stage.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
 test('native execution retains uncertain capacity, fences takeover and replays only physical receipts',{skip:!process.env.AC_TEST_DATABASE_URL},async()=>{
@@ -92,7 +95,10 @@ test('a partida do design revalida a prioridade com a lista de contas gravada na
   for(const path of [repo,spool,accounts]){await mkdir(path,{mode:0o700});await chmod(path,0o700);}
   const git=(...args:string[])=>execFileSync('git',['-C',repo,'-c','user.name=Fixture','-c','user.email=fixture@invalid',...args],{encoding:'utf8'}).trim();
   git('init','-q');
-  git('commit','-q','--allow-empty','-m','base');
+  await writeFile(join(repo,'index.ts'),'export const example = 1;\n');
+  await writeFile(join(repo,'.env'),'FIXTURE_ONLY=example\n');
+  await writeFile(join(repo,'AGENTS.md'),'fixture instructions\n');
+  git('add','.');git('commit','-qm','base');
   const base=git('rev-parse','HEAD');
   await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,'Design launch fixture']);
   await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project,owner]);
@@ -109,10 +115,12 @@ test('a partida do design revalida a prioridade com a lista de contas gravada na
    await capacity.addProfile(owner,project,{id:profileId,accountId,model,effort,role:'specialist'});
    return {accountId,profileId,subjectDigest};
   }));
-  await new AccountHomes(db,accounts,[repo]).initialize(owner,project,a.accountId);
-  await writeFile(join(accounts,a.accountId,'.credentials.json'),JSON.stringify({
-   claudeAiOauth:{accessToken:'fixture-access',refreshToken:'fixture-refresh',expiresAt:Date.now()+3*3600_000,scopes:['user:inference']},
-  }),{mode:0o600});
+  for(const account of [a,b]){
+   await new AccountHomes(db,accounts,[repo]).initialize(owner,project,account.accountId);
+   await writeFile(join(accounts,account.accountId,'.credentials.json'),JSON.stringify({
+    claudeAiOauth:{accessToken:'fixture-access',refreshToken:'fixture-refresh',expiresAt:Date.now()+3*3600_000,scopes:['user:inference']},
+   }),{mode:0o600});
+  }
   const publish=(revision:number,regular:string[])=>capacity.publish(owner,project,revision,{
    schemaVersion:1,maxProgrammersPerContext:2,maxEvaluatorsPerContext:2,roles:{specialist:{regular,emergency:[]}},
   });
@@ -120,12 +128,13 @@ test('a partida do design revalida a prioridade com a lista de contas gravada na
   const bFirst=await publish(aFirst,[b.profileId,a.profileId,c.profileId]);
   const cFirst=await publish(bFirst,[c.profileId,a.profileId,b.profileId]);
   const image='sha256:'+'c'.repeat(64);
-  const supervisor=new NativeExecutionSupervisor(db,{
+  const config={
    id:'design-launch-fixture',provider:'claude',workerImage:image,toolsImage:image,hostRoot:spool,accountRoot:accounts,
    repository:repo,protectedRepositories:[repo],providerNetworkId:'d'.repeat(64),socketPath:join(area,'fake-docker.sock'),
    signingKeyPem:generateKeyPairSync('ed25519').privateKey.export({format:'pem',type:'pkcs8'}).toString(),
    accountSubjects:[a,b,c].map(({accountId,subjectDigest})=>({accountId,subjectDigest})),workerEnv:[],toolsEnv:[],
-  },{assertAdmission:async()=>{}});
+  } as const;
+  const supervisor=new NativeExecutionSupervisor(db,config,{assertAdmission:async()=>{}});
   // Interrompe na primeira mutação do Docker, depois da admissão e do registro do job no banco.
   const launchBoundary=new Error('fixture reached Docker network creation');
   const createNetwork=t.mock.fn(async(_name:string)=>{throw launchBoundary;});
@@ -171,6 +180,49 @@ test('a partida do design revalida a prioridade com a lista de contas gravada na
     }
    });
   }
+  await t.test('a crítica visual no modo simples monta o checkout compartilhado e a vista privada somente leitura',async()=>{
+   const contextId=await db.createContext(owner,project,randomUUID());
+   await capacity.assignPolicy(owner,contextId,cFirst);
+   const authority=await db.acquire(owner,contextId,randomUUID(),'personal-design',60);
+   const intentId=randomUUID(),jobId=randomUUID();
+   const command:Command={schemaVersion:1,intentId,deliveryAttemptId:randomUUID(),contextId,policyRevision:0,action:'plan.start',
+    payload:{workflow:'design-readonly-v1',messageRef:`design:${project}:${base}`,projectId:project,commit:base}};
+   await db.pool.query(`INSERT INTO ac_intents(id,context_id,principal_id,digest,command,operation_id,run_id,manager_epoch,plan_revision)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,0)`,[intentId,contextId,owner,digest(command),command,randomUUID(),randomUUID(),authority.epoch]);
+   const seat=await reserveDesignModel(db,capacity,owner,authority,intentId,'visual',[b.accountId]);
+   const simple=new PersonalExecutionSupervisor(db,{...config,dataDirectory:area,simple:true},{assertAdmission:async()=>{}});
+   const reader=await sharedSimpleWorktree(area,repo,base);
+   const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jh0sAAAAASUVORK5CYII=','base64');
+   const staged=await writeDesignExamCaptures(area,jobId,[],[{name:'referencia.png',bytes:png}]);
+   try{
+    staged.publish();
+    const job=join(spool,jobId),artifact=join(job,'review-artifact');
+    const mounts:string[][]=[];
+    Object.defineProperty(simple,'docker',{value:{
+     imagePresent:async()=>true,createPrivateNetwork:async()=>'e'.repeat(64),
+     create:async(_name:string,spec:{HostConfig:{Binds:string[]}})=>{
+      mounts.push(spec.HostConfig.Binds);
+      if(mounts.length===2)throw launchBoundary;
+      return 'f'.repeat(64);
+     },
+    }});
+    await assert.rejects(simple.start(owner,authority,{
+     jobId,intentId,grantId:seat.grantId,sessionId:randomUUID(),base,role:'specialist',designPurpose:'visual',
+     task:'Crítica de uma tela sintética.',writePaths:[],artifactId:randomUUID(),outputSchema:{type:'object'},
+    }),error=>error===launchBoundary);
+    assert.ok(mounts[0]?.includes(reader.path+':/work:ro'));
+    assert.ok(mounts[1]?.includes(artifact+':/work:ro'));
+    assert.deepEqual(await readdir(join(job,'work')),['checkout-lease']);
+    assert.deepEqual(await readdir(artifact),['.env','capturas','index.ts']);
+    assert.equal((await lstat(join(artifact,'index.ts'))).ino,(await lstat(join(reader.path,'index.ts'))).ino);
+    assert.equal(await readFile(join(artifact,'.env'),'utf8'),'nome: .env\n');
+    assert.equal(await readFile(join(reader.path,'.env'),'utf8'),'FIXTURE_ONLY=example\n');
+    const capture=join('capturas',createHash('sha256').update(png).digest('hex')+'.png');
+    assert.deepEqual(await readFile(join(artifact,capture)),png);
+    assert.deepEqual(await readFile(join(job,'planning',capture)),png);
+    await assert.rejects(lstat(join(reader.path,'capturas')),{code:'ENOENT'});
+   }finally{staged.conceal();await staged.cleanup();await reader.release();}
+  });
  }finally{await db.close();await fixture.close();await rm(area,{recursive:true,force:true});}
 });
 

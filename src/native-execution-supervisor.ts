@@ -13,7 +13,7 @@ import {pinNativeProtocolForNewAttempt} from './native-protocol-compatibility.ts
 import {requireRecoveryInventory} from './recovery-inventory.ts';
 import {cancelPreparedNativeResources,admitNativeResources} from './native-resource-envelope.ts';
 import {mkdir,lstat,realpath,writeFile,rename,cp,rm} from 'node:fs/promises';
-import {join} from 'node:path';
+import {basename,join,sep} from 'node:path';
 import {sign,createHmac,randomBytes} from 'node:crypto';
 import {z} from 'zod';
 import {Authority,canonical,digest,Refusal} from './contracts.ts';
@@ -25,7 +25,8 @@ import {NativeArtifactIdentity} from './native-artifact-finalizer.ts';
 import {expectedArtifactRisk,type Quality} from './quality.ts';
 import {inspectNativeExecutionPair,dockerReadOnly} from './native-execution-docker-observation.ts';
 import {nativeExecutionExecutorDigest} from './native-execution-contract.ts';
-import {replaceSecretClassFiles} from './verify-redact.ts';
+import {isSecretClassBasename,replaceSecretClassFiles} from './verify-redact.ts';
+import {linkReadonlyCheckout,pinReadonlyCheckout,sharedSimpleWorktree} from './simple-worktree.ts';
 import {rememberExamStripNote} from './exam-strip-note.ts';
 import {reviewDiffDocument} from './review-diff.ts';
 import {describeBind,examAccountMount,examWorkerEnv,formatExamStripNote,stripExamHostileConfig} from './verify-exam-isolation.ts';
@@ -224,11 +225,19 @@ export class NativeExecutionSupervisor extends NativeExecutionTerminalWork{
    const repository=input.moduleExam?undefined:await this.jobRepository(this.ledger.pool,String(g.project_id));
    await mkdir(p.root,{mode:0o700});jobDirCreated=true;
    await writeFile(join(p.root,'request.json'),JSON.stringify(input),{mode:0o600,flag:'wx'});for(const path of [p.input,p.output,p.planning])await mkdir(path,{mode:0o700});
-   if(repository)await new GitArtifacts(repository).snapshot(input.base,input.base,p.work);
-   if(repository&&input.role!=='programmer')await this.writeCheckoutIdentity(repository,input.jobId,input.base,p.work);
    const examWorkflow=(await this.ledger.pool.query('SELECT command FROM ac_intents WHERE id=$1',[input.intentId])).rows[0]?.command?.payload?.workflow;
    const dataDirectory=this.config.dataDirectory;
-   if(repository&&dataDirectory&&(input.role==='programmer'||(input.role==='reviewer'&&!readonlyExamIsolation(personal,examWorkflow,input.role)))){
+   const isolateExam=readonlyExamIsolation(personal,examWorkflow,input.role);
+   let sharedWork:string|undefined;
+   if(repository&&dataDirectory&&this.config.simple&&input.role==='specialist'&&isolateExam&&!designCreate){
+    const checkout=await sharedSimpleWorktree(dataDirectory,repository,input.base);
+    try{
+     if(await pinReadonlyCheckout(checkout.path,p.work))sharedWork=checkout.path;
+    }finally{await checkout.release();}
+   }
+   if(repository&&!sharedWork)await new GitArtifacts(repository).snapshot(input.base,input.base,p.work);
+   if(repository&&!sharedWork&&input.role!=='programmer')await this.writeCheckoutIdentity(repository,input.jobId,input.base,p.work);
+   if(repository&&dataDirectory&&(input.role==='programmer'||(input.role==='reviewer'&&!isolateExam))){
     // Optional context travels in the signed launch. The original request remains the replay identity.
     launchTask=await nativeTaskWithRepoMap({
      task:input.task,jobId:input.jobId,repoPath:p.work,commit:input.base,projectId:String(g.project_id),dataDirectory,
@@ -240,22 +249,29 @@ export class NativeExecutionSupervisor extends NativeExecutionTerminalWork{
      },
     });
    }
-   if(repository&&stageDesignExamCaptures(personal,examWorkflow,input.role))await stageDesignCapturesForJob(repository,[p.planning,p.work]);
+   const stageCaptures=stageDesignExamCaptures(personal,examWorkflow,input.role);
+   if(!sharedWork){
+    if(repository&&stageCaptures)await stageDesignCapturesForJob(repository,[p.planning,p.work]);
+   }
    await writeFile(p.key,this.publicKey,{mode:0o600,flag:'wx'});token=randomBytes(32).toString('hex');
    for(const path of [p.workerToken,p.toolsToken])await writeFile(path,token,{mode:0o600,flag:'wx'});
    // A personal Claude or Codex evaluator reads the artifact itself, so it gets its own read-only copy: the tools container keeps the original and the two may not share a source.
    // Readonly design and security exams have no artifact row. Any personal provider still gets that copy, and no review diff is written.
    const designExam=personal&&readonlyDesignExam(examWorkflow,input.role);
    const securityExam=personal&&readonlySecurityExam(examWorkflow,input.role);
-   const isolateExam=readonlyExamIsolation(personal,examWorkflow,input.role);
    const workerArtifact=repository&&(designExam||securityExam||(input.role!=='programmer'&&personal&&(this.config.provider==='claude'||this.config.provider==='codex')))?join(p.root,'review-artifact'):undefined;
    if(workerArtifact&&repository){
-    // The copy carries no Git metadata and no Git tool is offered: untrusted repository configuration must not run beside the credentials.
-    await cp(p.work,workerArtifact,{recursive:true});await rm(join(workerArtifact,'.git'),{recursive:true,force:true});
+    // No Git metadata or Git tool reaches the credentialed reader.
+    if(sharedWork)await linkReadonlyCheckout(sharedWork,workerArtifact,path=>isSecretClassBasename(basename(path))||
+     (stageCaptures&&path.startsWith('capturas'+sep)));
+    else{
+     await cp(p.work,workerArtifact,{recursive:true});await rm(join(workerArtifact,'.git'),{recursive:true,force:true});
+    }
     if(isolateExam)await replaceSecretClassFiles(workerArtifact);
     // Every evaluator copy loses agent config (CLAUDE.md, AGENTS.md, .claude/, .mcp.json, .codex/ and the like, at any depth):
     // the change under judgment must not instruct its judge or run a hook beside the judge's login. The diff still shows those files.
     const stripped=await stripExamHostileConfig(workerArtifact);
+    if(sharedWork&&stageCaptures)await stageDesignCapturesForJob(repository,[p.planning,workerArtifact]);
     if(isolateExam){const stripNote=formatExamStripNote(stripped);if(stripNote)rememberExamStripNote(input.intentId,stripNote);}
     if(!designExam&&!securityExam){
      // For an evaluator, `base` is the artifact commit; the change under review is that commit against the artifact's own base.
@@ -275,8 +291,8 @@ export class NativeExecutionSupervisor extends NativeExecutionTerminalWork{
     if(this.config.personalEgress??personalEgressEnabled())workerEnv.push('AC_PERSONAL_EGRESS=1');
    }
    workerMounts=[...(claudeExam?[]:[baseAccountMount]),{source:p.input,destination:'/input',writable:false},{source:p.output,destination:'/output',writable:true},{source:p.planning,destination:'/planning',writable:false},{source:p.key,destination:'/runner/execution-public-key.pem',writable:false},{source:p.workerToken,destination:'/runner/exec-token',writable:false},...(workerOwnsCheckout?[{source:p.work,destination:'/work',writable:true}]:workerArtifact?[{source:workerArtifact,destination:'/work',writable:false}]:[])];
-   const toolsWork=workerOwnsCheckout?join(p.root,'tools-workspace'):p.work;
-   if(toolsWork!==p.work)await mkdir(toolsWork,{mode:0o700});
+   const toolsWork=workerOwnsCheckout?join(p.root,'tools-workspace'):sharedWork??p.work;
+   if(workerOwnsCheckout)await mkdir(toolsWork,{mode:0o700});
    toolsMounts=[{source:toolsWork,destination:'/work',writable:input.role==='programmer'},{source:p.toolsToken,destination:'/runner/exec-token',writable:false}];
    if(input.moduleExam){
     const provider=this.config.provider;

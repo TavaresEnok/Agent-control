@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {existsSync} from 'node:fs';
-import {lstat,mkdir,mkdtemp,readdir,readFile,rm,utimes,writeFile} from 'node:fs/promises';
+import {lstat,mkdir,mkdtemp,readdir,readFile,rm,symlink,utimes,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {fileURLToPath} from 'node:url';
 import {join} from 'node:path';
@@ -10,7 +10,9 @@ import {simpleIsolation,loadInstallation} from '../src/installation.ts';
 import {discardableTempContents,oldTestVolume,removableSimpleImage,simpleJobRetention,simpleTempRetention} from '../src/personal-simple-retention.ts';
 import {NativeExecutionRequest} from '../src/native-execution-shared.ts';
 import {runSimpleWorker,type HostJob} from '../src/simple-execution-worker.ts';
-import {sharedSimpleWorktree,worktreeGit} from '../src/simple-worktree.ts';
+import {linkReadonlyCheckout,pinReadonlyCheckout,releaseIdleSharedWorktrees,sharedSimpleWorktree,worktreeGit} from '../src/simple-worktree.ts';
+import {isSecretClassBasename,replaceSecretClassFiles} from '../src/verify-redact.ts';
+import {stripExamHostileConfig} from '../src/verify-exam-isolation.ts';
 import {verifyExamArguments} from '../src/verify-image.ts';
 
 async function fixture(){
@@ -71,6 +73,45 @@ test('concurrent exams and reviewers share a detached commit until its last read
   assert.ok(args.includes('type=bind,src='+b.path+',dst=/repository,readonly'));
   assert.deepEqual(args.slice(-3),['/usr/local/bin/ac-collect','sha256:'+'a'.repeat(64),'verify']);
   await b.release();assert.ok(!existsSync(b.path));
+ }finally{await rm(f.root,{recursive:true,force:true});}
+});
+
+test('specialist bind sources share project files and keep redaction private',async()=>{
+ const f=await fixture();
+ try{
+  await writeFile(join(f.repo,'.env'),'FIXTURE_SECRET=example');
+  await writeFile(join(f.repo,'AGENTS.md'),'fixture instructions');
+  await symlink('original',join(f.repo,'link'));
+  await worktreeGit(f.repo,['add','.']);await worktreeGit(f.repo,['commit','-qm','exam fixture']);
+  const commit=(await worktreeGit(f.repo,['rev-parse','HEAD'])).trim();
+  const first=await sharedSimpleWorktree(f.data,f.repo,commit);
+  const work=join(f.job,'work'),artifact=join(f.job,'review-artifact'),other=join(f.root,'second-artifact');
+  try{
+   const original=await lstat(join(first.path,'original'));
+   assert.ok(await pinReadonlyCheckout(first.path,work));
+   await first.release();
+   assert.deepEqual(await readdir(work),['checkout-lease']);
+   assert.deepEqual(await releaseIdleSharedWorktrees(f.data,f.repo,true),[]);
+   const second=await sharedSimpleWorktree(f.data,f.repo,commit);
+   try{
+    assert.equal(second.path,first.path);
+    for(const [source,view] of [[first.path,artifact],[second.path,other]] as const){
+     await linkReadonlyCheckout(source,view,isSecretClassBasename);
+     await replaceSecretClassFiles(view);
+     await stripExamHostileConfig(view);
+     assert.equal(await readFile(join(view,'.env'),'utf8'),'nome: .env\n');
+     for(const name of ['.git','AGENTS.md','link'])assert.equal(existsSync(join(view,name)),false);
+    }
+    const stats=await Promise.all([first.path,artifact,other].map(path=>lstat(join(path,'original'))));
+    assert.ok(stats.every(stat=>stat.ino===original.ino&&stat.dev===original.dev));
+    assert.equal(await readFile(join(first.path,'.env'),'utf8'),'FIXTURE_SECRET=example');
+    await second.release();assert.ok(existsSync(second.path));
+    await rm(work,{recursive:true});
+    assert.deepEqual(await releaseIdleSharedWorktrees(f.data,f.repo,true),['Worktree compartilhado removido '+second.path]);
+    assert.equal(existsSync(second.path),false);
+    assert.equal(await readFile(join(artifact,'original'),'utf8'),'base\n');
+   }finally{await second.release();}
+  }finally{await first.release();}
  }finally{await rm(f.root,{recursive:true,force:true});}
 });
 
