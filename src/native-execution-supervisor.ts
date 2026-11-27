@@ -367,7 +367,8 @@ export class NativeExecutionSupervisor extends NativeExecutionTerminalWork{
   const already=(await this.ledger.pool.query('SELECT 1 FROM ac_artifacts WHERE id=$1 AND context_id=$2 AND intent_id=$3 AND commit_id=$4 AND tree_id=$5 AND base_id=$6',
    [id,authority.contextId,input.intentId,artifact.commit,artifact.tree,artifact.base])).rowCount===1;
   if(!held())throw new Refusal('NATIVE_ARTIFACT_LOCK_LOST');
-  if(!already){
+  const sharedObjects=outcome.receipt.payload.isolation==='simple';
+  if(!already&&!sharedObjects){
    const secrets=await readNativeArtifactSecrets(this.paths(jobId).secretSnapshot,jobId,this.key);
    await new GitArtifacts(this.paths(jobId).work).assertNoNewArtifactSecrets(artifact.commit,artifact.base,secrets);
   }
@@ -375,7 +376,7 @@ export class NativeExecutionSupervisor extends NativeExecutionTerminalWork{
    const contract=(await c.query('SELECT quality_revision,target_ref,digest FROM ac_execution_contracts WHERE intent_id=$1',[input.intentId])).rows[0];
    if(!contract||contract.digest!==digest({qualityRevision:contract.quality_revision,targetRef:contract.target_ref}))throw new Refusal('EXECUTION_CONTRACT_MISMATCH');
    const repository=await this.jobRepository(c,String(context.project_id));
-   const identity=already?await new GitArtifacts(repository).identity(artifact.commit,artifact.base):await new GitArtifacts(repository).import(this.paths(jobId).work,artifact.commit,artifact.base);
+   const identity=already||sharedObjects?await new GitArtifacts(repository).identity(artifact.commit,artifact.base):await new GitArtifacts(repository).import(this.paths(jobId).work,artifact.commit,artifact.base);
    if(identity.tree!==artifact.tree||identity.legacyDigest!==artifact.legacyDigest)throw new Refusal('NATIVE_ARTIFACT_IDENTITY_MISMATCH');
    const pinned=await pinRetainedArtifact(repository,jobId,artifact.commit,artifact.tree);
    if(pinned!=='created'&&pinned!=='kept')throw new Refusal(pinned==='conflict'?'NATIVE_ARTIFACT_RETENTION_REF_CONFLICT':'NATIVE_ARTIFACT_IDENTITY_MISMATCH');

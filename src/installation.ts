@@ -41,6 +41,7 @@ export const ProjectEconomy=z.object({map:z.boolean().default(true),measurement:
  securityReviewer:z.object({model:z.string().min(1).max(100),effort:z.enum(['low','medium','high'])}).strict().optional()}).strict();
 const projectDefinition=z.object({economy:ProjectEconomy.optional(),allowedAccountIds:z.array(z.uuid()).min(1).max(8).refine(ids=>new Set(ids).size===ids.length,'Duplicate allowed account').optional(),id:z.uuid(),label:z.string().min(1).max(200),repo:absolute,owner:z.string().min(1).max(200),publishedOrigin:httpsOrigin().optional(),publishedOrigins:z.array(httpsOrigin()).max(16).optional()}).strict();
 export const InstallationObject=z.object({schemaVersion:z.literal(1),mode:z.literal('administration-only'),
+ isolation:z.enum(['simple','strict']).optional(),
  activation:z.enum(['locked','personal']).default('locked'),
  databaseUrl:z.string().url().refine(value=>['postgres:','postgresql:'].includes(new URL(value).protocol)),
  projectRoots:z.array(ProjectRoot.extend({path:absolute})).max(32).default([]),
@@ -100,6 +101,9 @@ function dropRetiredBlocks(value:unknown){
 }
 export const Installation=z.preprocess(dropRetiredBlocks,InstallationObject);
 export type Installation=z.infer<typeof Installation>;
+export function simpleIsolation(config: Pick<Installation,'activation'|'isolation'>){
+ return config.activation==='personal' && config.isolation!=='strict';
+}
 /** No symlink, hard-link, world-readable or foreign-owned credential files. */
 export async function readPrivateFile(path:string,maxBytes=65536,options:{canonical?:boolean}={}){
  const file=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);

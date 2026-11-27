@@ -1,6 +1,7 @@
 {
  "descricao": "Classificação explícita dos testes do CI (scripts/test-ci-selection.mjs). executar: roda no npm test. laboratorio: precisa de Docker, SSH ou banco do laboratório; roda com AC_CI_INCLUDE_HOST=1 e o ambiente certo, sempre com motivo. excluido: não roda no CI, sempre com motivo. requer: condição extra para um arquivo listado (env:NOME). Arquivo de teste novo sem classificação é erro.",
  "executar": [
+  "simple-isolation.test.ts",
   "account-state.test.ts",
   "administrative-operations.test.ts",
   "admission.test.ts",

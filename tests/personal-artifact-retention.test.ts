@@ -1067,3 +1067,19 @@ test('the product registers the runtime images it replaces as candidates',async(
   assert.equal(JSON.parse(await readFile(join(l.data,'artifact-retention','registry.json'),'utf8')).images[0].module,'native-runtime');
  }finally{await cleanup(l);}
 });
+
+test('runtime pins in verify-image.json and simple-tools-image.json protect even otherwise unused local images',async()=>{
+ const l=await lab();
+ try{
+  const ids=[image('a'),image('b')];
+  for(const id of ids){l.docker.images.set(id,{repoDigests:[]});await registerOld(l,id,'banco',3*DAY);}
+  await writeFile(join(l.data,'verify-image.json'),JSON.stringify({image:ids[0]}));
+  await writeFile(join(l.data,'simple-tools-image.json'),JSON.stringify({image:ids[1]}));
+  await run(l,true);
+  assert.deepEqual([...l.docker.images.keys()],ids);
+  await writeFile(join(l.data,'verify-image.json'),'{');
+  await rm(join(l.data,'simple-tools-image.json'));
+  await run(l,true);
+  assert.deepEqual([...l.docker.images.keys()],ids);
+ }finally{await cleanup(l);}
+});

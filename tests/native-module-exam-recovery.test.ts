@@ -548,7 +548,7 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
   const qaContract=NativeQaContract.parse({schemaVersion:1,id:'qa-synthetic',image,argv:['/bin/true'],environment:[],timeoutMs:15000,memoryBytes:268435456,pids:64,nanoCpus:1000000000});
   const installationFile=join(area,'installation.json');
   await writeFile(installationFile,JSON.stringify({
-   schemaVersion:1,mode:'administration-only',activation:'personal',databaseUrl:fixture.url,dataDirectory:dataDir,
+   schemaVersion:1,mode:'administration-only',activation:'personal',isolation:'strict',databaseUrl:fixture.url,dataDirectory:dataDir,
    contextVault:{directory:vaultDir,masterFile:vaultMaster},
    project:{id:project,label:'Passive exam project',repo,owner},
    projects:[{id:otherProject,label:'Outro projeto',repo:otherRepo,owner}],

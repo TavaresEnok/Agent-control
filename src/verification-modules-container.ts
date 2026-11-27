@@ -1,3 +1,4 @@
+import {hostCollectorArgs,type HostCollector} from './simple-host-tools.ts';
 import {extractGitArchive} from './git-archive-snapshot.ts';
 import {randomUUID} from 'node:crypto';
 import {chmod, lstat, mkdir, mkdtemp, readdir, readFile, rm, writeFile} from 'node:fs/promises';
@@ -52,7 +53,7 @@ export function moduleDigestPath(module: VerificationModule, rootDir?: string): 
   return join(base, 'deploy', 'modules', module, 'digest.txt');
 }
 
-export async function readPinnedModuleImage(module: VerificationModule, rootDir?: string): Promise<string> {
+export async function readOptionalPinnedModuleImage(module: VerificationModule, rootDir?: string): Promise<string | undefined> {
   const path = moduleDigestPath(module, rootDir);
   let text: string;
   try {
@@ -61,10 +62,16 @@ export async function readPinnedModuleImage(module: VerificationModule, rootDir?
     text = await readFile(path, 'utf8');
   } catch (error) {
     if (error instanceof Refusal) throw error;
-    if (isErrno(error, 'ENOENT')) throw new Refusal('VERIFY_IMAGE_UNPINNED');
+    if (isErrno(error, 'ENOENT')) return undefined;
     throw error;
   }
   return parsePinnedModuleImage(text);
+}
+
+export async function readPinnedModuleImage(module: VerificationModule, rootDir?: string): Promise<string> {
+  const image = await readOptionalPinnedModuleImage(module, rootDir);
+  if (!image) throw new Refusal('VERIFY_IMAGE_UNPINNED');
+  return image;
 }
 
 /** In laboratory runs (`AC_MODULE_LAB=1`), resolves the immutable Docker image from `deploy/modules/<modulo>/digest.txt`. */
@@ -262,6 +269,9 @@ export async function runModuleCollectorContainer(input: {
   executeProcess?: CollectorProcess;
   journal: ReturnType<typeof moduleContainerJournal>;
   retention?: ModuleRetention;
+  snapshot?:string;
+  hostCollector?:HostCollector;
+  commonTools?:boolean;
 }): Promise<{code: number; output: ModuleCollectorOutput}> {
   if (!input.journal) throw new Refusal('VERIFY_CONTAINER_JOURNAL_REQUIRED', 503);
   const timeoutMs = input.timeoutMs ?? DEFAULT_COLLECTOR_TIMEOUT_MS;
@@ -272,17 +282,22 @@ export async function runModuleCollectorContainer(input: {
     || maxStdoutBytes < 1 || !Number.isSafeInteger(captureBytes)) {
     throw new Refusal('VERIFY_LIMITS_INVALID', 400);
   }
-  const snapshot = await prepareModuleSnapshot(input.repoPath, input.commit, input.retention);
+  const snapshot = input.snapshot ?? await prepareModuleSnapshot(input.repoPath, input.commit, input.retention);
   let evidenceDir: string | undefined;
   let evidenceFile: string | undefined;
   try {
+    evidenceDir = await mkdtemp(join(tmpdir(), input.passiveTlsEvidence === undefined ? 'ac-collector-' : 'ac-prontidao-evidence-'));
+    if (input.retention) await trackRoundTemp(input.retention, evidenceDir);
     if (input.passiveTlsEvidence !== undefined) {
       const validated = validatePassiveTlsEvidence(input.passiveTlsEvidence);
-      evidenceDir = await mkdtemp(join(tmpdir(), 'ac-prontidao-evidence-'));
-      if (input.retention) await trackRoundTemp(input.retention, evidenceDir);
       evidenceFile = join(evidenceDir, 'evidence.json');
       await writeFile(evidenceFile, `${JSON.stringify(validated)}\n`, {encoding: 'utf8', mode: 0o644, flag: 'wx'});
       await chmod(evidenceFile, 0o644);
+    }
+    if(input.hostCollector){
+      const run=input.executeProcess??runBoundedCollectorProcess;
+      const result=await run(hostCollectorArgs(input.hostCollector,snapshot,{evidence:evidenceFile}),{timeoutMs,maxStdoutBytes,signal:input.signal});
+      return {code:result.code,output:parseModuleCollectorOutput(result.stdout,{maxStdoutBytes,module:input.module})};
     }
     const token = randomUUID();
     const baseArgs = moduleCollectorArguments({
@@ -300,8 +315,9 @@ export async function runModuleCollectorContainer(input: {
     if (imageCommand.code !== 0) {
       throw new Refusal(moduleImageMissing(imageCommand.stderr, input.image) ? 'VERIFY_MODULE_IMAGE_MISSING' : 'VERIFY_TOOLS_FAILED', 503);
     }
-    const wrapper = assertHostPath(join(dirname(snapshot), 'collector-entrypoint'));
-    await writeFile(wrapper, collectorOutputWrapper(imageCommand.stdout, token, maxStdoutBytes), {flag: 'wx', mode: 0o555});
+    const wrapper = assertHostPath(join(evidenceDir, 'collector-entrypoint'));
+    const command=input.commonTools?Buffer.from(JSON.stringify([['/usr/local/bin/ac-collect',assertVerificationModule(input.module)],[]])):imageCommand.stdout;
+    await writeFile(wrapper, collectorOutputWrapper(command, token, maxStdoutBytes), {flag: 'wx', mode: 0o555});
     await chmod(wrapper, 0o555);
     // Journal the owner before create, and record the immutable ID before start.
     // Let create return its ID even when cancellation arrives during the call.
@@ -371,7 +387,7 @@ export async function runModuleCollectorContainer(input: {
     try {
       if (evidenceDir) await rm(evidenceDir, {recursive: true, force: true});
     } finally {
-      await removeModuleSnapshot(snapshot);
+      if (!input.snapshot) await removeModuleSnapshot(snapshot);
     }
   }
 }

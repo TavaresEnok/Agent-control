@@ -49,7 +49,12 @@ def mount_id(fd):
         return next(line.strip() for line in source if line.startswith('mnt_id:'))
 
 
-def empty_directory(fd, mount, still_bound):
+def empty_directory(fd, mount, still_bound, writable_checkout):
+    # Read-only QA checkouts can contain 0555 directories. Change only the
+    # directory opened under the removal guard, never a linked file.
+    if writable_checkout and not os.fstat(fd).st_mode & stat.S_IWUSR:
+        still_bound()
+        os.fchmod(fd, os.fstat(fd).st_mode | stat.S_IWUSR)
     with os.scandir(fd) as entries:
         for entry in entries:
             still_bound()
@@ -58,7 +63,7 @@ def empty_directory(fd, mount, still_bound):
                 try:
                     if mount_id(child) != mount:
                         raise ValueError('Unexpected nested mount')
-                    empty_directory(child, mount, still_bound)
+                    empty_directory(child, mount, still_bound, writable_checkout)
                     os.rmdir(entry.name, dir_fd=fd)
                 finally:
                     os.close(child)
@@ -75,7 +80,7 @@ def main():
     expected_parent, job_name, expected_job, expected_work, *leaf = sys.argv[1:]
     child_name = 'work'
     if leaf:
-        if len(leaf) != 1 or not re.fullmatch(r'(?:work|review-artifact|ac-[A-Za-z0-9._-]{1,120}|\.removendo-[a-f0-9-]{36})', leaf[0]):
+        if len(leaf) != 1 or not re.fullmatch(r'(?:work|review-artifact|(?:ac-|chatisp-)[A-Za-z0-9._-]{1,120}|\.removendo-[a-f0-9-]{36})', leaf[0]):
             raise ValueError('Invalid temporary directory')
         child_name = leaf[0]
     checked(libc.prctl(1, signal.SIGKILL, 0, 0, 0))  # PR_SET_PDEATHSIG
@@ -96,7 +101,7 @@ def main():
         raise ValueError('Unexpected checkout mount')
     for parent in (host, job, work):
         confine_removal(parent)
-    empty_directory(work, mount_id(work), still_bound)
+    empty_directory(work, mount_id(work), still_bound, child_name in ("work", "review-artifact") and bool(leaf))
     still_bound()
     print('emptied')
 

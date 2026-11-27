@@ -88,7 +88,7 @@ async function setupEnvironment(label: string) {
     JSON.stringify({
       schemaVersion: 1,
       mode: 'administration-only',
-      activation: 'personal',
+      activation: 'personal', isolation:'strict',
       databaseUrl: database.url,
       dataDirectory,
       project: {id: projectId, label: `Project ${label}`, repo, owner: principal},

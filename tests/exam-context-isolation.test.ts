@@ -1,3 +1,4 @@
+import {findHostCollector} from '../src/simple-host-tools.ts';
 // The host disk is not what this file proves: a fixed reading keeps a server disk near 95% from refusing these flows.
 import {useFixedDisk} from './fixtures/fixed-disk.ts';
 useFixedDisk();
@@ -395,11 +396,19 @@ test('verificação pessoal via CLI usa contexto dedicado verify, convive com ge
   const root = await mkdtemp(join(tmpdir(), 'ac-verify-ctx-'));
   const dataDirectory = join(root, 'data');
   const databasesDirectory = join(dataDirectory, 'verify-db', '20261118-000000');
+  const previousPath=process.env.PATH, legacyImage='sha256:'+ 'ab'.repeat(32), commonImage='sha256:'+ 'cd'.repeat(32);
+  const hostCollector=await findHostCollector('verify');
   try {
+    // Existing installation with its security image only. Provision the common
+    // tools between exams, in the same installation.
+    const bin=join(root,'bin');
+    await mkdir(bin);
+    await writeFile(join(bin,'docker'),'#!/bin/sh\nexit 1\n',{mode:0o700});
+    process.env.PATH=bin+':'+previousPath;
     await mkdir(databasesDirectory, {recursive: true, mode: 0o700});
     // A published stamp has its manifest; the exam confirms it after claiming the stamp.
     await writeFile(join(databasesDirectory, 'manifest.json'), '{}\n');
-    await writeFile(join(dataDirectory, 'verify-image.json'), JSON.stringify({image: `sha256:${'ab'.repeat(32)}`}), {mode: 0o600});
+    await writeFile(join(dataDirectory, 'verify-image.json'), JSON.stringify({image:legacyImage}), {mode: 0o600});
     await writeFile(
       join(dataDirectory, 'verify-db', 'current.json'),
       JSON.stringify({directory: databasesDirectory, fetchedAt: new Date().toISOString(), manifestSha256: 'c'.repeat(64)}),
@@ -452,6 +461,8 @@ test('verificação pessoal via CLI usa contexto dedicado verify, convive com ge
     const first = await resolvePersonalVerification([installationPath, projectId], {composeRuntime});
     let verifyContext: string;
     try {
+      assert.equal(first.input.simple,Boolean(hostCollector));
+      assert.equal(first.input.image,hostCollector?.identity??legacyImage);
       verifyContext = first.input.authority!.contextId;
       assert.notEqual(verifyContext, mainContext);
       assert.equal(
@@ -490,13 +501,17 @@ test('verificação pessoal via CLI usa contexto dedicado verify, convive com ge
     assert.equal(Number(mainManager?.epoch), gatewayAuthority.epoch);
     assert.equal(mainManager?.active, true);
 
+    await writeFile(join(bin,'docker'),'#!/bin/sh\necho '+commonImage+'\n');
     const second = await resolvePersonalVerification([installationPath, projectId], {composeRuntime});
     try {
+      assert.equal(second.input.simple,true);
+      assert.equal(second.input.image,hostCollector?.identity??commonImage);
       assert.equal(second.input.authority!.contextId, verifyContext);
     } finally {
       await second.close();
     }
   } finally {
+    process.env.PATH=previousPath;
     await db.close();
     await database.close();
     await rm(root, {recursive: true, force: true});

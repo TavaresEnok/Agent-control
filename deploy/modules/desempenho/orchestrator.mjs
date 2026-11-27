@@ -1,7 +1,7 @@
 /** Executa o módulo de desempenho a partir do snapshot oficial do exame. */
 import {randomUUID} from 'node:crypto';
 import {constants} from 'node:fs';
-import {chmod, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, writeFile} from 'node:fs/promises';
+import {chmod, link, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {basename, dirname, join, resolve} from 'node:path';
 import {openPerformanceRecoveryRun, performanceDocker} from './docker-recovery.mjs';
@@ -54,11 +54,12 @@ const limits = ['--pull', 'never', '--network', 'none', '--read-only', '--user',
   '--security-opt', 'no-new-privileges', '--pids-limit', '256', '--memory', '2g', '--memory-swap', '2g',
   '--cpus', '1', '--tmpfs', '/tmp:rw,exec,nosuid,nodev,size=1g'];
 
-async function officialSnapshot(path) {
+async function officialSnapshot(path, sharedRoot) {
   const source = resolve(path);
   const parent = dirname(source);
-  if (basename(source) !== 'repo' || !basename(parent).startsWith('ac-module-snapshot-') ||
-      dirname(parent) !== resolve(tmpdir()) || await realpath(source) !== join(await realpath(tmpdir()), basename(parent), 'repo')) {
+  const shared = sharedRoot && parent === sharedRoot && /^[a-f0-9]{64}-[a-f0-9]{40}$/.test(basename(source));
+  const strict = basename(source) === 'repo' && basename(parent).startsWith('ac-module-snapshot-') && dirname(parent) === resolve(tmpdir());
+  if (!(shared || strict) || await realpath(source) !== source) {
     throw new Error('snapshot oficial privado do exame exigido');
   }
   const directory = await lstat(parent);
@@ -70,7 +71,7 @@ async function officialSnapshot(path) {
   return source;
 }
 
-async function copySnapshot(source, destination, signal) {
+async function copySnapshot(source, destination, signal, shared = false) {
   const stats = {files: 0, bytes: 0, omitted: 0};
   let entries = 0;
   async function copy(from, to, depth) {
@@ -99,6 +100,12 @@ async function copySnapshot(source, destination, signal) {
           const info = await file.stat();
           if (!info.isFile() || info.size > maxFile || ++stats.files > 2500 || (stats.bytes += info.size) > maxTotal) {
             throw new Error('limite ou tipo inválido no snapshot');
+          }
+          if (shared) {
+            // The leased Git checkout outlives the observer. A hardlink keeps the
+            // same bytes while the projection excludes secrets and symlinks.
+            await link(input, output);
+            continue;
           }
           const data = Buffer.alloc(info.size + 1);
           let offset = 0;
@@ -134,7 +141,7 @@ function socketMount(path, destination) {
 }
 
 /** O chamador mantém vivo o snapshot de prepareModuleSnapshot e repassa o sinal do heartbeat. */
-export async function runPerformanceModule({snapshotPath, imageDigest, signal, recoveryDirectory, previousMeasurement, previousMeasurements,
+export async function runPerformanceModule({snapshotPath, imageDigest, commonPin, sharedCheckout = false, signal, recoveryDirectory, previousMeasurement, previousMeasurements,
   timeoutMs = 480_000, maxStdoutBytes = 16 * 1024 * 1024}, {dockerBinary = 'docker'} = {}) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_147_483_647 ||
       !Number.isSafeInteger(maxStdoutBytes) || maxStdoutBytes < 1) throw new Error('limites de desempenho inválidos');
@@ -142,17 +149,17 @@ export async function runPerformanceModule({snapshotPath, imageDigest, signal, r
   const deadline = AbortSignal.timeout(timeoutMs);
   const active = signal ? AbortSignal.any([signal, deadline]) : deadline;
   active.throwIfAborted();
-  const pinned = (await readFile(new URL('./digest.txt', import.meta.url), 'utf8')).trim();
+  const pinned = commonPin ?? (await readFile(new URL('./digest.txt', import.meta.url), 'utf8')).trim();
   if (!/^sha256:[a-f0-9]{64}$/.test(imageDigest) || imageDigest !== pinned) throw new Error('digest da imagem inválido ou diferente do fixado');
-  const official = await officialSnapshot(snapshotPath);
-  const temp = await mkdtemp(join(tmpdir(), 'ac-perf-'));
+  const official = await officialSnapshot(snapshotPath, sharedCheckout ? join(dirname(recoveryDirectory), 'native', 'shared-worktrees') : undefined);
+  const temp = await mkdtemp(join(sharedCheckout ? dirname(official) : tmpdir(), 'ac-perf-'));
   const snapshot = join(temp, 'repo');
   const name = `ac-perf-${randomUUID()}`;
   const coverage = [];
   let docker, journal, result, fallback = false;
   try {
     docker = performanceDocker(dockerBinary, temp);
-    const stats = await copySnapshot(official, snapshot, active);
+    const stats = await copySnapshot(official, snapshot, active, sharedCheckout);
     if (/[\r\n,]/.test(snapshot)) throw new Error('caminho do snapshot incompatível com Docker');
     const mountRepo = ['--mount', `type=bind,src=${snapshot},dst=/repo,readonly`];
     const config = loadConfig(snapshot);

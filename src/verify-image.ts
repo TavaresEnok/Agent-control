@@ -76,11 +76,12 @@ export function verifyDatabaseArguments({image, output}: {image: string; output:
 }
 
 /** Offline exam. Refuses .., a socket, or any network other than none. */
-export function verifyExamArguments({image, repository, databases, output, memoryBytes, nanoCpus, pidsLimit}: {
+export function verifyExamArguments({image, repository, databases, output, memoryBytes, nanoCpus, pidsLimit,commonTools}: {
   image: string;
   repository: string;
   databases: string;
   output: string;
+  commonTools?:boolean;
   memoryBytes: number;
   nanoCpus: number;
   pidsLimit: number;
@@ -112,7 +113,7 @@ export function verifyExamArguments({image, repository, databases, output, memor
     '--mount', `type=bind,src=${source},dst=/repository,readonly`,
     '--mount', `type=bind,src=${cache},dst=/databases,readonly`,
     '--mount', `type=bind,src=${report},dst=/output`,
-    '--entrypoint', '/usr/local/bin/verify-entrypoint.sh',
-    image,
+    '--entrypoint', commonTools?'/usr/local/bin/ac-collect':'/usr/local/bin/verify-entrypoint.sh',
+    image, ...(commonTools?['verify']:[]),
   ];
 }

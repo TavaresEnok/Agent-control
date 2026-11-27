@@ -254,20 +254,9 @@ async function main(){
      const {readCurrentVerifyDatabase}=await import('./verify-db.ts');
      const databasesDirectory=(await readCurrentVerifyDatabase(config.dataDirectory))?.directory;
      if(!databasesDirectory)throw new Refusal('VERIFY_DB_REQUIRED',409);
-     let image:string;
-     try{
-      const {readFile}=await import('node:fs/promises');
-      const parsed=JSON.parse(await readFile(join(config.dataDirectory,'verify-image.json'),'utf8')) as {image?:unknown};
-      if(!parsed||typeof parsed!=='object'||typeof parsed.image!=='string'||parsed.image.length<1)throw new Refusal('VERIFY_IMAGE_UNPINNED',409);
-      image=parsed.image;
-     }catch(error){
-      if(error instanceof Refusal)throw error;
-      const code=error&&typeof error==='object'&&'code' in error?(error as {code?:unknown}).code:undefined;
-      if(code==='ENOENT'||error instanceof SyntaxError)throw new Refusal('VERIFY_IMAGE_UNPINNED',409);
-      throw error;
-     }
      const {createCapacityNativeWorker}=await import('./verify-native-launch.ts');
-     const {beginPersonalVerification,examRunOptions}=await import('./verify-command.ts');
+     const {beginPersonalVerification,examRunOptions,securityExamTools}=await import('./verify-command.ts');
+     const {simple,image}=await securityExamTools(config);
      const examOptions=examRunOptions(project.economy);
      const {personalAccountRoot}=await import('./personal-health.ts');
      const allowedAccountIds=project.allowedAccountIds!==undefined
@@ -286,7 +275,7 @@ async function main(){
       }))
       :executions;
      const worker=createCapacityNativeWorker({supervisors:scopedExecutions,ledger,principal,authority,base:commit,releaseGrant:(grantId,how)=>releaseGrant(principal,authority,grantId,how),pollBackoff:examOptions.pollBackoff});
-     return beginPersonalVerification({projectId:panel.projectId,mapEnabled:examOptions.mapEnabled,batch:examOptions.batch,productionOnly:examOptions.productionOnly,dataDirectory:panel.dataDirectory,repoPath:project.repo,...(body.url?{url:body.url}:{}),...(allowedAccountIds?{allowedAccountIds}:{}),ledger,principal,authority,policyRevision,commit,worker,databasesDirectory,image,installationPath:path,accountRoot:personalAccountRoot(config)});
+     return beginPersonalVerification({simple,projectId:panel.projectId,mapEnabled:examOptions.mapEnabled,batch:examOptions.batch,productionOnly:examOptions.productionOnly,dataDirectory:panel.dataDirectory,repoPath:project.repo,...(body.url?{url:body.url}:{}),...(allowedAccountIds?{allowedAccountIds}:{}),ledger,principal,authority,policyRevision,commit,worker,databasesDirectory,image,installationPath:path,accountRoot:personalAccountRoot(config)});
     },
     recheck:async(principal,authority,input)=>{
      const project=[config.project,...config.projects].find(item=>item.id===input.projectId);

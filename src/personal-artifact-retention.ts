@@ -104,7 +104,7 @@ const defaultGit=(cwd:string,args:string[])=>run('git',['-c','core.hooksPath=/de
  env:{PATH:'/usr/bin:/bin',HOME:'/nonexistent',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_OPTIONAL_LOCKS:'0',GIT_TERMINAL_PROMPT:'0',GIT_NO_REPLACE_OBJECTS:'1',LC_ALL:'C'}});
 const defaultDocker=(args:string[])=>run('docker',args,{timeout:10*60*1000,env:process.env});
 
-async function defaultProcessInside(path:string){
+export async function defaultProcessInside(path:string){
  const prefix=path+sep;
  const inside=(target:string)=>target===path||target.startsWith(prefix);
  for(const name of await readdir('/proc')){
@@ -403,16 +403,32 @@ const here=resolve(dirname(fileURLToPath(import.meta.url)),'..');
  * `retired`: images the native bootstrap still lists as retired (`execution.retiredImages`, `planning.retiredImageIds`) because a job may still need them.
  * `foreign`: digests pinned by OTHER installations on the same Docker daemon, read from the per-daemon reference registry.
  * Any read failure other than a missing file throws, including an unreadable reference file of another installation. */
-async function protectedDigests(config:Installation,deps:RetentionDeps,docker:NonNullable<RetentionDeps['docker']>){
- const pinned=new Set<string>(digestsIn(JSON.stringify(config.nativeBootstrap??null)));
+export async function protectedDigests(config:Installation,deps:RetentionDeps,docker:NonNullable<RetentionDeps['docker']>){
+ const pinned=new Set<string>(digestsIn(JSON.stringify(config)));
  const retired=new Set<string>();
  const boot=config.nativeBootstrap as {planning?:{retiredImageIds?:string[]};execution?:{retiredImages?:{workerImage?:string;toolsImage?:string}[]}}|undefined;
  for(const text of [...(boot?.planning?.retiredImageIds??[]),...(boot?.execution?.retiredImages??[]).flatMap(pair=>[pair.workerImage??'',pair.toolsImage??''])])for(const digest of digestsIn(text))retired.add(digest);
+ const owners=projectsOf(config);
+ for(const entry of (await loadRegistry(config)).images){
+  const owner=owners.find(project=>project.id===entry.projectId);
+  if(!owner||owner.economy?.imageRetention===false)pinned.add(entry.imageId);
+ }
  const roots=new Set([deps.productRoot??here,...projectsOf(config).map(item=>item.repo)]);
- for(const root of roots)for(const module of VERIFICATION_MODULES){
+ const installed=join(config.dataDirectory,'verify-image.json');
+ const simple=join(config.dataDirectory,'simple-tools-image.json');
+ const files=[installed,simple,...[...roots].flatMap(root=>[join(root,'deploy','design-image-digest.txt'),...VERIFICATION_MODULES.map(module=>join(root,'deploy','modules',module,'digest.txt'))])];
+ for(const file of files){
   let text:string;
-  try{text=await readFile(join(root,'deploy','modules',module,'digest.txt'),'utf8');}
-  catch(error){if(errno(error,'ENOENT')||errno(error,'ENOTDIR'))continue;throw error;}
+  try{
+   const handle=await open(file,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
+   try{
+    const info=await handle.stat();
+    if(!info.isFile()||info.size>65536)throw new Refusal('RETENTION_IMAGE_PIN_INVALID');
+    text=await handle.readFile('utf8');
+   }finally{await handle.close();}
+  }catch(error){if(errno(error,'ENOENT'))continue;throw error;}
+  if(file===installed||file===simple)text=JSON.parse(text).image;
+  if(typeof text!=='string'||!digestsIn(text).size)throw new Refusal('RETENTION_IMAGE_PIN_INVALID');
   for(const digest of digestsIn(text))pinned.add(digest);
  }
  for(const image of await (deps.verifyRunImages??defaultVerifyRunImages)(config))for(const digest of digestsIn(image))pinned.add(digest);
@@ -427,7 +443,7 @@ async function protectedDigests(config:Installation,deps:RetentionDeps,docker:No
 // on each retention run, and a removal also honours everything the OTHER files list. An unreadable file keeps every image.
 
 class SharedReferencesUnreadable extends Error{constructor(){super('shared daemon references unreadable');}}
-const SharedRefs=z.object({schemaVersion:z.literal(1),dataDirectory:absolutePath,publishedAt:time,pinned:z.array(z.string().regex(imageIdPattern)).max(5000)}).strict();
+const SharedRefs=z.object({schemaVersion:z.literal(1),dataDirectory:absolutePath,publishedAt:time,installationFile:absolutePath.optional(),productRoot:absolutePath.optional(),pinned:z.array(z.string().regex(imageIdPattern)).max(5000)}).strict();
 const SHARED_REFS_REFRESH_MS=60*60*1000;
 const sharedRefsRoot=(deps:RetentionDeps)=>deps.sharedRefsRoot??process.env.AC_DOCKER_REFS_DIR??join(homedir(),'.agent-control-docker-refs');
 const installationKey=(config:Installation)=>createHash('sha256').update(resolve(config.dataDirectory)).digest('hex').slice(0,32);
@@ -499,8 +515,10 @@ async function proveImage(entry:ImageEntry,guard:{pinned:Set<string>;retired:Set
  }
  let digests:string[],size:number|undefined;
  try{
-  const [image]=JSON.parse(inspected.stdout) as {Id?:string;RepoDigests?:string[];Size?:number}[];
+  const [image]=JSON.parse(inspected.stdout) as {Id?:string;RepoTags?:string[];RepoDigests?:string[];Size?:number}[];
   if(image?.Id!==entry.imageId)return no('o id da imagem não é o registrado');
+  if([...(image.RepoTags??[]),...(image.RepoDigests??[])].some(name=>/chatisp.*homolog|ac-test-db-journal|(?:^|[/:_-])design(?:[/:_-]|$)|agent-control-exam-tools:simple/i.test(name)))
+   return no('imagem protegida da instalação');
   digests=[image.Id,...(image.RepoDigests??[]).flatMap(item=>[...digestsIn(item)])];
   size=Number.isSafeInteger(image.Size)&&image.Size!>=0?image.Size:undefined;
  }catch{return no('resposta ilegível do Docker');}

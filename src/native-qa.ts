@@ -1,3 +1,5 @@
+import {terminalWorkLockKey} from './native-execution-shared.ts';
+import {addSimpleWorktree,readableCheckout,removeSimpleWorktree} from './simple-worktree.ts';
 import {demuxDockerLogs,qaEvidenceLogLine,qaGitIssues,qaLogIssues,type QaEvidenceIssue} from './qa-evidence.ts';
 import {assertDiskSpaceForLaunch} from './personal-disk.ts';
 import {envMatches} from './native-execution-docker-observation.ts';
@@ -45,7 +47,7 @@ export async function collectQaLogs(fetch:()=>Promise<Buffer>){
 export class NativeQa{
  readonly contract:NativeQaContract;readonly verifierDigest:string;private readonly key:Buffer;private readonly docker:DockerDaemon;private readonly cacheRoot?:string;
  constructor(readonly ledger:Ledger,readonly quality:Quality,readonly repository:string,private readonly root:string,contract:NativeQaContract,key:Uint8Array,
-  socketPath?:string,private readonly diskGuard:DiskGuard|undefined=diskGuardFromEnvironment(),resourceEnvelope?:NativeResourceEnvelope,cacheRoot?:string){
+  socketPath?:string,private readonly diskGuard:DiskGuard|undefined=diskGuardFromEnvironment(),resourceEnvelope?:NativeResourceEnvelope,cacheRoot?:string,private readonly simple=false){
   if(quality.ledger!==ledger||key.byteLength<32||resolve(root)!==root||resolve(repository)!==repository||root===repository||root.startsWith(repository+sep)||repository.startsWith(root+sep))throw new Refusal('NATIVE_QA_CONFIGURATION_INVALID');
   this.contract=Object.freeze(NativeQaContract.parse(structuredClone(contract)));Object.freeze(this.contract.argv);Object.freeze(this.contract.environment);if(this.contract.prepareArgv)Object.freeze(this.contract.prepareArgv);
   if(this.contract.services){Object.freeze(this.contract.services);Object.freeze(this.contract.services.postgres);}
@@ -106,6 +108,7 @@ export class NativeQa{
    await c.query("UPDATE ac_native_qa_jobs SET state='failed',receipt=$2 WHERE id=$1",[job.id,receipt]);
    await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1",[job.grant_id,receipt]);
   });
+  await this.releaseSimpleWork(job.id);
   return {state:'failed' as const,receipt};
  }
  /** Prepare uses the daemon's default network and a writable checkout. No account home is mounted. */
@@ -197,7 +200,14 @@ export class NativeQa{
    await c.query("UPDATE ac_stage_operations SET state='uncertain',grant_id=$2 WHERE id=$1",[stage.id,grantId]);await c.query("UPDATE ac_capacity_grants SET state='uncertain' WHERE id=$1",[grantId]);
   });
   const p=this.paths(stage.id);
-  try{await mkdir(p.area,{mode:0o700});await new GitArtifacts(this.repository).snapshot(artifact.commit_id,artifact.base_id,p.work);if(this.contract.prepareArgv)await this.ensureProjectCache();else await setQaSnapshotPermissions(p.work,true);}
+  try{
+   await mkdir(p.area,{mode:0o700});
+   if(this.simple)await addSimpleWorktree(this.repository,artifact.commit_id,p.work);
+   else await new GitArtifacts(this.repository).snapshot(artifact.commit_id,artifact.base_id,p.work);
+   if(this.contract.prepareArgv)await this.ensureProjectCache();
+   else if(this.simple)await readableCheckout(p.work);
+   else await setQaSnapshotPermissions(p.work,true);
+  }
   catch(error){
    // This catch covers only preparation, before the first Docker request.
    // A later lost create/start response remains uncertain. A received create refusal is freed below.
@@ -209,7 +219,7 @@ export class NativeQa{
     if(row?.state!=='uncertain'||row.container_id||grant?.state!=='uncertain')throw new Refusal('NATIVE_QA_RECONCILIATION_REQUIRED');
     await cancelPreparedNativeResources(c,this.docker,stage.id,grantId,authority);
     await c.query("UPDATE ac_native_qa_jobs SET state='failed',receipt=$2 WHERE id=$1",[stage.id,receipt]);await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1",[grantId,receipt]);
-   });return {state:'failed' as const,receipt};
+   });await this.releaseSimpleWork(stage.id);return {state:'failed' as const,receipt};
   }
   // A configured project prepares on the default Docker network, then the test container is launched from reconcile.
   if(this.contract.prepareArgv){
@@ -241,7 +251,7 @@ export class NativeQa{
     if(row?.state!=='uncertain'||row.container_id||grant?.state!=='uncertain')throw new Refusal('NATIVE_QA_RECONCILIATION_REQUIRED');
     await cancelPreparedNativeResources(c,this.docker,stage.id,grantId,authority);
     await c.query("UPDATE ac_native_qa_jobs SET state='failed',receipt=$2 WHERE id=$1",[stage.id,receipt]);await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1",[grantId,receipt]);
-   });return {state:'failed' as const,receipt};
+   });await this.releaseSimpleWork(stage.id);return {state:'failed' as const,receipt};
   }
   await this.ledger.tx(async c=>{await this.authorize(c,principal,authority,intentId,true);await c.query("UPDATE ac_native_qa_jobs SET container_id=$2,state='running' WHERE id=$1 AND state='uncertain'",[stage.id,id]);await c.query("UPDATE ac_capacity_grants SET state='running' WHERE id=$1 AND state='uncertain'",[grantId]);});
   return {state:'running' as const};
@@ -335,9 +345,22 @@ export class NativeQa{
  }
  /** The stage's own polling and the gateway's reconciliation pass both reconcile running jobs. They must not run
   * at the same time for one job, or both create the same container and the loser fails the stage. */
+ private async releaseSimpleWork(id:string){
+  if(!this.simple)return;
+  await this.ledger.tx(async c=>{
+   await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[terminalWorkLockKey(id)]);
+   const path=this.paths(id).work;
+   const linked=await lstat(join(path,'.git')).catch((error:NodeJS.ErrnoException)=>{if(error.code!=='ENOENT')throw error;});
+   if(linked?.isFile())await removeSimpleWorktree(this.repository,path);
+  });
+ }
  private readonly reconciling=new Map<string,Promise<unknown>>();
  async reconcile(principal:string,authority:Authority,id:string):Promise<{state:'completed'|'failed'|'running'|'uncertain';receipt?:any}>{
-  const next=(this.reconciling.get(id)??Promise.resolve()).catch(()=>{/* only serializes passes; each pass reports its own failure */}).then(()=>this.reconcileOnce(principal,authority,id));
+  const next=(this.reconciling.get(id)??Promise.resolve()).catch(()=>{/* only serializes passes; each pass reports its own failure */}).then(async()=>{
+   const outcome=await this.reconcileOnce(principal,authority,id);
+   if(outcome.state==='completed'||outcome.state==='failed')await this.releaseSimpleWork(id);
+   return outcome;
+  });
   this.reconciling.set(id,next);
   try{return await next;}finally{if(this.reconciling.get(id)===next)this.reconciling.delete(id);}
  }
@@ -458,7 +481,7 @@ export class NativeQa{
    if(this.contract.services)await removeNativeQaService(this.docker,id);
    // Restore traversal only after physical absence is confirmed, and before
    // committing retirement so a crash retries this idempotent step.
-   await setQaSnapshotPermissions(this.paths(id).work,false);
+   await setQaSnapshotPermissions(this.paths(id).work,false).catch((error:NodeJS.ErrnoException)=>{if(error.code!=='ENOENT')throw error;});
    if(saved.state==='prepared')await c.query("UPDATE ac_native_qa_retirements SET state='removed',proof=$2 WHERE job_id=$1 AND state='prepared'",[id,{identity:verified.identity,signature:signature.toString('hex')}]);
   });
  }

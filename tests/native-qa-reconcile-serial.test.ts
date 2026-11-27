@@ -1,5 +1,11 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
+import {randomUUID} from 'node:crypto';
+import {mkdtemp,mkdir,lstat,rm,writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {Ledger} from '../src/ledger.ts';
+import {addSimpleWorktree,worktreeGit} from '../src/simple-worktree.ts';
 import {NativeQa} from '../src/native-qa.ts';
 
 test('two reconciles of one QA job never run at the same time; other jobs are not held up',async()=>{
@@ -25,4 +31,23 @@ test('two reconciles of one QA job never run at the same time; other jobs are no
  active=0;peak=0;
  await Promise.all([qa.reconcile('p',authority,'x'),qa.reconcile('p',authority,'y')]);
  assert.equal(peak,2);
+});
+
+test('eight terminal reconciliations remove one QA worktree and replay after its removal',async()=>{
+ const area=await mkdtemp(join(tmpdir(),'ac-qa-serial-')),id=randomUUID(),repo=join(area,'repo'),work=join(area,id,'work');
+ const ledger=new Ledger(process.env.AC_TEST_DATABASE_URL!);
+ try{
+  await mkdir(repo);await mkdir(join(area,id));
+  await worktreeGit(repo,['init','-q']);await writeFile(join(repo,'base'),'fixture');
+  await worktreeGit(repo,['add','.']);await worktreeGit(repo,['commit','-qm','base']);
+  await addSimpleWorktree(repo,(await worktreeGit(repo,['rev-parse','HEAD'])).trim(),work);
+  const runners=Array.from({length:2},()=>Object.assign(Object.create(NativeQa.prototype),{
+   simple:true,ledger,root:area,repository:repo,reconciling:new Map(),reconcileOnce:async()=>({state:'completed'}),
+  }));
+  const results=await Promise.all(Array.from({length:8},(_,i)=>runners[i%2].reconcile('owner',{},id)));
+  for(const result of results)assert.equal(result.state,'completed');
+  await assert.rejects(lstat(work),{code:'ENOENT'});
+  assert.deepEqual(await runners[0].reconcile('owner',{},id),{state:'completed'});
+  assert.equal((await worktreeGit(repo,['worktree','list','--porcelain'])).match(/^worktree /gm)?.length,1);
+ }finally{await ledger.close();await rm(area,{recursive:true,force:true});}
 });
