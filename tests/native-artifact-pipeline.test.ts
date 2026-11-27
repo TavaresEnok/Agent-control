@@ -1,3 +1,4 @@
+import {simpleJobRetention} from '../src/personal-simple-retention.ts';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
@@ -48,8 +49,12 @@ test('stopped native fixture finalizes exact scoped Git code, registers high-ris
   const physical=(id:string)=>({Id:id,Image:image,Config:{Labels:{'agent-control.contract':'native-execution-v1','agent-control.job':input.jobId,'agent-control.launch':digest(input)}},State:{Status:'exited',Running:false,ExitCode:0,FinishedAt:new Date().toISOString()}});
   const w=physical(workerId),t=physical(toolsId);Object.defineProperty(supervisor,'docker',{value:{inspect:async(name:string)=>name===workerId||name.startsWith('ac-native-worker-')?w:t},configurable:true});
   const done=await supervisor.reconcile(principal,authority,input);assert.equal(done.state,'completed');assert('artifact' in done&&done.artifact);
+  const retention={databaseUrl:fixture.url,dataDirectory:area,project:{id:project,label:'fixture',owner:principal,repo},projects:[],nativeBootstrap:{state:'active' as const,execution:{hostRoot:spool}}};
+  assert.deepEqual(await simpleJobRetention(retention,true,async()=>[]),[]);
+  assert.ok((await lstat(work)).isDirectory(),'pending import retains the only candidate');
   // Two registrations at once are serialized by the job's work lock: one import, one row, one private ref created by CAS.
   const [artifact,twin]=await Promise.all([supervisor.registerArtifact(principal,authority,input.jobId,quality),supervisor.registerArtifact(principal,authority,input.jobId,quality)]);
+  assert.deepEqual(await simpleJobRetention(retention,false,async()=>[]),['Elegível '+work]);
   assert.equal(twin.id,artifact.id);assert.equal(artifact.risk,'high');assert.equal(artifact.base_id,base);
   assert.equal(git('rev-parse','refs/agent-control/retained/'+input.jobId),artifact.commit_id);
   // Whoever holds that lock (work retention, another registration) makes a registration wait, not fail.

@@ -1,4 +1,4 @@
-import {PersonalExecutionSupervisor,hostLaunchDigest} from './personal-execution-supervisor.ts';
+import {PersonalExecutionSupervisor,hostLaunchDigests} from './personal-execution-supervisor.ts';
 import {refreshPersonalTemplates} from './personal-policies.ts';
 import {personalEgressEnabled} from './personal-egress.ts';
 import {nativePlanningExecutorDigest} from './native-planning-contract.ts';
@@ -74,7 +74,7 @@ export async function releaseDeadPersonalGrants(ledger:Ledger,olderThanMinutes=1
      const grant=(await c.query(`SELECT id FROM ac_capacity_grants WHERE id=$1 AND state<>'released' AND resource_kind='model'
       AND created_at<clock_timestamp()-make_interval(mins=>$2) FOR UPDATE`,[id,olderThanMinutes])).rows[0];
      if(!grant)return 0;
-     if((await c.query("SELECT 1 FROM ac_native_execution_jobs WHERE grant_id=$1 AND launch_digest=$2 AND state='running'",[id,hostLaunchDigest])).rowCount)return 0;
+     if((await c.query("SELECT 1 FROM ac_native_execution_jobs WHERE grant_id=$1 AND launch_digest=ANY($2::text[]) AND state IN ('running','uncertain')",[id,hostLaunchDigests])).rowCount)return 0;
      // Passive exams must close their job and grant together under the
      // exam-specific lease, Docker and result checks.
      if((await c.query(`SELECT 1 FROM ac_native_execution_jobs j JOIN ac_intents i ON i.id=j.intent_id

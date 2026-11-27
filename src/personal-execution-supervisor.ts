@@ -1,4 +1,5 @@
-import {execFile} from 'node:child_process';
+import {execFile,spawn} from 'node:child_process';
+import {once} from 'node:events';
 import {randomUUID,sign} from 'node:crypto';
 import {lstat,mkdir,readFile,realpath,rename,rm,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -18,6 +19,8 @@ import {Usage} from './usage.ts';
 
 const exec=promisify(execFile);
 export const hostLaunchDigest=digest('personal-host-systemd-v1');
+const directLaunchDigest=digest('personal-host-child-v1');
+export const hostLaunchDigests=[hostLaunchDigest,directLaunchDigest];
 const unit=(id:string)=>'ac-simple-'+z.uuid().parse(id)+'.service';
 const worker=fileURLToPath(new URL('./simple-execution-worker.'+(import.meta.url.endsWith('.ts')?'ts':'js'),import.meta.url));
 async function activeUnit(id:string){
@@ -25,12 +28,40 @@ async function activeUnit(id:string){
  return !['inactive','failed'].includes(stdout.trim());
 }
 
-/** The user service owns the whole CLI process group across gateway restarts.
- * The grant lock serializes start/observe/stop, including the interval between
- * recording a host job and systemd accepting it. */
+// The child waits for stdin before it opens the job. A gateway crash before
+// publication of its pid closes the pipe and the child exits without running.
+async function launchDirect(root:string,args:string[]){
+ const child=spawn(process.execPath,[...args,'--direct'],{detached:true,stdio:['pipe','ignore','ignore']});
+ child.stdin.on('error',()=>{}); // an early worker exit is reconciled from its result
+ await once(child,'spawn');
+ try{
+  const pending=join(root,'worker.pid.pending');
+  await writeFile(pending,String(child.pid),{mode:0o600,flag:'wx'});
+  await rename(pending,join(root,'worker.pid'));
+  child.stdin.write('start');
+ }finally{child.stdin.end();child.unref();}
+}
+
+async function directWorkerPid(root:string){
+ let pid:number;
+ try{pid=z.coerce.number().int().min(2).parse(await readFile(join(root,'worker.pid'),'utf8'));}
+ catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return;throw error;}
+ try{
+  // A reused pid cannot identify a new worker as this particular job.
+  const args=(await readFile('/proc/'+pid+'/cmdline','utf8')).split('\0');
+  if(args.at(-4)===worker&&args.at(-3)===join(root,'host-job.json')&&args.at(-2)==='--direct')return pid;
+ }catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+}
+
 export class PersonalExecutionSupervisor extends NativeExecutionSupervisor{
  private async hostRow(id:string){
-  return (await this.ledger.pool.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1 AND launch_digest=$2',[id,hostLaunchDigest])).rows[0];
+  return (await this.ledger.pool.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1 AND launch_digest=ANY($2::text[])',[id,hostLaunchDigests])).rows[0];
+ }
+ private async activeHostJob(row:{id:string;launch_digest:string}){
+  return row.launch_digest===directLaunchDigest?Boolean(await directWorkerPid(this.paths(row.id).root)):activeUnit(row.id);
+ }
+ private launcher(row:{id:string;launch_digest:string}){
+  return row.launch_digest===directLaunchDigest?{launcher:'child'}:{unit:unit(row.id)};
  }
  override async start(principal:string,authority:Authority,raw:z.input<typeof NativeExecutionRequest>,signal?:AbortSignal){
   const input=NativeExecutionRequest.parse(raw);
@@ -41,9 +72,9 @@ export class PersonalExecutionSupervisor extends NativeExecutionSupervisor{
   if(!this.config.simple||input.designPurpose)return super.start(principal,authority,input,signal);
   const workflow=(await this.ledger.pool.query("SELECT command->'payload'->>'workflow' workflow FROM ac_intents WHERE id=$1",[input.intentId])).rows[0]?.workflow;
   if(workflow==='design-readonly-v1')return super.start(principal,authority,input,signal);
-  return withGrantLaunchLock(this.ledger,input.grantId,async()=>{
+  const launched=await withGrantLaunchLock(this.ledger,input.grantId,async()=>{
    const concurrent=await this.hostRow(input.jobId);
-   if(concurrent){await this.validateReplay(principal,authority,input,concurrent);return {state:'running' as const};}
+   if(concurrent)return false;
    if(!this.active||!this.config.provider||input.model||input.effort)throw new Refusal('NATIVE_EXECUTION_NOT_ELIGIBLE');
    await assertDiskSpaceForLaunch([...(this.ledger.launchVolumes??[]),this.config.hostRoot]);
    await this.diskGuard?.assertAdmission();
@@ -60,6 +91,7 @@ export class PersonalExecutionSupervisor extends NativeExecutionSupervisor{
    const repo=await this.jobRepository(this.ledger.pool,g.project_id);
    const reviewBase=input.artifactId&&!input.moduleExam&&input.role!=='programmer'
     ?(await this.ledger.pool.query('SELECT base_id FROM ac_artifacts WHERE id=$1 AND commit_id=$2',[input.artifactId,input.base])).rows[0]?.base_id:undefined;
+   const systemd=await exec('systemd-run',['--user','--quiet','--wait','--collect','--','/bin/true'],{timeout:5000}).then(()=>true,()=>false);
    await this.directory(this.config.hostRoot);
    await mkdir(p.root,{mode:0o700});
    try{
@@ -71,20 +103,30 @@ export class PersonalExecutionSupervisor extends NativeExecutionSupervisor{
      const current=await this.identity(c,principal,authority,input);
      if(this.profileDigest(current)!==this.profileDigest(g))throw new Refusal('NATIVE_EXECUTION_GRANT_MISMATCH');
      await c.query(`INSERT INTO ac_native_execution_jobs(id,grant_id,intent_id,context_id,manager_epoch,session_id,executor_digest,key_fingerprint,input_digest,base_id,role,account_id,profile_id,profile_digest,eligibility_revision,state,launch_digest)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,1,'running',$15)`,[input.jobId,input.grantId,input.intentId,authority.contextId,authority.epoch,input.sessionId,this.executorDigest,this.fingerprint,digest(input),input.base,input.role,g.account_id,g.profile_id,this.profileDigest(g),hostLaunchDigest]);
-     await c.query("UPDATE ac_capacity_grants SET state='running' WHERE id=$1",[input.grantId]);
-     if(input.role==='programmer')await c.query("UPDATE ac_operations SET state='running',native_session_id=$2 WHERE id=$1",[input.jobId,input.sessionId]);
-     else await c.query("UPDATE ac_stage_operations SET state='running' WHERE id=$1",[input.jobId]);
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,1,'uncertain',$15)`,[input.jobId,input.grantId,input.intentId,authority.contextId,authority.epoch,input.sessionId,this.executorDigest,this.fingerprint,digest(input),input.base,input.role,g.account_id,g.profile_id,this.profileDigest(g),systemd?hostLaunchDigest:directLaunchDigest]);
+     await c.query("UPDATE ac_capacity_grants SET state='uncertain' WHERE id=$1",[input.grantId]);
+     if(input.role==='programmer')await c.query("UPDATE ac_operations SET state='uncertain',native_session_id=$2 WHERE id=$1",[input.jobId,input.sessionId]);
+     else await c.query("UPDATE ac_stage_operations SET state='uncertain' WHERE id=$1",[input.jobId]);
     });
    }catch(error){if(!await this.hostRow(input.jobId))await rm(p.root,{recursive:true,force:true});throw error;}
    try{
     signal?.throwIfAborted();
-    await exec('systemd-run',['--user','--quiet','--collect','--unit',unit(input.jobId),'--property=Type=exec','--property=KillMode=control-group','--property=TimeoutStopSec=5',
+    const args=['--import',import.meta.resolve('tsx'),worker,join(p.root,'host-job.json')];
+    if(!systemd)await launchDirect(p.root,args);
+    else await exec('systemd-run',['--user','--quiet','--collect','--unit',unit(input.jobId),'--property=Type=exec','--property=KillMode=control-group','--property=TimeoutStopSec=5',
      '--property=RuntimeMaxSec='+Math.ceil(input.timeoutMs/1000+60),'--property=UMask=0077','--property=StandardOutput=null','--property=StandardError=null',
-     '--setenv=PATH='+process.env.PATH,'--working-directory='+process.cwd(),'--',process.execPath,'--import',import.meta.resolve('tsx'),worker,join(p.root,'host-job.json')],{timeout:30000});
-   }catch{/* A lost start acknowledgement is observed by unit name before settlement. */}
-   return {state:'running' as const};
+     '--setenv=PATH='+process.env.PATH,'--working-directory='+process.cwd(),'--',process.execPath,...args],{timeout:30000});
+   }catch{return false;} // Reconcile a failure or lost acknowledgement under the same grant lock.
+   await this.ledger.tx(async c=>{
+    await this.scope(c,principal,authority,input,true);
+    await c.query("UPDATE ac_native_execution_jobs SET state='running' WHERE id=$1",[input.jobId]);
+    await c.query("UPDATE ac_capacity_grants SET state='running' WHERE id=$1",[input.grantId]);
+    if(input.role==='programmer')await c.query("UPDATE ac_operations SET state='running' WHERE id=$1",[input.jobId]);
+    else await c.query("UPDATE ac_stage_operations SET state='running' WHERE id=$1",[input.jobId]);
+   });
+   return true;
   });
+  return launched?{state:'running' as const}:this.reconcile(principal,authority,input);
  }
 
  override async reconcile(principal:string,authority:Authority,raw:z.input<typeof NativeExecutionRequest>):Promise<NativeExecutionOutcome>{
@@ -93,9 +135,8 @@ export class PersonalExecutionSupervisor extends NativeExecutionSupervisor{
   if(!job||['completed','failed'].includes(job.state))return super.reconcile(principal,authority,input);
   await this.validateReplay(principal,authority,input,job);
   await withGrantLaunchLock(this.ledger,input.grantId,async()=>{
-   if(await activeUnit(input.jobId))return;
    const row=await this.hostRow(input.jobId);
-   if(row.state!=='running')return;
+   if(['completed','failed'].includes(row.state)||await this.activeHostJob(row))return;
    const p=this.paths(input.jobId);
    const result=await this.readResult(input,1);
    if(await lstat(join(p.root,'stop-requested')).catch((e:NodeJS.ErrnoException)=>{if(e.code!=='ENOENT')throw e;})){
@@ -117,7 +158,7 @@ export class PersonalExecutionSupervisor extends NativeExecutionSupervisor{
    await rm(join(p.root,'cli-tmp'),{recursive:true,force:true});
    await rm(join(p.root,'host-job.json'),{force:true});
    await writeFile(join(p.root,'worker-terminal.log'),(result.failureCode??'completed')+'\n',{mode:0o600});
-   const physical={isolation:'simple',jobId:input.jobId,unit:unit(input.jobId),state:'exited',exitCode:result.exitCode,workerExitCode:result.exitCode,normalizedTokensUsed:result.normalizedTokensUsed,failureCode:result.failureCode};
+   const physical={isolation:'simple',jobId:input.jobId,...this.launcher(row),state:'exited',exitCode:result.exitCode,workerExitCode:result.exitCode,normalizedTokensUsed:result.normalizedTokensUsed,failureCode:result.failureCode};
    const payload={schemaVersion:1,isolation:'simple',jobId:input.jobId,intentId:input.intentId,grantId:input.grantId,contextId:authority.contextId,
     sessionId:input.sessionId,accountId:row.account_id,profileId:row.profile_id,profileDigest:row.profile_digest,epoch:Number(row.manager_epoch),
     inputDigest:row.input_digest,executorDigest:this.executorDigest,outputDigest:digest(result.output),physicalDigest:digest(physical),exitCode:result.exitCode,workerExitCode:result.exitCode,artifact};
@@ -132,7 +173,7 @@ export class PersonalExecutionSupervisor extends NativeExecutionSupervisor{
    });
   });
   const updated=await this.hostRow(input.jobId);
-  return updated.state==='running'?{state:'running'}:super.reconcile(principal,authority,input);
+  return ['running','uncertain'].includes(updated.state)?{state:updated.state}:super.reconcile(principal,authority,input);
  }
 
  override async stop(principal:string,authority:Authority,raw:z.input<typeof NativeExecutionRequest>){
@@ -140,9 +181,12 @@ export class PersonalExecutionSupervisor extends NativeExecutionSupervisor{
   if(!row)return super.stop(principal,authority,input);
   await this.validateReplay(principal,authority,input,row);
   await withGrantLaunchLock(this.ledger,input.grantId,async()=>{
-   if(await activeUnit(input.jobId)){
+   if(!['completed','failed'].includes(row.state)&&await this.activeHostJob(row)){
     await writeFile(join(this.paths(input.jobId).root,'stop-requested'),'stop\n',{mode:0o600});
-    await exec('systemctl',['--user','stop',unit(input.jobId)]);
+    if(row.launch_digest===directLaunchDigest){
+     const pid=await directWorkerPid(this.paths(input.jobId).root);
+     if(pid)try{process.kill(-pid,'SIGKILL');}catch(error){if((error as NodeJS.ErrnoException).code!=='ESRCH')throw error;}
+    }else await exec('systemctl',['--user','stop',unit(input.jobId)]);
    }
   });
   await this.reconcile(principal,authority,input);
@@ -165,7 +209,7 @@ export class PersonalExecutionSupervisor extends NativeExecutionSupervisor{
    throw new Refusal('NATIVE_EXECUTION_SCOPE_MISMATCH');
   const exam=await this.ledger.pool.query(`SELECT 1 FROM ac_intents i WHERE id=$1 AND command->'payload'->>'workflow'='security-verify-readonly-v1'`,[row.intent_id]);
   if(!exam.rowCount||row.role!=='specialist')throw new Refusal('NATIVE_EXECUTION_NOT_ELIGIBLE');
-  if(await activeUnit(id))throw new Refusal('NATIVE_EXECUTION_BUSY');
+  if(await this.activeHostJob(row))throw new Refusal('NATIVE_EXECUTION_BUSY');
   if(!apply)return 'eligible' as const;
   const authority=await this.ledger.acquire(principal,scope.contextId,randomUUID(),'personal-host-recovery',60);
   try{
@@ -175,10 +219,11 @@ export class PersonalExecutionSupervisor extends NativeExecutionSupervisor{
  }
 
  override async retireTerminal(principal:string,authority:Authority,id:string){
-  if(!await this.hostRow(id))return super.retireTerminal(principal,authority,id);
+  const row=await this.hostRow(id);
+  if(!row)return super.retireTerminal(principal,authority,id);
   const outcome=await this.reconcileRegistered(principal,authority,id);
   if(outcome.state!=='completed'&&outcome.state!=='failed')throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
-  const proof={isolation:'simple',jobId:id,unit:unit(id),state:'exited',terminalDigest:digest(outcome.receipt)};
+  const proof={isolation:'simple',jobId:id,...this.launcher(row),state:'exited',terminalDigest:digest(outcome.receipt)};
   await this.ledger.pool.query("INSERT INTO ac_native_terminal_retirements(job_id,binding,state,proof) VALUES($1,$2,'removed',$2) ON CONFLICT(job_id) DO NOTHING",[id,proof]);
   return {state:'removed' as const};
  }
@@ -186,7 +231,7 @@ export class PersonalExecutionSupervisor extends NativeExecutionSupervisor{
   const row=await this.hostRow(id);
   if(!row)return super.retireManagedWriter(principal,authority,id);
   await this.retireTerminal(principal,authority,id);
-  const proof={isolation:'simple',jobId:id,state:'exited',unit:unit(id)};
+  const proof={isolation:'simple',jobId:id,state:'exited',...this.launcher(row)};
   await this.ledger.tx(async c=>{
    await this.ledger.fence(c,authority,true);
    const updated=await c.query(`UPDATE ac_worktree_writers w SET state='neutralized',proof_digest=$2,revocation_job_id=$1,revocation_proof=$3

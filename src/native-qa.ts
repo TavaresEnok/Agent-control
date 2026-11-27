@@ -1,3 +1,4 @@
+import {terminalWorkLockKey} from './native-execution-shared.ts';
 import {addSimpleWorktree,readableCheckout,removeSimpleWorktree} from './simple-worktree.ts';
 import {demuxDockerLogs,qaEvidenceLogLine,qaGitIssues,qaLogIssues,type QaEvidenceIssue} from './qa-evidence.ts';
 import {assertDiskSpaceForLaunch} from './personal-disk.ts';
@@ -346,19 +347,22 @@ export class NativeQa{
   * at the same time for one job, or both create the same container and the loser fails the stage. */
  private async releaseSimpleWork(id:string){
   if(!this.simple)return;
-  const path=this.paths(id).work;
-  const linked=await lstat(join(path,'.git')).catch((error:NodeJS.ErrnoException)=>{if(error.code!=='ENOENT')throw error;});
-  if(linked?.isFile())await removeSimpleWorktree(this.repository,path);
+  await this.ledger.tx(async c=>{
+   await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[terminalWorkLockKey(id)]);
+   const path=this.paths(id).work;
+   const linked=await lstat(join(path,'.git')).catch((error:NodeJS.ErrnoException)=>{if(error.code!=='ENOENT')throw error;});
+   if(linked?.isFile())await removeSimpleWorktree(this.repository,path);
+  });
  }
  private readonly reconciling=new Map<string,Promise<unknown>>();
  async reconcile(principal:string,authority:Authority,id:string):Promise<{state:'completed'|'failed'|'running'|'uncertain';receipt?:any}>{
-  const next=(this.reconciling.get(id)??Promise.resolve()).catch(()=>{/* only serializes passes; each pass reports its own failure */}).then(()=>this.reconcileOnce(principal,authority,id));
-  this.reconciling.set(id,next);
-  try{
-   const outcome=await next;
+  const next=(this.reconciling.get(id)??Promise.resolve()).catch(()=>{/* only serializes passes; each pass reports its own failure */}).then(async()=>{
+   const outcome=await this.reconcileOnce(principal,authority,id);
    if(outcome.state==='completed'||outcome.state==='failed')await this.releaseSimpleWork(id);
    return outcome;
-  }finally{if(this.reconciling.get(id)===next)this.reconciling.delete(id);}
+  });
+  this.reconciling.set(id,next);
+  try{return await next;}finally{if(this.reconciling.get(id)===next)this.reconciling.delete(id);}
  }
  private async reconcileOnce(principal:string,authority:Authority,id:string):Promise<{state:'completed'|'failed'|'running'|'uncertain';receipt?:any}>{
   z.uuid().parse(id);const job=await this.ledger.tx(async c=>{

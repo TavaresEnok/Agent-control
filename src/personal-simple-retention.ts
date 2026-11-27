@@ -37,7 +37,14 @@ export async function simpleJobRetention(config:JobInstallation,apply:boolean,mo
  const lines:string[]=[];
  try{
   const rows=await ledger.pool.query<{id:string;repo:string|null}>(`SELECT j.id,r.repo FROM (
-    SELECT id,context_id,state FROM ac_native_execution_jobs UNION ALL
+    SELECT j.id,j.context_id,j.state FROM ac_native_execution_jobs j
+    WHERE j.role <> 'programmer' OR j.receipt#>'{payload,artifact}' = 'null'::jsonb
+     OR j.receipt#>'{payload,executionStarted}' = 'false'::jsonb OR EXISTS (
+     SELECT 1 FROM ac_artifacts a WHERE a.context_id=j.context_id AND a.intent_id=j.intent_id
+      AND a.implementation_grant_id=j.grant_id AND a.implementation_session_id=j.session_id
+      AND a.commit_id=j.receipt#>>'{payload,artifact,commit}' AND a.tree_id=j.receipt#>>'{payload,artifact,tree}'
+      AND a.base_id=j.base_id)
+    UNION ALL
     SELECT id,context_id,state FROM ac_native_qa_jobs) j JOIN ac_contexts x ON x.id=j.context_id
     LEFT JOIN ac_project_repositories r ON r.project_id=x.project_id
     WHERE j.id=ANY($1::uuid[]) AND j.state IN ('completed','failed','canceled','cancelled')`,[ids]);
@@ -118,19 +125,40 @@ async function retainDockerResources(config:Installation,apply:boolean){
 }
 
 const protectedTempName=(name:string)=>protectedName(name)||/backup|verifica[cç][oõ]es|^PG_VERSION$|^basebackup|\.(?:dump|sql|backup)(?:\.|$)/i.test(name);
-export async function discardableTempContents(path:string,device:bigint,cutoff:number,reviewRoot=false):Promise<boolean>{
+export async function discardableTempContents(path:string,device:bigint,cutoff:number,reviewRoot?:'clone'|'worktree',cleanCheckout=false):Promise<boolean>{
  const entries=await opendir(path);
  for await(const entry of entries){
-  if(entry.name==='.git'&&!(reviewRoot&&entry.isFile())||protectedTempName(entry.name))return false;
+  const gitMetadata=entry.name==='.git';
+  if(gitMetadata&&!(reviewRoot==='clone'&&entry.isDirectory()||reviewRoot==='worktree'&&entry.isFile()))return false;
+  // The clean clone's tracked files (including SQL migrations) are in the project.
+  // Standalone temporaries and the contents of .git keep the protected-name checks.
+  const tracked=!gitMetadata&&(cleanCheckout||reviewRoot==='clone');
+  if(!tracked&&protectedTempName(entry.name))return false;
   const child=join(path,entry.name),info=await lstat(child,{bigint:true});
   if(info.dev!==device||info.uid!==BigInt(process.getuid!())||Number(info.mtimeMs)>cutoff)return false;
-  if(info.isDirectory()&&!await discardableTempContents(child,device,cutoff))return false;
+  if(info.isDirectory()&&!await discardableTempContents(child,device,cutoff,undefined,tracked))return false;
  }
  return true;
 }
 
-async function oldReviewerRepository(config:Installation,path:string){
+type TempInstallation=Pick<Installation,'dataDirectory'|'project'|'projects'>;
+
+async function oldReviewerRepository(config:TempInstallation,path:string){
  const git=await lstat(join(path,'.git')).catch((e:NodeJS.ErrnoException)=>{if(e.code!=='ENOENT')throw e;});
+ if(git?.isDirectory()){
+  // A standalone clone can own other worktrees or unpublished branches.
+  const checkouts=await worktreeGit(path,['worktree','list','--porcelain','-z']);
+  if(checkouts.split('\0\0').filter(Boolean).length!==1)return;
+  if(await worktreeGit(path,['status','--porcelain','-z','--untracked-files=all','--ignored']))return;
+  const tips=(await worktreeGit(path,['rev-parse','HEAD','--all'])).trim().split(/\s+/);
+  for(const project of [config.project,...config.projects]){
+   try{
+    if(await worktreeGit(project.repo,['rev-list','--max-count=1',...tips,'--not','--all']))continue;
+    return {kind:'clone' as const};
+   }catch{continue;}
+  }
+  return;
+ }
  if(!git?.isFile())return;
  for(const project of [config.project,...config.projects]){
   const list=await worktreeGit(project.repo,['worktree','list','--porcelain','-z']).catch(()=>'' /* absent project cannot own the checkout */);
@@ -141,11 +169,11 @@ async function oldReviewerRepository(config:Installation,path:string){
   const status=await worktreeGit(path,['status','--porcelain','-z','--untracked-files=all','--ignored']);
   if(status)continue;
   try{await worktreeGit(project.repo,['merge-base','--is-ancestor',tip,'HEAD']);}catch{continue;}
-  return project.repo;
+  return {kind:'worktree' as const,repo:project.repo};
  }
 }
 
-export async function simpleTempRetention(config:Installation,apply:boolean){
+export async function simpleTempRetention(config:TempInstallation,apply:boolean){
  const root=await realpath(tmpdir()),mounts=await readFile('/proc/self/mountinfo','utf8');
  const protectedPaths=[config.dataDirectory,...[config.project,...config.projects].map(p=>p.repo),
   ...(await containers(true)).flatMap(c=>c.Mounts.map(m=>m.Source))];
@@ -157,10 +185,10 @@ export async function simpleTempRetention(config:Installation,apply:boolean){
   // Git checkouts may be unmerged worker branches. Registered worker worktrees
   // use the existing merge and clean-tree checks in artifact retention.
   if(entry.isDirectory()){
-   const review=/(?:review|revis[aã]o|revisor)/i.test(entry.name)?await oldReviewerRepository(config,path):undefined;
-   if(!await discardableTempContents(path,info.dev,Date.now()-day,Boolean(review)).catch(()=>false /* unreadable content must be preserved */))continue;
+   const review=/(?:review|revis[aã]o|revisor)/i.test(entry.name)?await oldReviewerRepository(config,path).catch(()=>undefined):undefined;
+   if(!await discardableTempContents(path,info.dev,Date.now()-day,review?.kind).catch(()=>false /* unreadable content must be preserved */))continue;
    if(apply){
-    if(review)await removeSimpleWorktree(review,path);
+    if(review?.kind==='worktree')await removeSimpleWorktree(review.repo,path);
     else await releaseRegisteredDirectory(path,{dev:String(info.dev),ino:String(info.ino)});
    }
   }else{

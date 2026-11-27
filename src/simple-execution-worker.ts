@@ -118,6 +118,11 @@ export async function runSimpleWorker(root:string,job:HostJob,invoke=runCli){
 }
 
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
+ if(process.argv[3]==='--direct'){
+  let signal='';
+  for await(const chunk of process.stdin)signal+=chunk.toString();
+  if(signal!=='start')process.exit(1);
+ }
  const root=dirname(resolve(process.argv[2]!));
  const job=JSON.parse(await readFile(join(root,'host-job.json'),'utf8')) as HostJob;
  await runSimpleWorker(root,job);

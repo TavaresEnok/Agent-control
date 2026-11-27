@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {existsSync} from 'node:fs';
-import {lstat,mkdir,mkdtemp,readFile,rm,utimes,writeFile} from 'node:fs/promises';
+import {lstat,mkdir,mkdtemp,readdir,readFile,rm,utimes,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
+import {fileURLToPath} from 'node:url';
 import {join} from 'node:path';
 import {test} from 'node:test';
 import {simpleIsolation,loadInstallation} from '../src/installation.ts';
-import {discardableTempContents,oldTestVolume,removableSimpleImage,simpleJobRetention} from '../src/personal-simple-retention.ts';
+import {discardableTempContents,oldTestVolume,removableSimpleImage,simpleJobRetention,simpleTempRetention} from '../src/personal-simple-retention.ts';
 import {NativeExecutionRequest} from '../src/native-execution-shared.ts';
 import {runSimpleWorker,type HostJob} from '../src/simple-execution-worker.ts';
 import {sharedSimpleWorktree,worktreeGit} from '../src/simple-worktree.ts';
@@ -88,7 +89,7 @@ test('simple retention preserves pins, containers, design and homologation, and 
  assert.ok(!oldTestVolume({...volume,Labels:null,Name:'anonymous'},Date.now()));
 });
 
-test('the personal module CLI runs the provider in its account HOME and records a terminal host job', {skip:!process.env.AC_TEST_DATABASE_URL}, async()=>{
+for(const launcher of ['systemd','child','refused'])test('the personal module CLI records the launch and terminal outcome for '+launcher, {skip:!process.env.AC_TEST_DATABASE_URL}, async()=>{
  const {Ledger}=await import('../src/ledger.ts');
  const {Capacity}=await import('../src/capacity.ts');
  const {isolatedDatabase}=await import('./fixtures/isolated-database.ts');
@@ -119,8 +120,21 @@ test('the personal module CLI runs the provider in its account HOME and records 
   await mkdir(bin);
   // The fixture executes the exact worker argv. Systemd and inference cost no
   // host resources outside the temporary fixture or its isolated database.
-  await writeFile(join(bin,'systemd-run'),'#!/bin/sh\nwhile [ "$1" != -- ]; do shift || exit 1; done\nshift\nexec "$@"\n',{mode:0o755});
-  await writeFile(join(bin,'systemctl'),'#!/bin/sh\necho inactive\n',{mode:0o755});
+  const ack=join(f.root,'launch-observation');
+  const runUnit=launcher==='child'?'#!/bin/sh\nexit 1\n':`#!${process.execPath}
+const fs=require('node:fs'), {spawnSync}=require('node:child_process');
+const {Client}=require(${JSON.stringify(fileURLToPath(import.meta.resolve('pg')))});
+const [command,...args]=process.argv.slice(process.argv.indexOf('--')+1);
+if(command==='/bin/true')process.exit(0);
+(async()=>{
+ const db=new Client({connectionString:${JSON.stringify(database.url)}});await db.connect();
+ const {input}=JSON.parse(fs.readFileSync(args.at(-1)));
+ const {rows}=await db.query('SELECT j.state,g.state AS grant FROM ac_native_execution_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id WHERE j.id=$1',[input.jobId]);
+ await db.end();fs.writeFileSync(${JSON.stringify(ack)},JSON.stringify(rows[0]));
+ process.exitCode=${launcher==='refused'?'1':"spawnSync(command,args,{stdio:'inherit'}).status??1"};
+})().catch(()=>process.exit(2));`;
+  await writeFile(join(bin,'systemd-run'),runUnit,{mode:0o755});
+  await writeFile(join(bin,'systemctl'),launcher==='child'?'#!/bin/sh\nexit 1\n':'#!/bin/sh\necho inactive\n',{mode:0o755});
   await writeFile(join(bin,'codex'),'#!/bin/sh\nexit 1\n',{mode:0o755});
   await writeFile(join(bin,'claude'),`#!${process.execPath}
 const fs=require('node:fs');
@@ -131,14 +145,20 @@ const task=JSON.parse(fs.readFileSync(0,'utf8').split('\\nReturn JSON matching '
 console.log(JSON.stringify({structured_output:{kind:'exame',binding:task.binding,filesRead:[task.file],checklist:['qa'],routesReviewed:[],findings:[]}}));
 `,{mode:0o755});
   process.env.PATH=bin+':'+oldPath;
-  await runPersonalModuleCli('qa',[install,project],{moduleExamRuntime:async()=>exam!.runtime.slice(0,1),collectorOutput:{coverage:[{tool:'qa-auditoria-estatica-testes',version:'1',status:'ok',detail:'leitura local'}],findings:[]}});
-  const jobs=await ledger.pool.query('SELECT id,state,receipt,worker_id FROM ac_native_execution_jobs');
+  const execution=runPersonalModuleCli('qa',[install,project],{moduleExamRuntime:async()=>exam!.runtime.slice(0,1),collectorOutput:{coverage:[{tool:'qa-auditoria-estatica-testes',version:'1',status:'ok',detail:'leitura local'}],findings:[]}});
+  if(launcher==='refused')await execution.catch(()=>undefined);else await execution;
+  if(launcher!=='child')assert.deepEqual(JSON.parse(await readFile(ack,'utf8')),{state:'uncertain',grant:'uncertain'});
+  const jobs=await ledger.pool.query('SELECT j.id,j.state,j.receipt,j.worker_id,g.state AS grant,g.physical_receipt FROM ac_native_execution_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id');
   assert.ok(jobs.rowCount);
   for(const job of jobs.rows){
-   assert.equal(job.state,'completed',JSON.stringify(job.receipt));
+   assert.equal(job.state,launcher==='refused'?'failed':'completed',JSON.stringify(job.receipt));
+   assert.equal(job.grant,'released');
+   if(launcher==='child')assert.equal(job.physical_receipt.launcher,'child');
+   else assert.match(job.physical_receipt.unit,/^ac-simple-/);
    assert.equal(job.worker_id,null);
    assert.equal(job.receipt.payload.isolation,'simple');
   }
+  if(launcher==='refused')return;
   const hostRoot=join(f.root,'fixture-spool'),root=join(hostRoot,jobs.rows[0].id);
   const oldWork=join(root,'work'),mountedReview=join(root,'review-artifact'),unknown=join(hostRoot,randomUUID(),'work');
   await mkdir(oldWork);await mkdir(mountedReview);await mkdir(unknown,{recursive:true,mode:0o700});
@@ -189,4 +209,37 @@ test('native collector arguments mount the examined commit and databases read-on
  }
  assert.equal(args[args.indexOf('/private/results')-1],'--bind');
  assert.ok(!args.includes('/home')&&!args.includes('/run/docker.sock'));
+});
+
+test('old clean reviewer clones are removed while dirty copies and unrelated checkouts stay',async()=>{
+ const f=await fixture(),previousTmp=process.env.TMPDIR,previousPath=process.env.PATH;
+ try{
+  const temporary=join(f.root,'temporary'),bin=join(f.root,'bin');
+  await mkdir(temporary);await mkdir(bin);
+  await writeFile(join(bin,'docker'),'#!/bin/sh\nexit 0\n',{mode:0o700});
+  process.env.TMPDIR=temporary;process.env.PATH=bin+':'+previousPath;
+  await writeFile(join(f.repo,'migration.sql'),'SELECT 1;');
+  await worktreeGit(f.repo,['add','.']);await worktreeGit(f.repo,['commit','-qm','migration']);
+  const clones=['ac-review-clean','ac-review-dirty','ac-worker-copy','ac-review-recent','ac-review-unpublished'];
+  for(const name of clones){
+   const path=join(temporary,name);
+   await worktreeGit(f.repo,['clone','--quiet','--no-local',f.repo,path]);
+   if(name.endsWith('dirty'))await writeFile(join(path,'original'),'unpublished');
+   if(name.endsWith('unpublished')){
+    await worktreeGit(path,['commit','--allow-empty','-qm','unpublished review']);
+   }
+   if(!name.endsWith('recent')){
+    const old=new Date(Date.now()-2*86400000);
+    for(const rel of await readdir(path,{recursive:true}))await utimes(join(path,rel),old,old);
+    await utimes(path,old,old);
+   }
+  }
+  const config={dataDirectory:f.data,project:{id:randomUUID(),repo:f.repo,owner:'fixture',label:'test'},projects:[]};
+  assert.deepEqual(await simpleTempRetention(config,false),['Temporário elegível ac-review-clean']);
+  assert.deepEqual(await simpleTempRetention(config,true),['Temporário removido ac-review-clean']);
+  assert.deepEqual((await readdir(temporary)).sort(),clones.slice(1).sort());
+ }finally{
+  if(previousTmp===undefined)delete process.env.TMPDIR;else process.env.TMPDIR=previousTmp;
+  process.env.PATH=previousPath;await rm(f.root,{recursive:true,force:true});
+ }
 });
