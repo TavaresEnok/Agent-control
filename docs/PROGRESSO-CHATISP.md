@@ -821,3 +821,4 @@ A investigação atribuiu 125 recusas a intents criados por outro principal que 
   - login do Grok da instalação (`accounts/ba6bfaec…`) vencido desde 16/11;
   - revisão de segurança externa: não há revisor externo (risco aceito pelo titular).
 - Worktrees integrados removidos (ramos mantidos); relatórios dos trabalhadores copiados para `ordens-correcao/relatorios-ramos/`. Disco 91% (32 GB livres). O clone central do ChatISP ficou no ramo local `agent-control/exame-design-20261127`.
+- 27/11/2026 ~15:30 UTC — **Push autorizado pelo titular:** Agent Control `task/personal-activation` enviado como ramo novo para `github.com:TavaresEnok/Agent-control`; ChatISP `agent-control/integracao-20261126` (`9726fa0b`) enviado como ramo novo para a origem `enok@177.104.156.25` (main, outros ramos e instalação publicada intocados). **Grok:** sem cota e o titular não vai renovar; o revisor Grok do produto fica desligado.
