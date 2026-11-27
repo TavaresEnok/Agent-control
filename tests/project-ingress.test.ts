@@ -87,3 +87,35 @@ test('unscoped and project-scoped UI preferences stop reading once the byte limi
   assert.ok(read<8);
  }
 });
+
+test('run read marks use the runtime project, principal and bounded retention',async()=>{
+ const project=randomUUID(),foreign=randomUUID();
+ const taskIds:string[]=Array.from({length:257},()=>randomUUID());
+ const foreignRun=randomUUID();
+ const ledger={
+  pool:{query:async(sql:string,values:string[])=>{
+   if(sql.includes('ac_memberships'))return {rowCount:1,rows:[]};
+   const projectId=values[0]===foreignRun?foreign:taskIds.includes(values[0]!)?project:null;
+   return {rowCount:projectId?1:0,rows:projectId?[{context_id:projectId}]:[]};
+  }},
+  tx:async(fn:(db:unknown)=>unknown)=>fn(null),
+  authorize:async(_db:unknown,_principal:string,contextId:string)=>({project_id:contextId}),
+ } as unknown as Ledger;
+ const runtime={projectId:project,nativeExecutionReady:false,native:{
+  fetch:async(request:Request)=>Response.json({id:new URL(request.url).pathname.split('/').at(-1),title:'Test'}),
+ }} as CezarRuntime;
+ const app=createApi(ledger,runtime,async request=>request.headers.get('authorization')??'owner',()=>undefined);
+ const path=(id:string)=>'/api/v1/p/'+project+'/runs/'+id;
+ const mark=(id:string,action='read')=>app.request(path(id)+'/'+action,{method:'POST'});
+ assert.equal((await mark('invalid')).status,400);
+ assert.equal((await mark(foreignRun)).status,403);
+ assert.equal((await mark(randomUUID())).status,403);
+ const first=taskIds[0]!;
+ assert.equal((await mark(first)).status,200);
+ assert.equal(typeof (await (await app.request(path(first))).json() as {seenAt?:string}).seenAt,'string');
+ assert.equal((await (await app.request(path(first),{headers:{authorization:'another-owner'}})).json() as {seenAt?:string}).seenAt,undefined);
+ for(const id of taskIds.slice(1))assert.equal((await mark(id)).status,200);
+ assert.equal((await (await app.request(path(first))).json() as {seenAt?:string}).seenAt,undefined);
+ const last=taskIds.at(-1)!;
+ assert.deepEqual(await (await mark(last,'unread')).json(),{id:last,seenAt:null});
+});
