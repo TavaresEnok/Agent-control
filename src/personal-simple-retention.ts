@@ -185,6 +185,7 @@ export async function simpleTempRetention(config:TempInstallation,apply:boolean)
   // Git checkouts may be unmerged worker branches. Registered worker worktrees
   // use the existing merge and clean-tree checks in artifact retention.
   if(entry.isDirectory()){
+   // If Git cannot verify the copy, the .git guard below preserves it.
    const review=/(?:review|revis[aã]o|revisor)/i.test(entry.name)?await oldReviewerRepository(config,path).catch(()=>undefined):undefined;
    if(!await discardableTempContents(path,info.dev,Date.now()-day,review?.kind).catch(()=>false /* unreadable content must be preserved */))continue;
    if(apply){
