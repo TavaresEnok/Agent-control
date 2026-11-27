@@ -49,3 +49,45 @@ test('the owner sees each account and ends a quota pause; nobody else does',asyn
   assert.equal((await app.request('/api/v1/ac/personal/accounts/not-an-id/release',{method:'POST',headers})).status>=400,true);
  }finally{await rm(root,{recursive:true,force:true});}
 });
+
+test('provider login gives each CLI its own home and clears temporary pairing data on exit or expiry',async t=>{
+ const {providerLogin,startDeviceLogin}=await import('../src/account-add.ts');
+ const {randomUUID}=await import('node:crypto');
+ const root=await realpath(await mkdtemp(join(tmpdir(),'ac-provider-login-')));
+ t.after(()=>rm(root,{recursive:true,force:true}));
+ const bin=join(root,'bin');await mkdir(bin);
+ for(const provider of ['codex','claude','grok']){
+  await writeFile(join(bin,provider),[
+   '#!/bin/sh',
+   'test -z "$AC_SYNTHETIC_SECRET" || exit 4',
+   'test "$HOME" = "$PWD" || test "$HOME" != "/host-home" || exit 5',
+   'case "$0" in',
+   ' */codex) test "$CODEX_HOME" = "$HOME/.codex" && test -z "$CLAUDE_CONFIG_DIR" || exit 6;;',
+   ' */claude) test "$CLAUDE_CONFIG_DIR" = "$HOME" && test -z "$CODEX_HOME" || exit 7;;',
+   ' */grok) test -z "$CODEX_HOME$CLAUDE_CONFIG_DIR" || exit 8;;',
+   'esac',
+   'echo "https://login.example.test/device code: ABCD-1234"',
+   'if test -f "$HOME/long"; then echo "$$" > "$HOME/pid"; exec /bin/sleep 15; fi',
+   '/bin/sleep 0.2',
+  ].join('\n')+'\n',{mode:0o700});
+ }
+ const env={...process.env};
+ t.after(()=>{for(const key of ['PATH','HOME','AC_SYNTHETIC_SECRET'])if(env[key]===undefined)delete process.env[key];else process.env[key]=env[key];});
+ process.env.PATH=bin;
+ process.env.HOME='/host-home';
+ process.env.AC_SYNTHETIC_SECRET='SYNTHETIC';
+ const long=join(root,'long-session');await mkdir(long);await writeFile(join(long,'long'),'');
+ const providers=['codex','claude','grok'] as const;
+ const logins=providers.map(provider=>({accountId:randomUUID(),provider,label:'Test',state:'pending' as const}));
+ const jobs=logins.map(login=>startDeviceLogin(login,login.provider==='grok'?long:root,{keepAlive:true,timeoutMs:500}));
+ assert.throws(()=>startDeviceLogin({...logins[0]!,accountId:randomUUID()},root),/PROVIDER_LOGIN_LIMIT/);
+ const first=logins[0]!;
+ for(let count=0;count<50&&!providerLogin(first.accountId)?.url;count++)await new Promise(resolve=>setTimeout(resolve,5));
+ assert.equal(providerLogin(first.accountId)?.url,'https://login.example.test/device');
+ assert.equal(providerLogin(first.accountId)?.userCode,'ABCD-1234');
+ await Promise.all(jobs);
+ for(const login of logins)assert.deepEqual(providerLogin(login.accountId),{...login,state:login.provider==='grok'?'error':'active'});
+ const {readFile}=await import('node:fs/promises');
+ const pid=Number(await readFile(join(long,'pid'),'utf8'));
+ assert.throws(()=>process.kill(pid,0),{code:'ESRCH'});
+});
