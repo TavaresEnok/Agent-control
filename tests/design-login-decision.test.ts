@@ -6,7 +6,7 @@ import {claimDesignContainer, closeDesignContainers, releaseDesignContainer, res
 // @ts-expect-error módulo da imagem, em JavaScript puro
 import {bodyLeaksPassword, cookieChanged, cookieMap, loginOpened, samePage} from '../deploy/design-tools/login-decision.mjs';
 
-const base = {labOpen: false, hiddenReads: 0, left: false, changed: false, secondStep: false, successRequired: false, successVisible: false};
+const base = {hiddenReads: 0, left: false, changed: false, secondStep: false, successRequired: false, successVisible: false};
 
 test('login real: abre com campo oculto em leituras seguidas, cookie novo e saída da página', () => {
   assert.equal(loginOpened({...base, hiddenReads: 2, left: true, changed: true}), true);
@@ -30,13 +30,8 @@ test('com successSelector, só o seletor visível abre: a página de bloqueio co
   assert.equal(loginOpened({...blocked, successVisible: true}), true);
 });
 
-test('o cookie do laboratório continua valendo sozinho', () => {
-  assert.equal(loginOpened({...base, labOpen: true}), true);
-});
-
-test('falha HTTP impede confirmar a sessão, mesmo com seletor ou cookie de laboratório', () => {
+test('falha HTTP impede confirmar a sessão, mesmo com seletor', () => {
   assert.equal(loginOpened({...base, rejected: true, successRequired: true, successVisible: true}), false);
-  assert.equal(loginOpened({...base, rejected: true, labOpen: true}), false);
 });
 
 test('cookie mudado ou novo é detectado; páginas iguais ignoram a barra final', () => {

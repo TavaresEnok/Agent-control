@@ -881,9 +881,10 @@ async function openAuthenticatedExam(chromium, chrome, origin, login) {
           if (!current) throw new Error('DESIGN_CAPTURE_LOGIN_FAILED');
           if (audit) await current.setBypassServiceWorker(true);
           navigation = watchNavigationFailure(current);
-          const result = await run(current, navigation.failed);
+          const unauthorized = async () => navigation.failed() || await pageShowsLogin(page, origin, login.designLogin);
+          const result = await run(current, unauthorized);
           // Uma passagem que caiu no login não substitui o estado de sessão da última aba válida.
-          if (!navigation.failed() && !await pageShowsLogin(page, origin, login.designLogin.path)) {
+          if (!await unauthorized()) {
             sessionStorage = await page.evaluate(() => Object.entries(window.sessionStorage));
           }
           return result;
@@ -1173,9 +1174,9 @@ async function main() {
   const renderFailures = [];
   const keyboardFailures = [];
   const auditLoginFailures = new Map();
-  const auditLoginFailed = async (tool, route, page, unauthorized) => {
+  const auditLoginFailed = async (tool, route, unauthorized) => {
     if (login === null) return false;
-    if (!unauthorized() && !await pageShowsLogin(page, target.origin, login.designLogin.path)) return false;
+    if (!await unauthorized()) return false;
     auditLoginFailures.set(`${tool} ${route}`, {tool, route});
     return true;
   };
@@ -1261,8 +1262,8 @@ async function main() {
     return steps;
   };
 
-  const passLoginFailed = async (tool, route, page, failures, label, unauthorized) => {
-    if (!await auditLoginFailed(tool, route, page, unauthorized)) return false;
+  const passLoginFailed = async (tool, route, failures, label, unauthorized) => {
+    if (!await auditLoginFailed(tool, route, unauthorized)) return false;
     failures.push(`${label} sessão não confirmada na rota`);
     return true;
   };
@@ -1274,7 +1275,7 @@ async function main() {
     const url = routeUrl(target.origin, route);
     const response = await page.goto(url, {waitUntil: 'load', timeout: 20000}).catch(() => null);
     const status = response && Number.isInteger(response.status()) ? response.status() : 0;
-    if (await passLoginFailed(tool, route, page, failures, label, unauthorized)) return false;
+    if (await passLoginFailed(tool, route, failures, label, unauthorized)) return false;
     const landed = new URL(page.url());
     if (status >= 400 || status === 0 || landed.origin !== target.origin) return false;
     if (login === null && redirectedTo(url, landed.href) !== null) return false;
@@ -1287,7 +1288,7 @@ async function main() {
       try {
         if (renderCells.length < RENDER_CELL_MAX && await openPlain(page, route, 320, 'render', renderFailures, narrow, unauthorized)) {
           const read = await probe(page, renderProbe, RENDER_HELPERS, {overflow: true}, renderFailures, narrow);
-          if (!await passLoginFailed('render', route, page, renderFailures, narrow, unauthorized) && read?.overflow) {
+          if (!await passLoginFailed('render', route, renderFailures, narrow, unauthorized) && read?.overflow) {
             pushRender({file: narrow, route, viewport: 320, theme: 'claro', state: 'padrao', overflow: read.overflow});
             renderMeasured += 1;
           }
@@ -1301,7 +1302,7 @@ async function main() {
       try {
         if (await openPlain(page, route, 1440, 'keyboard', keyboardFailures, wide, unauthorized)) {
           const steps = await walkTab(page, wide);
-          if (!await passLoginFailed('keyboard', route, page, keyboardFailures, wide, unauthorized) && steps.length > 0) keyboardWalks.push({file: wide, steps});
+          if (!await passLoginFailed('keyboard', route, keyboardFailures, wide, unauthorized) && steps.length > 0) keyboardWalks.push({file: wide, steps});
         }
       } catch (error) {
         keyboardFailures.push(`${wide} ${shortError(error)}`);
@@ -1313,9 +1314,9 @@ async function main() {
         await page.emulateMedia({colorScheme: 'light', reducedMotion: 'reduce'});
         if (await openPlain(page, route, 1440, 'render', renderFailures, motion, unauthorized)) {
           await page.waitForTimeout(1000);
-          if (await passLoginFailed('render', route, page, renderFailures, motion, unauthorized)) return;
+          if (await passLoginFailed('render', route, renderFailures, motion, unauthorized)) return;
           const read = await probe(page, motionProbe, MOTION_HELPERS, null, renderFailures, motion);
-          if (!await passLoginFailed('render', route, page, renderFailures, motion, unauthorized) && Array.isArray(read?.running)) {
+          if (!await passLoginFailed('render', route, renderFailures, motion, unauthorized) && Array.isArray(read?.running)) {
             pushRender({file: wide, route, viewport: 1440, theme: 'claro', state: 'padrao', motion: read});
           }
         }
@@ -1333,7 +1334,7 @@ async function main() {
     const url = cell.href ?? routeUrl(target.origin, cell.route);
     const lostSession = async () => {
       if (login === null) return false;
-      const lost = unauthorized() || await pageShowsLogin(page, target.origin, login.designLogin.path);
+      const lost = await unauthorized();
       if (lost) markUnavailable(cell, 401, 'sessão não confirmada na rota');
       return lost;
     };
@@ -1479,7 +1480,7 @@ async function main() {
     const size = {width: viewport, height: viewportHeight(viewport)};
     await page.setViewport(size);
     const response = await page.goto(url, {waitUntil: 'load', timeout: 20000}).catch(() => null);
-    const loginFailed = () => auditLoginFailed('pa11y', route, page, unauthorized);
+    const loginFailed = () => auditLoginFailed('pa11y', route, unauthorized);
     if (await loginFailed() || !response?.ok()) return null;
     const pa11y = (await import('pa11y')).default;
     const result = await bounded(pa11y(url, {
@@ -1547,7 +1548,7 @@ async function main() {
         let chromeSession;
         const url = routeUrl(target.origin, route.route);
         const measure = async (auditPage, unauthorized) => {
-          const loginFailed = () => auditLoginFailed('lighthouse', route.route, auditPage, unauthorized);
+          const loginFailed = () => auditLoginFailed('lighthouse', route.route, unauthorized);
           try {
             // O teto limita a medição quando a página não sossega.
             const result = await bounded(lighthouse(url, {

@@ -369,7 +369,7 @@ export async function openDesignBrowser(targetUrl: string): Promise<{driver: Des
     const page = await context.newPage();
     const guard = await installDesignBrowserGuard(context, page, targetUrl);
     let closed = false;
-    let loginPath: string | undefined;
+    let designLogin: Pick<DesignLogin, 'usernameSelector' | 'submitSelector' | 'successSelector'> & {path?: string} | undefined;
     let navigation = watchNavigationFailure(page);
     const driver: DesignCaptureDriver = {
       async setViewport(width, height) {
@@ -403,11 +403,11 @@ export async function openDesignBrowser(targetUrl: string): Promise<{driver: Des
         guard.afterLogin();
       },
       async submitLogin(login) {
-        ({designLogin: {path: loginPath}} = await submitLogin(page, context, login, origin));
+        ({designLogin} = await submitLogin(page, context, login, origin));
       },
       async verifyAuthenticated(url) {
         assertDesignDestination(url, page.url());
-        if (navigation.failed() || await pageShowsLogin(page, origin, loginPath)) {
+        if (navigation.failed() || await pageShowsLogin(page, origin, designLogin)) {
           throw new Refusal('DESIGN_CAPTURE_LOGIN_FAILED');
         }
       },

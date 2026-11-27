@@ -152,7 +152,7 @@ const server = createServer((req, res) => {
       const fields = new URLSearchParams(body);
       if (fields.get('usuario') === LAB_USER && fields.get('senha') === LAB_PASSWORD) {
         res.writeHead(303, {
-          location: '/',
+          location: '/painel',
           'set-cookie': 'ac_lab_session=aberta; HttpOnly; Path=/; SameSite=Lax',
           'cache-control': 'no-store',
         });

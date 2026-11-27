@@ -56,7 +56,9 @@ test('captura e ferramentas usam sessão em todas as rotas e descartam a tela de
         if (req.url === '/painel') return redirect('/pt-BR/painel');
         if (req.url === '/formulario') return send(res, form.replace('id="pass"', 'id="outraSenha"'));
         if (req.url === '/senha-apenas') return send(res, reauth);
-        if (req.url === '/frame') return send(res, '<iframe src="/formulario"></iframe>');
+        if (req.url === '/shadow') return send(res, '<div id="host"></div><script>' +
+          'host.attachShadow({mode:"open"}).innerHTML = ' + JSON.stringify(reauth) + '</script>');
+        if (req.url === '/frame') return send(res, '<iframe src="/shadow"></iframe>');
         if (req.url === '/trocar-senha') return send(res, '<form><input id="pass" type="password"><button>Trocar senha</button></form>' +
           '<form><h1>Configurar 2FA</h1><input autocomplete="one-time-code"><button>Salvar</button></form><iframe hidden src="/formulario"></iframe>');
         if (req.url === '/clique-401') return send(res, '<a id="acao" href="/negada">Abrir</a>');
@@ -197,7 +199,11 @@ test('Chromium no host reconhece a perda de sessão e o UID da imagem lê seu es
     const html = (body: string, status = 200) => {
       res.writeHead(status, {'content-type': 'text/html'}).end('<!doctype html><html><div id="root">' + body + '</div></html>');
     };
-    if (req.url === '/entrar' || req.url === '/entrar?sem-cookie=1') {
+    if (req.url === '/entrar' && req.headers.cookie === 'lab=opened') {
+      html('<h1>Painel autenticado na URL do login</h1>');
+    } else if (req.url === '/entrar?voltar=painel') {
+      html('<h1>Entrar</h1><p>Entre para continuar.</p>');
+    } else if (req.url === '/entrar' || req.url === '/entrar?sem-cookie=1') {
       const cookie = req.url === '/entrar' ? 'document.cookie = "lab=opened; Path=/"; ' : '';
       const target = req.url === '/entrar' ? '/alias' : '/painel-idb';
       html(form + '<script>document.querySelector("button").onclick = () => {' +
@@ -207,6 +213,11 @@ test('Chromium no host reconhece a perda de sessão e o UID da imagem lê seu es
         'open.onupgradeneeded = () => open.result.createObjectStore("tokens");' +
         'open.onsuccess = () => { const tx = open.result.transaction("tokens", "readwrite");' +
         'tx.objectStore("tokens").put("synthetic-token", "session"); tx.oncomplete = () => location.replace(' + JSON.stringify(target) + '); }; };</script>');
+    } else if (req.url === '/fim-da-sessao') {
+      html('<main>Bem-vindo</main>'); // 200 e nenhum sinal visual de login.
+    } else if (req.url === '/apagar-sessao') {
+      html('<script>document.cookie = "lab=; Max-Age=0; Path=/";' +
+        'indexedDB.deleteDatabase("host-auth").onsuccess = () => location.replace("/fim-da-sessao")</script>');
     } else if (req.url === '/negada') {
       html('<h1>Sessão expirada</h1>', 401);
     } else if (req.url === '/painel-idb') {
@@ -221,6 +232,9 @@ test('Chromium no host reconhece a perda de sessão e o UID da imagem lê seu es
       html(form.replace('id="pass"', 'id="outraSenha"'));
     } else if (req.url === '/senha-apenas') {
       html('<form><input type="password"><button>Entrar</button></form>');
+    } else if (req.url === '/shadow') {
+      html('<div id="host"></div><script>host.attachShadow({mode:"open"}).innerHTML = ' +
+        JSON.stringify('<form><input type="password"><button>Entrar</button></form>') + '</script>');
     } else if (req.url === '/frame') {
       html('<iframe src="/formulario"></iframe>');
     } else if (req.url === '/2fa') {
@@ -271,9 +285,9 @@ test('Chromium no host reconhece a perda de sessão e o UID da imagem lê seu es
         await browser.close();
       }
     };
-    const accepted = ['/alias', '/trocar-senha', '/2fa'];
+    const accepted = ['/alias', '/entrar', '/trocar-senha', '/2fa'];
     assert.deepEqual((await capture(accepted.map(plan))).captures.map(row => row.route), accepted);
-    for (const route of ['/expirada', '/formulario', '/senha-apenas', '/frame']) {
+    for (const route of ['/expirada', '/formulario', '/senha-apenas', '/frame', '/shadow', '/apagar-sessao']) {
       await assert.rejects(capture([plan(route)]), {code: 'DESIGN_CAPTURE_LOGIN_FAILED'});
       assert.ok(visits.has(route), route);
     }
@@ -281,7 +295,8 @@ test('Chromium no host reconhece a perda de sessão e o UID da imagem lê seu es
       ...plan('/painel'), state: 'erro', reach: {kind: 'acoes', steps: ['clicar #acao']},
     }]), {code: 'DESIGN_CAPTURE_LOGIN_FAILED'});
     assert.ok(visits.has('/negada'));
-    assert.deepEqual((await readdir(directory)).sort(), ['2fa.png', 'alias.png', 'capturas.json', 'trocar-senha.png']);
+    assert.ok(visits.has('/fim-da-sessao'));
+    assert.deepEqual((await readdir(directory)).sort(), ['2fa.png', 'alias.png', 'capturas.json', 'entrar.png', 'trocar-senha.png']);
   } finally {
     server.close();
     if (state) await rm(dirname(state), {recursive: true, force: true});

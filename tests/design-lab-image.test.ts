@@ -121,7 +121,9 @@ test('a imagem real encontra os defeitos plantados do laboratório', {skip: !ena
     };
     const shots = imageDoc.screenshots ?? [];
     assert.equal(shots.some(item => item.state === 'logado'), true);
+    // Após o POST levar ao /painel, GET / com o cookie serve a conta na URL original do login.
     assert.equal(shots.some(item => item.route === '/' && item.state === 'logado'), true);
+    assert.equal(shots.some(item => item.route === '/lab/privado'), false, 'o aviso sem senha em /entrar não gera PNG');
     const shotNamed = (state: string) => shots.find(item => item.route === '/' && item.state === state && item.viewport === 1440 && item.fileName);
     const anonShot = shotNamed('vazio') ?? shotNamed('padrao');
     const loggedShot = shotNamed('logado');
