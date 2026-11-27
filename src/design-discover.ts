@@ -19,6 +19,8 @@ export type DesignLogin = {
   submitSelector: string;
   /** Opcional: elemento que só aparece com a sessão aberta. Torna a decisão do login exata. */
   successSelector?: string;
+  /** Caminhos que também exigem o seletor durante a captura. */
+  successRoutes?: string[];
 };
 
 /** Username e seletores. A senha não entra neste objeto. */

@@ -38,6 +38,7 @@ export type DesignRunInput = {
   network?: string;
   /** Caminho absoluto do storageState. Sem o campo, o argv não ganha mount. */
   loginState?: string;
+  renewalDirectory?: string;
   /** CA da homologação HTTPS, já conferida. O exame só aceita a cadeia que fecha nela. */
   trustCa?: string;
   /** Nome do contêiner, para o host removê-lo no prazo ou na interrupção. */
@@ -171,6 +172,10 @@ export function designRunArguments(input: DesignRunInput): readonly string[] {
   if (input.loginState !== undefined) {
     assertMountPath(input.loginState);
     loginMount.push('--mount', `type=bind,source=${input.loginState},destination=/login/state.json,readonly`);
+  }
+  if (input.renewalDirectory !== undefined) {
+    assertMountPath(input.renewalDirectory);
+    loginMount.push('--mount', `type=bind,source=${input.renewalDirectory},destination=/login/renewal,readonly`);
   }
   const trust = designTrustArguments(input.targetUrl, input.trustCa);
   if (input.name !== undefined && !DESIGN_EXAM_CONTAINER.test(input.name)) throw new Refusal('DESIGN_PATH_FORBIDDEN');

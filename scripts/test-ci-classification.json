@@ -364,6 +364,7 @@
  "requer": {
   "broker-recovery.test.ts": "env:AC_SANDBOX_DATABASE_URL",
   "broker-terminal-recovery.test.ts": "env:AC_SANDBOX_DATABASE_URL",
+  "design-authenticated-capture.test.ts": "env:AC_DESIGN_CAPTURE_LAB_IMAGE",
   "design-lab-image.test.ts": "env:AC_DESIGN_LAB",
   "managed-retirement-restart.test.ts": "env:AC_MANAGED_RETIREMENT_RESTART",
   "module-banco-exame.lab.test.ts": "env:AC_MODULE_LAB",
@@ -374,6 +375,7 @@
   "verification-modules-cleanup.lab.test.ts": "env:AC_MODULE_CLEANUP_LAB"
  },
  "laboratorio": {
+  "design-authenticated-capture.test.ts": "exige Docker, imagem local de design com os scripts da revisão, Chrome no host e setfacl para validar formulários, redirecionamentos, rotação de cookie, IndexedDB e medições por largura com sessão sob o UID do produto (AC_CI_TEST_TIMEOUT_MS=600000)",
   "account-homes.test.ts": "exige o banco do laboratório com nome /ac_implementation_test (falha ISOLATED_DATABASE_REQUIRED fora dele); PENDENTE DE VALIDAÇÃO: candidato a executar, rodar no laboratório antes de promover",
   "cancellation.test.ts": "exige o banco do laboratório com nome /ac_implementation_test (falha ISOLATED_DATABASE_REQUIRED fora dele); PENDENTE DE VALIDAÇÃO: candidato a executar, rodar no laboratório antes de promover",
   "claude-quota-wait.test.ts": "exige o banco do laboratório com nome /ac_implementation_test (falha ISOLATED_DATABASE_REQUIRED fora dele); PENDENTE DE VALIDAÇÃO: candidato a executar, rodar no laboratório antes de promover",

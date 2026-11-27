@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import {createHash, randomUUID} from 'node:crypto';
 import {chmod, mkdtemp, readFile, readdir, rm, stat, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {dirname, join} from 'node:path';
+import {join} from 'node:path';
 import {test} from 'node:test';
 import {fileURLToPath} from 'node:url';
+import {designScratchRoot, removeDesignScratch} from '../src/design-containers.ts';
 import {writeDesignLoginState} from '../src/design-browser.ts';
 import {readDesignRepository} from '../src/design-command.ts';
 import {designBenchWorker} from '../src/design-bench.ts';
@@ -61,14 +62,16 @@ test('a imagem real encontra os defeitos plantados do laboratório', {skip: !ena
     await writeFile(loginFile, JSON.stringify(login), {mode: 0o600});
     await chmod(loginFile, 0o600);
     assert.equal((await stat(loginFile)).mode & 0o777, 0o600);
-    const statePath = await writeDesignLoginState('http://design-lab.local:8080', login, pin);
+    const statePath = await writeDesignLoginState('http://design-lab.local:8080/entrar', login, pin);
     assert.equal((await stat(statePath)).mode & 0o777, 0o600);
-    await rm(dirname(statePath), {recursive: true, force: true});
+    const scratch = await designScratchRoot(statePath);
+    assert.ok(scratch);
+    await removeDesignScratch(scratch);
     const result = await runDesignModule({
       activation: 'personal',
       projectId: randomUUID(),
       repo: labRoot,
-      targetUrl: 'http://design-lab.local:8080',
+      targetUrl: 'http://design-lab.local:8080/entrar',
       dataDirectory: data,
       intentId: randomUUID(),
       runId: randomUUID(),
@@ -121,7 +124,9 @@ test('a imagem real encontra os defeitos plantados do laboratório', {skip: !ena
     };
     const shots = imageDoc.screenshots ?? [];
     assert.equal(shots.some(item => item.state === 'logado'), true);
+    // Após o POST levar ao /painel, GET / com o cookie serve a conta na URL original do login.
     assert.equal(shots.some(item => item.route === '/' && item.state === 'logado'), true);
+    assert.equal(shots.some(item => item.route === '/lab/privado'), false, 'o aviso sem senha em /entrar não gera PNG');
     const shotNamed = (state: string) => shots.find(item => item.route === '/' && item.state === state && item.viewport === 1440 && item.fileName);
     const anonShot = shotNamed('vazio') ?? shotNamed('padrao');
     const loggedShot = shotNamed('logado');
@@ -169,7 +174,8 @@ test('a imagem real encontra os defeitos plantados do laboratório', {skip: !ena
       || file.startsWith('/painel ') || file.startsWith('/item/42 ');
     const onCorrect = parsed.findings.filter(item => (item.tool === 'régua' || item.tool === 'teclado') && correct(item.file ?? ''));
     assert.deepEqual(onCorrect.map(item => `${item.tool} ${item.rule} ${item.file} ${item.snippet}`), []);
-    assert.match(readme, /redirecionou para \/entrar/);
+    assert.match(readme, /sessão não confirmada na rota.*\/lab\/privado/);
+    assert.equal(result.captureLoginFailed, true);
     assert.match(readme, /indisponível \(tela de erro do servidor de desenvolvimento\)/);
     assert.match(coverage, /\| régua \|/);
     assert.match(coverage, /\| teclado \|/);

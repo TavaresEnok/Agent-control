@@ -135,6 +135,7 @@ function readBody(req) {
 function sendLoggedHome(res) {
   try {
     const html = readFileSync(join(root, 'public/index.html'), 'utf8')
+      .replace(/<form id="login"[\s\S]*?<\/form>/, '')
       .replace('</body>', '<h1 id="conta">Conta de ada aberta</h1></body>');
     res.writeHead(200, {'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store'});
     res.end(html);
@@ -151,7 +152,7 @@ const server = createServer((req, res) => {
       const fields = new URLSearchParams(body);
       if (fields.get('usuario') === LAB_USER && fields.get('senha') === LAB_PASSWORD) {
         res.writeHead(303, {
-          location: '/',
+          location: '/painel',
           'set-cookie': 'ac_lab_session=aberta; HttpOnly; Path=/; SameSite=Lax',
           'cache-control': 'no-store',
         });
@@ -171,12 +172,13 @@ const server = createServer((req, res) => {
     return;
   }
   if (url.pathname === '/lab/privado') {
-    res.writeHead(302, {location: '/entrar', 'cache-control': 'no-store'});
+    res.writeHead(302, {location: '/entrar?voltar=privado', 'cache-control': 'no-store'});
     res.end();
     return;
   }
   if (req.method === 'GET' && url.pathname === '/entrar') {
-    sendHtml(res, 200, LOGIN_PAGE);
+    if (url.searchParams.has('voltar')) sendHtml(res, 200, LOGIN_PAGE);
+    else sendFile(res, 'public/index.html');
     return;
   }
   if (url.pathname === '/lab/erro-dev') {

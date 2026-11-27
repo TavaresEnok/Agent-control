@@ -132,6 +132,7 @@ export type DesignModuleResult = {
   coverageMarkdown: string;
   visualLow: boolean;
   loginStale: boolean;
+  captureLoginFailed: boolean;
   visualUnjudged: boolean;
   visualRequested?: number;
   visualJudged?: number;
@@ -164,15 +165,16 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     ? undefined
     : await stageDesignReferences({dataDirectory: input.dataDirectory, runId: input.runId, files: input.referenceFiles, repository: input.repo});
   let loginState: string | undefined;
-  let loginDir: string | undefined;
-  let loginNote = '';
-  if (input.image !== undefined && plannedStates?.wantsLogin === true && input.login !== undefined) {
+  const {login, image: imageConfig} = input;
+  const renewLogin = login && imageConfig
+    ? () => writeDesignLoginState(input.targetUrl, login, imageConfig.pinnedImage, input.trustCa)
+    : undefined;
+  if (renewLogin) {
     try {
-      loginState = await writeDesignLoginState(input.targetUrl, input.login, input.image.pinnedImage, input.trustCa);
-      loginDir = dirname(loginState);
+      loginState = await renewLogin();
     } catch (error) {
       if (error instanceof Refusal && (error.code === 'DESIGN_PASSWORD_LEAK' || error.code.startsWith('DESIGN_TRUST_CA_'))) throw error;
-      loginNote = 'O estado logado não foi capturado: o login falhou.';
+      throw new Refusal('DESIGN_CAPTURE_LOGIN_FAILED');
     }
   }
   const imagePlan = input.image === undefined
@@ -201,14 +203,14 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
   const image = await (async () => {
     try {
       return input.image === undefined || imagePlan === undefined ? undefined : await executeDesignImage({
-    image: input.image.pinnedImage,
-    repository: input.repo,
-    targetUrl: input.targetUrl,
-    plan: imagePlan,
-    ...(input.image.run === undefined ? {} : {run: input.image.run}),
-    ...(input.image.timeoutMs === undefined ? {} : {timeoutMs: input.image.timeoutMs}),
-    ...(loginState === undefined ? {} : {loginState}),
-    ...(input.trustCa === undefined ? {} : {trustCa: input.trustCa}),
+        image: input.image.pinnedImage,
+        repository: input.repo,
+        targetUrl: input.targetUrl,
+        plan: imagePlan,
+        ...(input.image.run === undefined ? {} : {run: input.image.run}),
+        ...(input.image.timeoutMs === undefined ? {} : {timeoutMs: input.image.timeoutMs}),
+        ...(loginState && renewLogin && {loginState, renewLogin}),
+        ...(input.trustCa === undefined ? {} : {trustCa: input.trustCa}),
       });
     } finally {
       // A pasta inteira do login sai, com o state.json que o uid da imagem gravou.
@@ -221,7 +223,7 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
   })();
   if (image && !image.ok) {
     await writeImageFailure(input, target.origin, image);
-    throw new Refusal(image.code === 'DESIGN_IMAGE_TIMEOUT' || image.code === 'DESIGN_TRUST_CA_FAILED' ? image.code : 'DESIGN_IMAGE_FAILED');
+    throw new Refusal(image.code === 'DESIGN_IMAGE_TIMEOUT' || image.code === 'DESIGN_TRUST_CA_FAILED' || image.code === 'DESIGN_CAPTURE_LOGIN_FAILED' ? image.code : 'DESIGN_IMAGE_FAILED');
   }
   const fileMap = routeFileMap(input.files, projectConfig);
   // Régua e Tab entram pelo collect, para a rota virar o arquivo da tela que o examinador lê.
@@ -258,7 +260,6 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
       const route = note.split(':')[0] ?? '';
       return !(loggedRoutes.has(route) && note.includes('logado não capturado'));
     }),
-    ...(loginNote.length > 0 ? [loginNote] : []),
     ...imageStateNotes(image?.notes ?? []),
   ];
   const notes: string[] = [...stateNotes];
@@ -432,6 +433,7 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     coverageMarkdown: read.coverageMarkdown,
     visualLow: examined.visual.some(row => row.examiner.some(score => score.score < 8)),
     loginStale: examined.loginStale,
+    captureLoginFailed: loginState !== undefined && image?.captureLoginFailed === true,
     visualUnjudged: visualIncomplete,
     ...(input.scoreVisual === true
       ? {visualRequested, visualJudged: examined.visual.length, visualMissing}
@@ -800,7 +802,7 @@ async function captureIfAsked(
         hasEmptyState: sourceHasEmptyState(textFor(input.files, route.file)),
       }))),
       directory,
-      input.login === undefined ? undefined : {login: input.login},
+      input.login === undefined ? undefined : {login: input.login, loginUrl: input.targetUrl},
     );
     const marks = new Map((input.marks ?? []).map(mark => [mark.fileName, mark.rect]));
     const files: DesignReportCapture[] = [];

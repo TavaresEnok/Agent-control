@@ -8,12 +8,14 @@ import type {DesignCaptureDriver, DesignCaptureTheme} from './design-capture.ts'
 import type {DesignLogin} from './design-discover.ts';
 import {assertDesignDestination, assertDesignTarget, designTrustArguments} from './design-image.ts';
 import {claimDesignContainer, makeDesignScratch, releaseDesignContainer, removeDesignScratch} from './design-containers.ts';
+// @ts-expect-error módulo compartilhado com a imagem
+import {bodyLeaksPassword, pageShowsLogin, submitLogin, watchNavigationFailure} from '../deploy/design-tools/login-decision.mjs';
 
 type DesignPage = {
   url(): string;
   setViewportSize(size: {width: number; height: number}): Promise<void>;
   emulateMedia(options: {colorScheme: 'dark' | 'light'}): Promise<void>;
-  goto(url: string, options: {waitUntil: 'domcontentloaded'; timeout: number}): Promise<unknown>;
+  goto(url: string, options: {waitUntil: 'domcontentloaded'; timeout: number}): Promise<DesignNavigationResponse>;
   screenshot(options: {fullPage: true; type: 'png'}): Promise<Buffer>;
   content(): Promise<string>;
   fill(selector: string, value: string): Promise<void>;
@@ -35,9 +37,11 @@ type DesignBrowserResponse = {
   text(): Promise<string>;
 };
 
+type DesignNavigationResponse = {status(): number} | null | void;
+
 export type DesignBrowserGuardPage = {
   url(): string;
-  goto(url: string, options: {waitUntil: 'domcontentloaded'; timeout: number}): Promise<unknown>;
+  goto(url: string, options: {waitUntil: 'domcontentloaded'; timeout: number}): Promise<DesignNavigationResponse>;
   fill(selector: string, value: string): Promise<void>;
 };
 
@@ -56,7 +60,7 @@ export type DesignBrowserGuardContext = {
 };
 
 export type DesignBrowserGuard = {
-  goto(url: string): Promise<void>;
+  goto(url: string): Promise<DesignNavigationResponse>;
   fill(selector: string, value: string): Promise<void>;
   afterLogin(): void;
   /** Raw document when the response is not HTML. Undefined for an HTML page. */
@@ -64,8 +68,8 @@ export type DesignBrowserGuard = {
 };
 
 type DesignContext = DesignBrowserGuardContext & {
+  close(): Promise<void>;
   newPage(): Promise<DesignPage>;
-  storageState(): Promise<unknown>;
 };
 
 type DesignBrowser = {
@@ -137,8 +141,9 @@ export async function installDesignBrowserGuard(
   return {
     async goto(url: string) {
       rawDocument = undefined;
-      await page.goto(url, {waitUntil: 'domcontentloaded', timeout: 30000});
+      const response = await page.goto(url, {waitUntil: 'domcontentloaded', timeout: 30000});
       assertDesignDestination(targetUrl, page.url());
+      return response;
     },
     async fill(selector: string, value: string) {
       assertDesignDestination(targetUrl, page.url());
@@ -240,7 +245,7 @@ async function waitForPaint(page: DesignPage): Promise<void> {
 }
 
 /**
- * O host faz o login e grava o storageState em 0600.
+ * O host grava o storageState em arquivo privado e, para a imagem, concede leitura ao UID 65532.
  * Um alvo `.local` entra pela imagem, na rede de homologação: o host não resolve esse nome.
  * A senha não entra no arquivo nem na linha de comando. O chamador apaga o diretório no fim.
  */
@@ -260,16 +265,16 @@ export async function writeDesignLoginState(targetUrl: string, login: DesignLogi
     const context = await browser.newContext(designBrowserContextOptions);
     const page = await context.newPage();
     const guard = await installDesignBrowserGuard(context, page, targetUrl);
-    await guard.goto(assertDesignTarget(targetUrl).origin);
+    await guard.goto(targetUrl);
     await guard.fill(login.usernameSelector, login.username);
     await guard.fill(login.passwordSelector, login.password);
-    await page.click(login.submitSelector);
-    guard.afterLogin();
-    const body = JSON.stringify(await context.storageState());
-    if (body.includes(login.password)) throw new Refusal('DESIGN_PASSWORD_LEAK');
+    const body = JSON.stringify(await submitLogin(page, context, login, target.origin, targetUrl));
+    if (bodyLeaksPassword(body, login.username, login.password)) throw new Refusal('DESIGN_PASSWORD_LEAK');
     const path = join(directory, 'state.json');
     await writeFile(path, body, {mode: 0o600});
-    await chmod(path, 0o600);
+    if (pinnedImage !== undefined && await commandCode('setfacl', ['-m', 'u:65532:r', path]) !== 0) {
+      throw new Error('DESIGN_LOGIN_IMAGE');
+    }
     return path;
   } catch (error) {
     await removeDesignScratch(directory);
@@ -304,6 +309,7 @@ async function writeLoginStateInImage(targetUrl: string, login: DesignLogin, pin
       usernameSelector: login.usernameSelector,
       passwordSelector: login.passwordSelector,
       submitSelector: login.submitSelector,
+      successRoutes: login.successRoutes,
       ...(login.successSelector === undefined ? {} : {successSelector: login.successSelector}),
     }), {mode: 0o600});
     await chmod(cred, 0o600);
@@ -354,18 +360,28 @@ async function loadChromium(): Promise<ChromiumLauncher> {
 
 /** Host Chrome through the Playwright already installed for the panel. The design CLI captures with this driver. */
 export async function openDesignBrowser(targetUrl: string): Promise<{driver: DesignCaptureDriver; close: () => Promise<void>}> {
-  assertDesignTarget(targetUrl);
+  const {origin} = assertDesignTarget(targetUrl);
   const chromium = await loadChromium();
   const browser = await chromium.launch({
     executablePath: CHROME,
     args: ['--no-sandbox', '--disable-dev-shm-usage'],
   });
   try {
-    const context = await browser.newContext(designBrowserContextOptions);
-    const page = await context.newPage();
-    const guard = await installDesignBrowserGuard(context, page, targetUrl);
+    let context = await browser.newContext(designBrowserContextOptions);
+    let page = await context.newPage();
+    let guard = await installDesignBrowserGuard(context, page, targetUrl);
     let closed = false;
+    let designLogin: Omit<DesignLogin, 'username' | 'password'> & {path?: string} | undefined;
+    let navigation = watchNavigationFailure(page);
     const driver: DesignCaptureDriver = {
+      async resetSession() {
+        navigation.stop();
+        await context.close();
+        context = await browser.newContext(designBrowserContextOptions);
+        page = await context.newPage();
+        guard = await installDesignBrowserGuard(context, page, targetUrl);
+        navigation = watchNavigationFailure(page);
+      },
       async setViewport(width, height) {
         await page.setViewportSize({width, height});
       },
@@ -373,7 +389,14 @@ export async function openDesignBrowser(targetUrl: string): Promise<{driver: Des
         await page.emulateMedia({colorScheme: theme === 'escuro' ? 'dark' : 'light'});
       },
       async goto(url) {
-        await guard.goto(url);
+        navigation.stop();
+        navigation = watchNavigationFailure(page);
+        try {
+          await guard.goto(url);
+        } catch (error) {
+          if (navigation.failed()) throw new Refusal('DESIGN_CAPTURE_LOGIN_FAILED');
+          throw error;
+        }
         await waitForPaint(page);
       },
       async screenshot() {
@@ -387,13 +410,16 @@ export async function openDesignBrowser(targetUrl: string): Promise<{driver: Des
       },
       async click(selector) {
         await page.click(selector);
-        await page.waitForFunction(
-          () => document.querySelector('input[name="password"]') === null,
-          undefined,
-          {timeout: 15000},
-        ).catch(() => undefined /* a login form that stays is caught by the next capture check */);
-        // Login can navigate while the password field disappears.
         guard.afterLogin();
+      },
+      async submitLogin(login, loginUrl) {
+        ({designLogin} = await submitLogin(page, context, login, origin, loginUrl));
+      },
+      async verifyAuthenticated(url) {
+        assertDesignDestination(url, page.url());
+        if (navigation.failed() || await pageShowsLogin(page, url, designLogin)) {
+          throw new Refusal('DESIGN_CAPTURE_LOGIN_FAILED');
+        }
       },
     };
     return {

@@ -456,3 +456,31 @@ test('recusa senha no metadado, nome inseguro e driver sem preenchimento', async
     await rm(parent, {recursive: true, force: true});
   }
 });
+
+test('a captura com sessão valida cada rota e abandona os PNGs se voltar ao login', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'design-capture-auth-'));
+  try {
+    const driver = fakeDriver();
+    const checked: string[] = [];
+    const plans = ['/painel', '/expirada'].map((route, index): DesignCapturePlan => ({
+      screenId: String(index), route, viewport: 375, theme: 'claro', state: 'padrao',
+      fileName: `tela-${index}.png`,
+    }));
+    const withSession: DesignCaptureDriver = {
+      ...driver,
+      async verifyAuthenticated(url) {
+        checked.push(new URL(url).pathname);
+        if (url.endsWith('/expirada')) throw new Refusal('DESIGN_CAPTURE_LOGIN_FAILED');
+      },
+    };
+    await assert.rejects(
+      captureScreens(withSession, BASE, plans, directory, {login, loginUrl: BASE + '/acesso'}),
+      error => isRefusal(error, 'DESIGN_CAPTURE_LOGIN_FAILED'),
+    );
+    assert.deepEqual(checked, ['/painel', '/painel', '/expirada', '/expirada']);
+    assert.equal(driver.calls[0]?.op === 'goto' && driver.calls[0].url, BASE + '/acesso');
+    assert.deepEqual(await readdir(directory), []);
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});

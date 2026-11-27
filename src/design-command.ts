@@ -187,9 +187,14 @@ function loginFromJson(value: unknown): DesignLogin {
     picked[field] = item;
   }
   const success = row.successSelector;
+  const routes = row.successRoutes;
+  if (routes !== undefined && (!Array.isArray(routes) || success === undefined ||
+    !routes.every(route => typeof route === 'string' && route.startsWith('/') && !route.startsWith('//') && !route.includes('\\')))) {
+    throw new Refusal('DESIGN_LOGIN_INVALID', 400);
+  }
   if (success === undefined) return picked;
   if (typeof success !== 'string' || success.length < 1 || success.length > 500) throw new Refusal('DESIGN_LOGIN_INVALID', 400);
-  return {...picked, successSelector: success};
+  return {...picked, successSelector: success, ...(routes === undefined ? {} : {successRoutes: routes})};
 }
 
 /**

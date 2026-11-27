@@ -4,9 +4,9 @@ import {Refusal} from '../src/contracts.ts';
 import {assertInternalDesignNetwork} from '../src/design-trust.ts';
 import {claimDesignContainer, closeDesignContainers, releaseDesignContainer, resetDesignContainersForTest, setDesignContainerRemoverForTest} from '../src/design-containers.ts';
 // @ts-expect-error módulo da imagem, em JavaScript puro
-import {bodyLeaksPassword, cookieChanged, cookieMap, loginOpened, samePage} from '../deploy/design-tools/login-decision.mjs';
+import {bodyLeaksPassword, cookieChanged, cookieMap, loginOpened, pageShowsLogin, samePage} from '../deploy/design-tools/login-decision.mjs';
 
-const base = {labOpen: false, hiddenReads: 0, left: false, changed: false, secondStep: false, successRequired: false, successVisible: false};
+const base = {hiddenReads: 0, left: false, changed: false, secondStep: false, successRequired: false, successVisible: false};
 
 test('login real: abre com campo oculto em leituras seguidas, cookie novo e saída da página', () => {
   assert.equal(loginOpened({...base, hiddenReads: 2, left: true, changed: true}), true);
@@ -30,8 +30,8 @@ test('com successSelector, só o seletor visível abre: a página de bloqueio co
   assert.equal(loginOpened({...blocked, successVisible: true}), true);
 });
 
-test('o cookie do laboratório continua valendo sozinho', () => {
-  assert.equal(loginOpened({...base, labOpen: true}), true);
+test('falha HTTP impede confirmar a sessão, mesmo com seletor', () => {
+  assert.equal(loginOpened({...base, rejected: true, successRequired: true, successVisible: true}), false);
 });
 
 test('cookie mudado ou novo é detectado; páginas iguais ignoram a barra final', () => {
@@ -40,6 +40,40 @@ test('cookie mudado ou novo é detectado; páginas iguais ignoram a barra final'
   assert.equal(cookieChanged(before, [{domain: 'a.local', path: '/', name: '__Host-session', value: 's'}]), true);
   assert.equal(samePage(new URL('https://a.local/entrar/'), new URL('https://a.local/entrar')), true);
   assert.equal(samePage(new URL('https://a.local/painel'), new URL('https://a.local/entrar')), false);
+  assert.equal(samePage(new URL('https://a.local/#/entrar?volta=1'), new URL('https://a.local/#/entrar/')), true);
+  assert.equal(samePage(new URL('https://a.local/#/painel'), new URL('https://a.local/#/entrar')), false);
+  assert.equal(samePage(new URL('https://a.local/entrar?view=console'), new URL('https://a.local/entrar')), true);
+  assert.equal(samePage(new URL('https://a.local/entrar?returnTo=%2Fpainel'), new URL('https://a.local/entrar')), true);
+  assert.equal(samePage(new URL('https://a.local/entrar#formulario'), new URL('https://a.local/entrar')), true);
+  assert.equal(samePage(new URL('https://a.local/#!/privado'), new URL('https://a.local/')), true);
+});
+
+test('a decisão da captura usa os caminhos sem query e o marcador apenas nas rotas declaradas', async () => {
+  const origin = 'https://a.local';
+  const login = {path: '/', usernameSelector: '#email', passwordSelector: '#senha', submitSelector: '#entrar',
+    successSelector: '#painel-pronto', successRoutes: ['/painel']};
+  const shown = new Set<string>();
+  const frame = {
+    locator: (selector: string) => ({filter: () => ({count: () => Number(shown.has(selector))})}),
+    childFrames: () => [],
+  };
+  const check = (requested: string, final: string, successRoutes = login.successRoutes) => pageShowsLogin(
+    {...frame, mainFrame: () => frame, url: () => origin + final}, origin + requested, {...login, successRoutes});
+  shown.add('#email');
+  assert.equal(await check('/protegida', '/?destino=protegida'), true);
+  assert.equal(await check('/protegida', '/?destino=protegida#/email'), false);
+  assert.equal(await check('/#/privado', '/?reauth=1'), true);
+  assert.equal(await check('/', '/?locale=pt'), false);
+  assert.equal(await check('/painel', '/painel?origem=inicio'), true);
+  assert.equal(await check('/#/privado', '/#/privado', ['/']), false);
+  assert.equal(await check('/', '/?locale=pt#formulario', ['/']), true);
+  assert.equal(await check('/#/privado', '/?locale=pt#/privado?aba=1', ['/#/privado']), true);
+  shown.add('#painel-pronto');
+  assert.equal(await check('/painel', '/painel'), false);
+  assert.equal(await check('/protegida', '/'), true);
+  shown.add('#entrar');
+  shown.add('#senha');
+  assert.equal(await check('/painel', '/painel'), true);
 });
 
 test('a senha é achada crua, curta, escapada no JSON, codificada e em base64', () => {

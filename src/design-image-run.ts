@@ -1,11 +1,12 @@
 import {spawn} from 'node:child_process';
 import {constants} from 'node:fs';
-import {chmod, lstat, mkdir, mkdtemp, open, readFile, readdir, rm, writeFile} from 'node:fs/promises';
+import {createInterface} from 'node:readline';
+import {chmod, lstat, mkdir, mkdtemp, open, readFile, readdir, rename, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Refusal} from './contracts.ts';
 import type {DesignToolReports} from './design-collect.ts';
-import {claimDesignContainer, closeDesignContainers, makeDesignScratch, releaseDesignContainer, removeDesignScratch} from './design-containers.ts';
+import {claimDesignContainer, closeDesignContainers, designScratchRoot, makeDesignScratch, releaseDesignContainer, removeDesignScratch} from './design-containers.ts';
 import {DESIGN_USER, designRunArguments, requirePinnedDesignImage} from './design-image.ts';
 import {parseFocusWalks, type FocusWalk} from './design-keyboard.ts';
 import {parseRenderCells, type DesignRenderCell} from './design-render.ts';
@@ -79,6 +80,7 @@ export type DesignImageExecution = {
   notes: string[];
   document: unknown;
   declaredFindings: DesignRawFinding[];
+  captureLoginFailed: boolean;
   /** Régua da página renderizada. Entra pelo collect, com a rota trocada pelo arquivo. */
   render: DesignRenderCell[];
   /** Caminho real do Tab, uma rota por item. */
@@ -191,6 +193,9 @@ export function interpretDesignImageDocument(document: unknown): Omit<DesignImag
     document,
     shotMeta,
     declaredFindings: declared,
+    captureLoginFailed: listOf(root.unavailable).some(item => item.status === 401)
+      || listOf(root.auditLoginFailures).some(item =>
+        item.tool === 'pa11y' || item.tool === 'lighthouse' || item.tool === 'render' || item.tool === 'keyboard'),
     render: parseRenderCells(reports.render),
     keyboard: parseFocusWalks(reports.keyboard),
     computedBlocks,
@@ -287,13 +292,20 @@ export function readRebuildImagePin(text: string): string {
   return requirePinnedDesignImage(line);
 }
 
-async function defaultSpawn(argv: readonly string[], timeoutMs: number, name?: string): Promise<{code: number | null; stderr: string}> {
+async function defaultSpawn(argv: readonly string[], timeoutMs: number, name?: string, renew?: () => Promise<void>): Promise<{code: number | null; stderr: string}> {
   const finished = async <T>(value: T): Promise<T> => {
     if (name !== undefined) await releaseDesignContainer(name);
     return value;
   };
   return new Promise(resolve => {
-    const child = spawn(argv[0] ?? 'docker', argv.slice(1), {stdio: ['ignore', 'ignore', 'pipe']});
+    const child = spawn(argv[0] ?? 'docker', argv.slice(1), {stdio: ['ignore', renew ? 'pipe' : 'ignore', 'pipe']});
+    let pending = Promise.resolve();
+    if (renew && child.stdout) {
+      const lines = createInterface({input: child.stdout});
+      lines.on('line', line => {
+        if (line === 'DESIGN_RENEW_LOGIN') pending = pending.then(renew).catch(() => { child.kill(); });
+      });
+    }
     const chunks: Buffer[] = [];
     child.stderr?.on('data', (chunk: Buffer) => {
       if (chunks.reduce((sum, item) => sum + item.length, 0) < 8000) chunks.push(chunk);
@@ -308,7 +320,7 @@ async function defaultSpawn(argv: readonly string[], timeoutMs: number, name?: s
     child.on('close', code => {
       clearTimeout(timer);
       // Saída normal: o --rm já retirou o contêiner e o rm -f não acha nada. No prazo, é ele que para o exame.
-      void finished({code, stderr: Buffer.concat(chunks).toString('utf8').slice(0, 800)}).then(resolve);
+      void pending.then(() => finished({code, stderr: Buffer.concat(chunks).toString('utf8').slice(0, 800)})).then(resolve);
     });
   });
 }
@@ -333,6 +345,36 @@ export function designImageTimeoutMs(plan: unknown): number {
   return Math.min(7_200_000, Math.max(1_200_000, estimate));
 }
 
+/** A imagem só pede a próxima sessão. O host escolhe a URL e publica o estado por rename. */
+async function prepareLoginRenewal(renew: () => Promise<string>) {
+  const root = await makeDesignScratch('login');
+  const directory = join(root, 'sessions');
+  try {
+    await mkdir(directory);
+    await chmod(directory, 0o711);
+  } catch (error) {
+    await removeDesignScratch(root);
+    throw error;
+  }
+  let sequence = 0;
+  return {
+    root, directory,
+    async publish() {
+      const destination = join(directory, String(++sequence));
+      let state: string | undefined;
+      try {
+        state = await renew();
+        await rename(state, destination);
+      } catch {
+        await writeFile(destination, 'null', {mode: 0o644});
+      } finally {
+        const scratch = state && await designScratchRoot(state);
+        if (scratch) await removeDesignScratch(scratch);
+      }
+    },
+  };
+}
+
 /**
  * Sobe a imagem com designRunArguments. O plano vai em pedido.json, fora do argv,
  * para os testes do contrato do contêiner continuarem iguais.
@@ -347,11 +389,13 @@ export async function executeDesignImage(input: {
   timeoutMs?: number;
   run?: DesignImageSpawn;
   loginState?: string;
+  renewLogin?: () => Promise<string>;
   trustCa?: string;
 }): Promise<DesignImageExecution> {
   // Sessão já fechada (interrupção): recusa antes de criar qualquer coisa.
   const containerName = input.run === undefined ? claimDesignContainer() : undefined;
   const output = await makeDesignScratch('img');
+  let renewals: Awaited<ReturnType<typeof prepareLoginRenewal>> | undefined;
   try {
     // 0o1777 só enquanto o uid 65532 escreve; o host não é esse uid.
     await chmod(output, 0o1777);
@@ -359,6 +403,7 @@ export async function executeDesignImage(input: {
     await mkdir(captures, {mode: 0o1777});
     await chmod(captures, 0o1777);
     await writeFile(join(output, 'pedido.json'), `${JSON.stringify(input.plan)}\n`, {mode: 0o644});
+    if (input.renewLogin) renewals = await prepareLoginRenewal(input.renewLogin);
     let argv: readonly string[];
     try {
       argv = designRunArguments({
@@ -369,6 +414,7 @@ export async function executeDesignImage(input: {
         memoryBytes: 2147483648,
         nanoCpus: 2_000_000_000,
         pidsLimit: 512,
+        ...(renewals && {renewalDirectory: renewals.directory}),
         ...(input.loginState === undefined ? {} : {loginState: input.loginState}),
         ...(input.trustCa === undefined ? {} : {trustCa: input.trustCa}),
         ...(containerName === undefined ? {} : {name: containerName}),
@@ -381,7 +427,7 @@ export async function executeDesignImage(input: {
     const timeoutMs = input.timeoutMs ?? designImageTimeoutMs(input.plan);
     let spawned: {code: number | null; stderr: string};
     try {
-      spawned = input.run ? await input.run(argv, output) : await defaultSpawn(argv, timeoutMs, containerName);
+      spawned = input.run ? await input.run(argv, output) : await defaultSpawn(argv, timeoutMs, containerName, renewals?.publish);
     } catch (error) {
       const code = 'DESIGN_IMAGE_FAILED';
       return {
@@ -395,7 +441,7 @@ export async function executeDesignImage(input: {
     const parsed = await readContainerJson(join(output, 'achados-brutos.json'));
     if (parsed === undefined) {
       // Saída 3: a cadeia da homologação não fechou na CA de --ca.
-      const code = spawned.code === null ? 'DESIGN_IMAGE_TIMEOUT' : spawned.code === 3 ? 'DESIGN_TRUST_CA_FAILED' : 'DESIGN_IMAGE_FAILED';
+      const code = spawned.code === null ? 'DESIGN_IMAGE_TIMEOUT' : spawned.code === 3 ? 'DESIGN_TRUST_CA_FAILED' : spawned.code === 4 ? 'DESIGN_CAPTURE_LOGIN_FAILED' : 'DESIGN_IMAGE_FAILED';
       const note = spawned.stderr.trim().slice(0, 180);
       return {
         ok: false,
@@ -429,12 +475,14 @@ export async function executeDesignImage(input: {
       notes,
       document: interpreted.document,
       declaredFindings: interpreted.declaredFindings,
+      captureLoginFailed: interpreted.captureLoginFailed,
       render: interpreted.render,
       keyboard: interpreted.keyboard,
       computedBlocks: interpreted.computedBlocks,
       shots,
     };
   } finally {
+    if (renewals) await removeDesignScratch(renewals.root);
     await removeDesignScratch(output);
   }
 }
@@ -479,6 +527,7 @@ function emptyExecution(code: string): Omit<DesignImageExecution, 'ok' | 'code' 
     notes: [],
     document: null,
     declaredFindings: [],
+    captureLoginFailed: false,
     render: [],
     keyboard: [],
     computedBlocks: [],

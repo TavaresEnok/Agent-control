@@ -64,6 +64,9 @@ export type DesignCaptureDriver = {
   content(): Promise<string>;
   fill?(selector: string, value: string): Promise<void>;
   click?(selector: string): Promise<void>;
+  resetSession?(): Promise<void>;
+  submitLogin?(login: DesignLogin, url: string): Promise<void>;
+  verifyAuthenticated?(url: string, login: DesignLogin, allowNavigation: boolean): Promise<void>;
   /** Opcional. Sem este método, `esperar` não vira captura. */
   waitForSelector?(selector: string): Promise<void>;
 };
@@ -99,6 +102,7 @@ export type DesignCaptureMetadata = {
 
 export type DesignCaptureOptions = {
   login?: DesignLogin;
+  loginUrl?: string;
 };
 
 /**
@@ -158,12 +162,20 @@ export async function captureScreens(
     throw new Error('DRIVER_LOGIN_INCOMPLETO');
   }
   const root = resolve(outputDir);
-  if (login !== undefined && driver.fill !== undefined && driver.click !== undefined) {
-    await driver.goto(baseUrl);
-    await driver.fill(login.usernameSelector, login.username);
-    await driver.fill(login.passwordSelector, login.password);
-    await driver.click(login.submitSelector);
-  }
+  const authenticate = async () => {
+    if (!login || !driver.fill || !driver.click) return;
+    const url = options?.loginUrl ?? baseUrl;
+    try {
+      await driver.goto(url);
+      await driver.fill(login.usernameSelector, login.username);
+      await driver.fill(login.passwordSelector, login.password);
+      if (driver.submitLogin === undefined) await driver.click(login.submitSelector);
+      else await driver.submitLogin(login, url);
+    } catch {
+      throw new Refusal('DESIGN_CAPTURE_LOGIN_FAILED');
+    }
+  };
+  await authenticate();
   const captures: DesignCaptureRecord[] = [];
   const skipped: DesignCaptureSkip[] = [];
   const files: {fileName: string; bytes: Buffer}[] = [];
@@ -180,34 +192,52 @@ export async function captureScreens(
       });
       continue;
     }
-    await driver.setViewport(plan.viewport, DESIGN_CAPTURE_HEIGHT[plan.viewport]);
-    await driver.emulateMedia(plan.theme);
-    await driver.goto(prepared.url);
-    await runSteps(driver, prepared.steps);
-    const body = await driver.content();
-    if (!isHtmlScreen(body)) {
-      skipped.push({
+    const capture = async () => {
+      await driver.setViewport(plan.viewport, DESIGN_CAPTURE_HEIGHT[plan.viewport]);
+      await driver.emulateMedia(plan.theme);
+      await driver.goto(prepared.url);
+      if (login !== undefined) await driver.verifyAuthenticated?.(prepared.url, login, false);
+      const allowNavigation = (prepared.steps?.length ?? 0) > 0;
+      try {
+        await runSteps(driver, prepared.steps);
+      } finally {
+        if (login !== undefined && allowNavigation) await driver.verifyAuthenticated?.(prepared.url, login, true);
+      }
+      const body = await driver.content();
+      if (!isHtmlScreen(body)) {
+        if (login !== undefined) await driver.verifyAuthenticated?.(prepared.url, login, allowNavigation);
+        skipped.push({
+          screenId: plan.screenId,
+          route: plan.route,
+          url: prepared.url,
+          state: plan.state,
+          reason: 'nao-e-html',
+          body: body.trim().slice(0, 200),
+        });
+        return;
+      }
+      const bytes = await driver.screenshot(true);
+      if (login !== undefined) await driver.verifyAuthenticated?.(prepared.url, login, allowNavigation);
+      captures.push({
         screenId: plan.screenId,
         route: plan.route,
         url: prepared.url,
+        viewport: plan.viewport,
+        theme: plan.theme,
         state: plan.state,
-        reason: 'nao-e-html',
-        body: body.trim().slice(0, 200),
+        fileName: plan.fileName,
+        bytes: bytes.length,
       });
-      continue;
+      files.push({fileName: plan.fileName, bytes});
+    };
+    try {
+      await capture();
+    } catch (error) {
+      if (!login || !(error instanceof Refusal) || error.code !== 'DESIGN_CAPTURE_LOGIN_FAILED') throw error;
+      await driver.resetSession?.();
+      await authenticate();
+      await capture();
     }
-    const bytes = await driver.screenshot(true);
-    captures.push({
-      screenId: plan.screenId,
-      route: plan.route,
-      url: prepared.url,
-      viewport: plan.viewport,
-      theme: plan.theme,
-      state: plan.state,
-      fileName: plan.fileName,
-      bytes: bytes.length,
-    });
-    files.push({fileName: plan.fileName, bytes});
   }
   const emptyStates = emptyStateRecords(plans, captures);
   const metadata: DesignCaptureMetadata = revealed === undefined
