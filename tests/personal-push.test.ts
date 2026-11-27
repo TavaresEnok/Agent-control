@@ -84,3 +84,22 @@ test('the installation keeps at most twenty subscriptions and the test notice us
   }
  }finally{await rm(root,{recursive:true,force:true});}
 });
+
+test('a stalled push is cancelled at the round deadline while another device is notified',async t=>{
+ const root=await directory();
+ t.after(()=>rm(root,{recursive:true,force:true}));
+ t.mock.method(console,'error',()=>{});
+ await subscribePersonalPush(root,{endpoint:endpoint(1),keys});
+ await subscribePersonalPush(root,{endpoint:endpoint(2),keys});
+ const events:string[]=[];
+ const sender:PersonalPushSender=async(subscription,_payload,_vapid,signal)=>{
+  if(subscription.endpoint===endpoint(2)){events.push('delivered');return;}
+  events.push('stalled');
+  await new Promise<void>((resolve,reject)=>{
+   const fallback=setTimeout(resolve,200);
+   signal?.addEventListener('abort',()=>{clearTimeout(fallback);events.push('cancelled');reject(signal.reason);},{once:true});
+  });
+ };
+ await deliverPersonalPush(root,{messageId:'deadline',title:'private',body:'private',url:'/'},sender,40);
+ assert.deepEqual(events,['stalled','delivered','cancelled']);
+});
