@@ -186,7 +186,11 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     if (!principal) return c.json({ error: 'AUTH_REQUIRED' }, 401);
     c.set('principal', principal); await next();
   });
-  app.use('/api/v1/ac/*',bodyLimit({maxSize:256*1024,onError:c=>c.json({error:'REQUEST_BODY_TOO_LARGE'},413)}));
+  const limitAcBody=bodyLimit({maxSize:256*1024,onError:c=>c.json({error:'REQUEST_BODY_TOO_LARGE'},413)});
+  app.use('/api/v1/ac/*',(c,next)=>{
+    if(c.req.method==='POST'&&((c.req.path==='/api/v1/ac/auth/code'&&pairCodeLogin)||(c.req.path==='/api/v1/ac/auth/password'&&passwordLogin)))return next();
+    return limitAcBody(c,next);
+  });
   app.onError((e, c) => {
     const refusal=e instanceof Refusal?e:environmentRefusal(e);
     if (refusal) return c.json({ error: refusal.code }, refusal.status);
