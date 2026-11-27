@@ -134,7 +134,7 @@ function socketMount(path, destination) {
 }
 
 /** O chamador mantém vivo o snapshot de prepareModuleSnapshot e repassa o sinal do heartbeat. */
-export async function runPerformanceModule({snapshotPath, imageDigest, signal, recoveryDirectory, previousMeasurement, previousMeasurements,
+export async function runPerformanceModule({snapshotPath, imageDigest, commonPin, signal, recoveryDirectory, previousMeasurement, previousMeasurements,
   timeoutMs = 480_000, maxStdoutBytes = 16 * 1024 * 1024}, {dockerBinary = 'docker'} = {}) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_147_483_647 ||
       !Number.isSafeInteger(maxStdoutBytes) || maxStdoutBytes < 1) throw new Error('limites de desempenho inválidos');
@@ -142,7 +142,7 @@ export async function runPerformanceModule({snapshotPath, imageDigest, signal, r
   const deadline = AbortSignal.timeout(timeoutMs);
   const active = signal ? AbortSignal.any([signal, deadline]) : deadline;
   active.throwIfAborted();
-  const pinned = (await readFile(new URL('./digest.txt', import.meta.url), 'utf8')).trim();
+  const pinned = commonPin ?? (await readFile(new URL('./digest.txt', import.meta.url), 'utf8')).trim();
   if (!/^sha256:[a-f0-9]{64}$/.test(imageDigest) || imageDigest !== pinned) throw new Error('digest da imagem inválido ou diferente do fixado');
   const official = await officialSnapshot(snapshotPath);
   const temp = await mkdtemp(join(tmpdir(), 'ac-perf-'));

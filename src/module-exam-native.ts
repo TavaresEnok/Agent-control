@@ -1,3 +1,4 @@
+import {PersonalExecutionSupervisor} from './personal-execution-supervisor.ts';
 import {setTimeout as delay} from 'node:timers/promises';
 import {randomUUID} from 'node:crypto';
 import {Capacity} from './capacity.ts';
@@ -348,7 +349,8 @@ export async function composePersonalModuleExamRuntime(
   return moduleExamProviders.flatMap(provider => {
     const accountSubjects = candidateAccounts.filter(account => accounts.some(row => row.id === account.accountId && row.provider === provider));
     if (!accountSubjects.length) return [];
-    const supervisor = new NativeExecutionSupervisor(ledger, {
+    const supervisor = new PersonalExecutionSupervisor(ledger, {
+      simple:config.activation==='personal'&&config.isolation!=='strict',dataDirectory:config.dataDirectory,
       id: boot.execution.id + '-' + provider, workerImage: boot.execution.workerImage, toolsImage: boot.execution.toolsImage,
       hostRoot: boot.execution.hostRoot, accountRoot: boot.execution.accountRoot, providerNetworkId: boot.execution.providerNetworkId,
       protectedRepositories: [config.project, ...config.projects].map(project => project.repo),

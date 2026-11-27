@@ -5,7 +5,8 @@ import {randomUUID} from 'node:crypto';
 import {chmod,lstat,readFile,rename,writeFile} from 'node:fs/promises';
 import {basename,dirname,join,resolve} from 'node:path';
 import {Id,Refusal,type Authority} from './contracts.ts';
-import {loadInstallation,type Installation} from './installation.ts';
+import {simpleJobRetention,simpleDockerRetention,simpleTempRetention} from './personal-simple-retention.ts';
+import {loadInstallation,simpleIsolation,type Installation} from './installation.ts';
 import {Ledger} from './ledger.ts';
 import {DockerDaemon} from './sandbox-broker.ts';
 import {nativeExecutionExecutorDigest} from './native-execution-contract.ts';
@@ -106,11 +107,12 @@ export async function runPersonalCapacityWaitRetention(config:Installation,apply
  * of one stage never keeps the next one from running. A failure is reported after every stage has had its turn. */
 export async function runRetentionStages(config:Installation,apply:boolean,deps:Pick<MaintenanceDeps,'jobRetention'|'artifactRetention'|'verifyDatabaseRetention'|'capacityWaitRetention'>={}):Promise<string[]>{
  const stages:[string,string,(config:Installation,apply:boolean)=>Promise<string[]>][]=[
-  ['jobs','work/ de jobs',deps.jobRetention??runPersonalJobRetention],
+  ['jobs','work/ de jobs',deps.jobRetention??(simpleIsolation(config)?simpleJobRetention:runPersonalJobRetention)],
   ['verify-db','bases de vulnerabilidades',deps.verifyDatabaseRetention??((config,apply)=>runVerifyDatabaseRetention(config.dataDirectory,apply))],
   ['capacity-waits','esperas de capacidade',deps.capacityWaitRetention??runPersonalCapacityWaitRetention],
   ['artifacts','artefatos (worktrees, imagens e temporários)',deps.artifactRetention??runPersonalArtifactRetention],
  ];
+ if(simpleIsolation(config)&&!deps.artifactRetention)stages.push(['docker','Docker',simpleDockerRetention],['tmp','temporários',simpleTempRetention]);
  const lines:string[]=[],failed:string[]=[];
  for(const [name,label,stage] of stages){
   try{lines.push(...await stage(config,apply));}
@@ -594,6 +596,12 @@ async function runMaintenanceStages(config:Installation,file:string,deps:Mainten
 /** Weekly: the vulnerability databases, the retention of the installation and the dedicated build cache, each as its own stage.
  * Volumes, containers and images of other projects are never touched, and the shared daemon's cache is never pruned. The gateway keeps running. */
 export async function runPersonalMaintenance(argv:string[],deps:MaintenanceDeps={}){
+ if(argv[1]==='--limpeza-simples' && (argv.length===2 || argv.length===3&&argv[2]==='--aplicar')){
+  const config=await loadInstallation(resolve(argv[0]!));
+  if(!simpleIsolation(config))throw new Refusal('MAINTENANCE_PERSONAL_REQUIRED');
+  const apply=argv.length===3;
+  return [...await simpleJobRetention(config,apply),...await simpleDockerRetention(config,apply)];
+ }
  if(argv.length===2&&argv[1]==='--retencao-agendada'){
   const scheduled=await loadInstallation(resolve(argv[0]!));
   if(scheduled.activation!=='personal')throw new Refusal('MAINTENANCE_PERSONAL_REQUIRED');

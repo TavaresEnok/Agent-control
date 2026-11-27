@@ -134,6 +134,7 @@ export type CollectorRunnerSpec = {
 };
 
 export type VerificationModuleRunInput = {
+  isolation?: 'simple'|'strict';
   module: VerificationModule;
   ledger: Ledger;
   principal: string;

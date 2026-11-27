@@ -413,6 +413,7 @@ export async function runPersonalModuleCli(
         ...(deps?.onQuotaWait ? {onQuotaWait: deps.onQuotaWait} : {}),
       });
       return runVerificationModule({
+        isolation:config.isolation??'simple',
         module,
         ledger,
         principal: project.owner,

@@ -26,6 +26,7 @@
     "personal:restore-check": "node scripts/personal-restore-check.mjs",
     "personal:watch": "node scripts/personal-watch.mjs",
     "personal:timers": "node scripts/personal-timers.mjs",
+    "personal:tools-image": "docker buildx bake --load -f deploy/simple-tools/docker-bake.hcl",
     "personal:maintenance": "node scripts/personal-maintenance.mjs",
     "personal:restore-proof": "node scripts/personal-restore-proof.mjs",
     "personal:design": "node scripts/personal-design.mjs",

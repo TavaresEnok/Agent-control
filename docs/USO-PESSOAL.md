@@ -2,6 +2,20 @@
 
 Um titular, no servidor. A conversa fica no banco da instalação e aparece na tela Conversa do painel. O Happier foi retirado: não há transporte Happier, serviço Happier nem rota pública do Happier. Sem este opt-in o sistema continua bloqueado.
 
+## Isolamento da instalação pessoal
+
+A opção `isolation` fica no primeiro nível de `installation.json`. Em instalações pessoais, inclusive nas existentes, a ausência desse campo seleciona `"simple"` depois da atualização. Para voltar ao isolamento anterior, configure `"isolation": "strict"` e recarregue a configuração pelo procedimento de atualização da instalação.
+
+No modo simples, o programador executa no host, em um worktree Git destacado. O commit candidato é guardado no repositório do projeto antes da retirada do worktree. Revisores e exames simultâneos compartilham um checkout por repositório e commit até a saída do último leitor. O exame de segurança usa uma visão separada quando precisa retirar supressões de scanner versionadas. Os coletores recebem uma montagem de leitura. A conta de cada CLI tem seu próprio `HOME` em `accounts/<id>`. O host precisa do Git, de systemd do usuário e dos CLIs dos provedores utilizados.
+
+Um worktree compartilha objetos e histórico. Seus arquivos versionados descompactados ainda ocupam espaço. Para um projeto com 5 GB de arquivos versionados, reserve aproximadamente outros 5 GB por programador simultâneo e por checkout de leitura distinto. O espaço volta ao encerrar o job ou liberar o último leitor. Logs, resultados, relatórios, banco, backups e ferramentas têm custo próprio.
+
+**Limite de confiança.** Programas que rodem com o usuário do serviço podem alcançar os arquivos, a rede e os logins aos quais esse usuário tem acesso. Diretórios de conta selecionam as credenciais de cada execução. A separação de credenciais entre processos no mesmo usuário depende das permissões do host. Use o modo estrito quando precisar de isolamento por contêiner, inventário de montagem e evidência de execução do runtime estrito.
+
+**Ferramentas dos módulos 1 a 9.** A preparação da imagem comum é feita uma vez por host com `npm run personal:tools-image`. O runtime resolve a etiqueta local `agent-control-exam-tools:simple` para um ID imutável a cada rodada. Para manter uma versão específica, grave `{"image":"sha256:<64 dígitos hexadecimais>"}` em `<dataDirectory>/simple-tools-image.json`, com modo `0600`. A verificação de design segue o fluxo próprio do módulo 10.
+
+**Manutenção.** Use `npm run personal:maintenance -- <instalação.json> --limpeza-simples` para listar cópias terminais e recursos Docker elegíveis. Acrescente `--aplicar` para efetivar a limpeza. A retenção automática também examina os temporários antigos e os worktrees de trabalhadores registrados, limpos e já integrados. O descarte da cópia de um job terminal independe da prova de reconciliação usada no modo estrito. A limpeza do cache de build é compartilhada pelo daemon Docker.
+
 ## Ligar um repositório em um comando
 
 Com as imagens dos workers já construídas (seção "Imagens dos workers") e um banco PostgreSQL vazio só para este projeto:

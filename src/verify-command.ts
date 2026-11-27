@@ -1,3 +1,5 @@
+import {sharedSimpleWorktree} from './simple-worktree.ts';
+import {simpleToolsImage} from './simple-tools-image.ts';
 import {extractGitArchive,stripScannerSuppressions,suppressionNote} from './git-archive-snapshot.ts';
 import {assertDiskSpaceForLaunch,installationVolumes,launchVolumesOf} from './personal-disk.ts';
 import {execFile, spawn} from 'node:child_process';
@@ -63,12 +65,13 @@ export function examRunOptions(economy: {map?: boolean; batch?: boolean; batchTo
 }
 
 /** `snapshot` is the exam's single admitted snapshot (the private parent folder, as prepareExamSnapshot returns it). The caller owns and removes it. */
-export type ToolRun = (spec: {image: string; repository: string; databases: string; output: string; staticPersonalExam?: true; retention?: RoundScope; snapshot?: string}) => Promise<void>;
+export type ToolRun = (spec: {image: string; repository: string; databases: string; output: string; staticPersonalExam?: true; commonTools?:boolean; retention?: RoundScope; snapshot?: string}) => Promise<void>;
 type NetworkRunner = (args: readonly string[]) => Promise<{code: number; stdout: string}>;
 const STAMP_DIRECTORY = /^\d{8}-\d{6}(?:-\d+)?$/;
 
 export type PersonalVerificationInput = {
   installationPath?: string;
+  simple?:boolean;
   projectId: string;
   url?: string;
   dataDirectory: string;
@@ -171,6 +174,7 @@ export type VerificationProgress = {
 export type VerifyJobOutcome = {status: 'done' | 'incomplete'; pending: number; total: number; partial: boolean};
 
 type ReadyVerification = {
+  simple?:boolean;
   projectId: string;
   url?: string;
   dataDirectory: string;
@@ -234,6 +238,7 @@ function requireReady(input: PersonalVerificationInput): ReadyVerification {
   assertSafeSegment(input.projectId);
   return {
     projectId: input.projectId,
+    simple: input.simple,
     url: input.url,
     dataDirectory: input.dataDirectory,
     repoPath: input.repoPath,
@@ -429,7 +434,7 @@ export async function prepareExamSnapshot(repoPath: string, commit: string, stat
 
 /** The exam user is not the directory owner, so the mount is widened only while the process runs. */
 export async function defaultRunTools(
-  spec: {image: string; repository: string; databases: string; output: string; commit: string; staticPersonalExam?: true; retention?: RoundScope; snapshot?: string},
+  spec: {image: string; repository: string; databases: string; output: string; commit: string; staticPersonalExam?: true; commonTools?:boolean; retention?: RoundScope; snapshot?: string},
   timeLimitMs: number = EXAM_TIME_LIMIT_MS,
   execute?: (args: readonly string[]) => Promise<void>,
 ): Promise<void> {
@@ -439,7 +444,8 @@ export async function defaultRunTools(
   try {
     const args = verifyExamArguments({
       image: spec.image,
-      repository: spec.staticPersonalExam ? join(snapshot, 'repository') : snapshot,
+      repository: spec.staticPersonalExam && !spec.commonTools ? join(snapshot, 'repository') : snapshot,
+      commonTools:spec.commonTools,
       databases: spec.databases,
       output: spec.output,
       memoryBytes: EXAM_MEMORY_BYTES,
@@ -593,6 +599,7 @@ async function runJob(input: {
   networkRunner: NetworkRunner;
   /** The exam's single snapshot (parent folder). runJob removes it when the job ends. */
   snapshot: string;
+  shared?:Awaited<ReturnType<typeof sharedSimpleWorktree>>;
 }): Promise<VerifyJobOutcome> {
   const {ready, id, output, progressPath, state, modelCalls, startedMs, snapshot} = input;
   let progressWrites: Promise<void> = Promise.resolve();
@@ -607,10 +614,11 @@ async function runJob(input: {
       const retention = {dataDirectory: ready.dataDirectory, projectId: ready.projectId, roundId: id};
       // The tools, the file list, the map, the hashes, the excerpts and the reviewer all read the one snapshot made when the
       // exam began. The checkout the owner keeps editing is only asked for history bound to the commit.
-      const examRoot = examSnapshotRoot(snapshot, Boolean(ready.staticPolicy));
+      const examRoot = input.shared?.path ?? examSnapshotRoot(snapshot, Boolean(ready.staticPolicy));
       await runTools({image: ready.image, repository: ready.repoPath, databases: ready.databasesDirectory, output,
         ...(ready.staticPolicy ? {staticPersonalExam: true} : {}),
         retention,
+        commonTools:ready.simple,
         snapshot,
       });
       const collected = await collectToolFindings(output);
@@ -658,7 +666,7 @@ async function runJob(input: {
         startedMs,
         timeLimitMs: ready.timeLimitMs,
         ...(ready.wait ? {wait: ready.wait} : {}),
-        notes: (() => { const notes = [state.note, takeSuppressionNote(snapshot)].filter((note): note is string => Boolean(note)); return notes.length ? notes : undefined; })(),
+        notes: (() => { const notes = [state.note, input.shared?suppressionNote(input.shared.suppressed):takeSuppressionNote(snapshot)].filter((note): note is string => Boolean(note)); return notes.length ? notes : undefined; })(),
       };
       if (ready.modelCallBudget !== undefined) verification.modelCallBudget = ready.modelCallBudget;
       if (ready.accountRoot) verification.accountRoot = ready.accountRoot;
@@ -696,7 +704,8 @@ async function runJob(input: {
     }
   } finally {
     // The one snapshot lives for the whole exam and goes away here, done or failed.
-    { snapshotSuppressions.delete(snapshot); await rm(snapshot, {recursive: true, force: true}).catch(() => undefined); }
+    if(input.shared)await input.shared.release();
+    else { snapshotSuppressions.delete(snapshot); await rm(snapshot, {recursive: true, force: true}).catch(() => undefined); }
     // The job reached its end (done or failed): leftovers may now age out.
     await endRound({dataDirectory: ready.dataDirectory, projectId: ready.projectId, roundId: id});
     try { await releaseExamDatabase(ready.dataDirectory, input.databaseStamp, id); }
@@ -747,6 +756,7 @@ export async function beginPersonalVerification(input: PersonalVerificationInput
   }
   let started = false;
   let databaseStamp: string | undefined;
+  let shared:Awaited<ReturnType<typeof sharedSimpleWorktree>>|undefined;
   let snapshot: string | undefined;
   let progressPath: string | undefined;
   try {
@@ -756,10 +766,11 @@ export async function beginPersonalVerification(input: PersonalVerificationInput
     progressPath = join(progressDir, `${id}.json`);
     // ONE snapshot of the admitted commit per exam, made before any tool or model call and kept until the job ends.
     // It comes before the progress file: a snapshot failure must not leave a 'running' file that blocks every later exam.
-    snapshot = await prepareExamSnapshot(ready.repoPath, ready.commit, Boolean(ready.staticPolicy),
+    if(ready.simple)shared=await sharedSimpleWorktree(ready.dataDirectory,ready.repoPath,ready.commit,true);
+    snapshot = shared?.path ?? await prepareExamSnapshot(ready.repoPath, ready.commit, Boolean(ready.staticPolicy),
       ready.staticPolicy ? {dataDirectory: ready.dataDirectory, projectId: ready.projectId, roundId: id} : undefined);
     await writePrivateFile(progressPath, renderProgress(state));
-    const job = runJob({ready, id, output, progressPath, state, modelCalls, startedMs, lockPath, databaseStamp, network, container, networkRunner, snapshot})
+    const job = runJob({ready, id, output, progressPath, state, modelCalls, startedMs, lockPath, databaseStamp, network, container, networkRunner, snapshot, shared})
       .then(outcome => { input.onOutcome?.(outcome); });
     started = true;
     input.observe?.(job);
@@ -767,7 +778,8 @@ export async function beginPersonalVerification(input: PersonalVerificationInput
     return {id, status: 'running', phase: 'ferramentas'};
   } catch (error) {
     if (!started) {
-      if (snapshot) { snapshotSuppressions.delete(snapshot); await rm(snapshot, {recursive: true, force: true}).catch(() => undefined /* best-effort cleanup; the original error is what the caller sees */); }
+      if(shared)await shared.release();
+      else if (snapshot) { snapshotSuppressions.delete(snapshot); await rm(snapshot, {recursive: true, force: true}).catch(() => undefined /* best-effort cleanup; the original error is what the caller sees */); }
       // Never leave a 'running' progress file behind when the job did not start (it would block every later exam).
       if (progressPath) await rm(progressPath, {force: true}).catch(() => undefined);
       try { await releaseExamDatabase(ready.dataDirectory, databaseStamp, id); } catch { /* keep the original error */ }
@@ -966,7 +978,8 @@ export async function resolvePersonalVerification(
       releaseGrant: (grantId, how) => releaseCapacityGrant(ledger, principal, authority!, grantId, how),
       pollBackoff: examRunOptions(project.economy).pollBackoff,
     });
-    const image = await readPinnedImage(config.dataDirectory);
+    const simple=config.activation==='personal'&&config.isolation!=='strict';
+    const image = simple?await simpleToolsImage(config.dataDirectory):await readPinnedImage(config.dataDirectory);
     const databases = await readCurrentVerifyDatabase(config.dataDirectory);
     if (!databases) throw new Refusal('VERIFY_DB_REQUIRED', 409);
     if (parsed.url === undefined) {
@@ -985,6 +998,7 @@ export async function resolvePersonalVerification(
     return {
       input: {
         installationPath: resolve(parsed.installationPath),
+        simple,
         projectId: project.id,
         mapEnabled: examRunOptions(project.economy).mapEnabled,
         batch: examRunOptions(project.economy).batch,

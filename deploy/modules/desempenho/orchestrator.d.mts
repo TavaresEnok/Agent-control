@@ -3,6 +3,7 @@ export type PreviousPerformanceMeasurement = {examId: string; measurement: Recor
 export function runPerformanceModule(input: {
   snapshotPath: string;
   imageDigest: string;
+  commonPin?:string;
   recoveryDirectory: string;
   previousMeasurement?: PreviousPerformanceMeasurement;
   previousMeasurements?: AsyncIterable<PreviousPerformanceMeasurement> | ((signal: AbortSignal) => AsyncIterable<PreviousPerformanceMeasurement>);

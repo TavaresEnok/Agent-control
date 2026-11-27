@@ -1,3 +1,5 @@
+import {simpleToolsImage} from './simple-tools-image.ts';
+import {sharedSimpleWorktree} from './simple-worktree.ts';
 import {containFailure} from './failure-log.ts';
 import {withInstallationImageLock} from './personal-image-lock.ts';
 import {assertDiskSpaceForLaunch, launchVolumesOf} from './personal-disk.ts';
@@ -263,7 +265,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
     const image = input.image !== undefined
       ? assertPinnedModuleImage(input.image)
       : needImage
-        ? await readPinnedModuleImage(input.module, input.rootDir)
+        ? input.isolation==='simple'?await simpleToolsImage(input.dataDirectory):await readPinnedModuleImage(input.module, input.rootDir)
         : undefined;
 
     const intentId = await beginModuleRunTx({
@@ -281,11 +283,13 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
     return {image,intentId};
   });
 
+  let shared: Awaited<ReturnType<typeof sharedSimpleWorktree>> | undefined;
   let snapshot: string | undefined;
   let sourceCoverage: ModuleToolCoverage[] | undefined;
   try {
     if (input.signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
-    snapshot = await prepareModuleSnapshot(input.repoPath, input.commit, retention);
+    if(input.isolation==='simple')shared=await sharedSimpleWorktree(input.dataDirectory,input.repoPath,input.commit);
+    snapshot = shared?.path ?? await prepareModuleSnapshot(input.repoPath, input.commit, retention);
     const passiveTlsEvidence = input.passiveTlsEvidence !== undefined
       ? (() => {
           if (input.module !== 'prontidao') throw new Refusal('INVALID_CONTRACT', 400);
@@ -320,7 +324,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       const recoveryDirectory = join(await requireDataDirectory(input.dataDirectory), 'performance-docker');
       await reconcilePerformanceResources({recoveryDirectory, signal: input.signal});
       const {coverage, findings, measurement, comparedExamId} = await runPerformanceModule({
-        snapshotPath: snapshot, imageDigest: image!, signal: input.signal, timeoutMs, maxStdoutBytes,
+        snapshotPath: snapshot, imageDigest: image!, commonPin:input.isolation==='simple'?await simpleToolsImage(input.dataDirectory):undefined, signal: input.signal, timeoutMs, maxStdoutBytes,
         recoveryDirectory, previousMeasurements: signal => previousPerformanceMeasurements(input, runId, image!, signal),
       });
       collectorData = validateModuleCollectorObject({coverage, findings}, input.module);
@@ -329,6 +333,8 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       previousPerformanceRunId = comparedExamId;
     } else {
       const executed = await runModuleCollectorContainer({
+        snapshot,
+        commonTools:input.isolation==='simple',
         image: image!,
         module: input.module,
         repoPath: input.repoPath,
@@ -500,7 +506,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
     const hasToolFailure = collectorCode !== 0 || collectorData.coverage.some(row => row.status === 'failed');
     const notes: string[] = [...(input.notes ?? [])];
     if (exam) notes.push(...exam.notes);
-    else notes.push('Cobertura por arquivo limitada aos arquivos informados pelos coletores ou com achados; ausência de registro não comprova exame. O snapshot é gerado por git archive.');
+    else notes.push('Cobertura por arquivo limitada aos arquivos informados pelos coletores ou com achados; ausência de registro não comprova exame. O exame usa o commit selecionado.');
     for (const failed of collectorData.coverage.filter(row => row.status === 'failed')) {
       notes.push(`Falha em ${failed.tool} (${failed.version}): ${failed.detail}`);
     }
@@ -637,7 +643,8 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
     throw error;
   } finally {
     await clearExamContextCapacityWaits(input.ledger.pool, input.authority.contextId, intentId, input.authority.epoch);
-    if (snapshot) await removeModuleSnapshot(snapshot);
+    if (shared) await shared.release();
+    else if (snapshot) await removeModuleSnapshot(snapshot);
   }
 }
 

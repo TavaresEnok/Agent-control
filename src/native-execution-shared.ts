@@ -124,7 +124,7 @@ export const NativeExecutionRequest=z.object({jobId:Id,intentId:Id,grantId:Id,se
 export type Input=z.infer<typeof NativeExecutionRequest>;
 export type PersonalExamRecoveryScope={projectId:string;repository:string;explicitDesignWithdrawal:boolean};
 export type ModuleExamRecoveryScope={projectId:string;repository:string};
-export type NativeExecutionSupervisorConfig={id:string;workerImage:string;toolsImage:string;hostRoot:string;accountRoot:string;repository?:string;
+export type NativeExecutionSupervisorConfig={simple?:boolean;id:string;workerImage:string;toolsImage:string;hostRoot:string;accountRoot:string;repository?:string;
  protectedRepositories:readonly string[];signingKeyPem:string;providerNetworkId:string;provider?:'codex'|'claude'|'grok';socketPath?:string;resourceEnvelope?:NativeResourceEnvelope;accountSubjects:readonly {accountId:string;subjectDigest:string}[];
  workerEnv:readonly string[];toolsEnv:readonly string[];syntheticFixture?:NativeSyntheticFixture;dataDirectory?:string;personalEgress?:boolean;
  /** Writable-account renewal used before a Claude exam copy. Tests inject this and never spawn a real CLI. */

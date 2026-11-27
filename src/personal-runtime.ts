@@ -1,3 +1,4 @@
+import {PersonalExecutionSupervisor,hostLaunchDigest} from './personal-execution-supervisor.ts';
 import {refreshPersonalTemplates} from './personal-policies.ts';
 import {personalEgressEnabled} from './personal-egress.ts';
 import {nativePlanningExecutorDigest} from './native-planning-contract.ts';
@@ -73,6 +74,7 @@ export async function releaseDeadPersonalGrants(ledger:Ledger,olderThanMinutes=1
      const grant=(await c.query(`SELECT id FROM ac_capacity_grants WHERE id=$1 AND state<>'released' AND resource_kind='model'
       AND created_at<clock_timestamp()-make_interval(mins=>$2) FOR UPDATE`,[id,olderThanMinutes])).rows[0];
      if(!grant)return 0;
+     if((await c.query("SELECT 1 FROM ac_native_execution_jobs WHERE grant_id=$1 AND launch_digest=$2 AND state='running'",[id,hostLaunchDigest])).rowCount)return 0;
      // Passive exams must close their job and grant together under the
      // exam-specific lease, Docker and result checks.
      if((await c.query(`SELECT 1 FROM ac_native_execution_jobs j JOIN ac_intents i ON i.id=j.intent_id
@@ -138,11 +140,11 @@ export async function composePersonalExecutionSupervisors(
  for(const provider of ['codex','claude','grok'] as const){
   const accountSubjects=subjects(provider);
   if(!accountSubjects.length)continue;
-  executions.push(new NativeExecutionSupervisor(ledger,{id:boot.execution.id+'-'+provider,workerImage:boot.execution.workerImage,toolsImage:boot.execution.toolsImage,
-   hostRoot:boot.execution.hostRoot,accountRoot:boot.execution.accountRoot,protectedRepositories,signingKeyPem:executionPem,dataDirectory:config.dataDirectory,
+  executions.push(new PersonalExecutionSupervisor(ledger,{id:boot.execution.id+'-'+provider,workerImage:boot.execution.workerImage,toolsImage:boot.execution.toolsImage,
+   hostRoot:boot.execution.hostRoot,accountRoot:boot.execution.accountRoot,protectedRepositories,signingKeyPem:executionPem,dataDirectory:config.dataDirectory,simple:config.activation==='personal'&&config.isolation!=='strict',
    providerNetworkId:boot.execution.providerNetworkId,provider,workerEnv:boot.execution.workerEnv,toolsEnv:boot.execution.toolsEnv,accountSubjects,disabledMeasurementProjects,personalEgress}));
   for(const pair of (boot.execution.retiredImages??[]).filter(x=>x.workerImage!==boot.execution.workerImage||x.toolsImage!==boot.execution.toolsImage))
-   executions.push(new NativeExecutionSupervisor(ledger,{id:boot.execution.id+'-'+provider,workerImage:pair.workerImage,toolsImage:pair.toolsImage,active:false,
+   executions.push(new PersonalExecutionSupervisor(ledger,{id:boot.execution.id+'-'+provider,workerImage:pair.workerImage,toolsImage:pair.toolsImage,active:false,
     hostRoot:boot.execution.hostRoot,accountRoot:boot.execution.accountRoot,protectedRepositories,signingKeyPem:executionPem,
     providerNetworkId:boot.execution.providerNetworkId,provider,workerEnv:boot.execution.workerEnv,toolsEnv:boot.execution.toolsEnv,accountSubjects,disabledMeasurementProjects}));
  }
@@ -195,7 +197,7 @@ export async function composePersonalRuntime(config:Installation,ledger:Ledger){
    const quality=new Quality(ledger,reviewKey,git);
    const qaContract=await resolvePersonalProjectQa({dataDirectory:config.dataDirectory,projectId,image:boot.qa.image,fallback:boot.qa});
    const cacheRoot=qaContract.prepareArgv?resolve(join(config.dataDirectory,'qa-cache',projectId)):undefined;
-   const nativeQa=new NativeQa(ledger,quality,repo,boot.execution.hostRoot,qaContract,reviewKey,undefined,undefined,undefined,cacheRoot);
+   const nativeQa=new NativeQa(ledger,quality,repo,boot.execution.hostRoot,qaContract,reviewKey,undefined,undefined,undefined,cacheRoot,config.isolation!=='strict');
    await syncPersonalQaPolicy(ledger,owner,projectId,nativeQa.verifierDigest);
    // A new QA contract publishes a new quality revision; live conversation templates must follow it.
    await refreshPersonalTemplates(ledger,projectId);
