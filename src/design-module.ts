@@ -294,8 +294,11 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     chosen = chooseScreens(input.files, routes, findings);
     if (chosen.omitted > 0) notes.push(`O exame cobriu ${chosen.screens.length} de ${chosen.screens.length + chosen.omitted} arquivos de tela.`);
     const screens = chosen.screens.map(screen => {
-      const related = routesByFile.get(screen.file) ?? [screen.route];
+      // A component with no route of its own does not inherit the capture of "/": judging it against
+      // another screen's image repeats the same visual critique once per file. It goes to the code exam.
+      const related = routesByFile.get(screen.file) ?? (routes.length === 0 ? [screen.route] : []);
       const captures = related.flatMap(route => staged.byRoute.get(route) ?? []);
+      if (related.length === 0) return screen;
       return {
         ...screen,
         captureNote: captureNoteFor(screen.route, captured.records),

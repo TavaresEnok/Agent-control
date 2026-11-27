@@ -480,3 +480,27 @@ alone('o exame seguinte apaga o run deixado por um kill e preserva o resto', asy
     await rm(root, {recursive: true, force: true});
   }
 });
+
+alone('componente sem rota própria não herda a captura de "/" e vai só para o exame de código', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'design-stage-rota-'));
+  const repo = join(root, 'repo');
+  const data = join(root, 'data');
+  const withCapture: string[] = [];
+  try {
+    await mkdir(repo);
+    await mkdir(data);
+    const input = examInput(data, repo, randomUUID(), workerSeeing(async task => {
+      withCapture.push(task);
+    }));
+    input.files = [
+      {path: 'src/app.tsx', text: 'import Inicio from "./pages/inicio";\nexport const app = <Routes><Route path="/" element={<Inicio />} /></Routes>;\n'},
+      {path: 'src/pages/inicio.tsx', text: 'export default function Inicio() { return <main>Oi</main>; }\n'},
+      {path: 'src/components/botao.tsx', text: 'export const Botao = () => <button>Ok</button>;\n'},
+    ];
+    await runDesignModule(input);
+    assert.ok(withCapture.some(task => task.includes('src/pages/inicio.tsx')));
+    assert.equal(withCapture.some(task => /Arquivos:\n- src\/components\/botao\.tsx/.test(task)), false);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
