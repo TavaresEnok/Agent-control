@@ -277,7 +277,7 @@ export class ConversationEndpoint {
    if(this.options.personalConversation&&isRepeatablePersonalNotice(text,localId)){
     const recent=await recentPersonalNotices(this.ledger.pool,this.options.authority.contextId).catch(containFailure('PERSONAL_NOTICE_HISTORY_UNAVAILABLE',[]));
     if(suppressRepeatedPersonalNotice({text,localId,recent})){
-     console.error(JSON.stringify({event:'PERSONAL_NOTICE_SUPPRESSED',text}));
+     console.error(JSON.stringify({event:'PERSONAL_NOTICE_SUPPRESSED'}));
      return;
     }
    }
