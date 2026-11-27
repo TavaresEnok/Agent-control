@@ -19,6 +19,7 @@
     "personal:combo": "node scripts/personal-combo.mjs",
     "personal:roots": "node scripts/personal-roots.mjs",
     "personal:services": "node scripts/personal-services.mjs",
+    "personal:update": "node --import tsx src/personal-update-cli.ts",
     "prebuild": "node scripts/prepare-build.mjs --before",
     "personal:cockpit": "node scripts/personal-cockpit.mjs",
     "personal:backup": "node scripts/personal-backup.mjs",

@@ -12,6 +12,7 @@ import {loadInstallation, type Installation} from './installation.ts';
 import {deliverPersonalPush} from './personal-push.ts';
 import {diskNotice,dueNotices,ERROR_WINDOW_MINUTES,loginNotices,agentConfigNotices,personalAccountRoot,repeatedErrorNotices,type HealthNotice} from './personal-health.ts';
 import {containFailure} from './failure-log.ts';
+import {checkPersonalDockerDependencies} from './personal-docker-dependencies.ts';
 
 const hourMs=60*60*1000;
 const imageId=/^sha256:[a-f0-9]{64}$/;
@@ -22,6 +23,7 @@ export const imagesRebuiltNotice='Imagens do Agent Control reconstruídas.';
 
 type WatchState={consecutiveFailures:number;downNotified:boolean;lastImageRebuildAt:string|null;sent:Record<string,string>};
 export type PersonalWatchDeps={
+ dockerDependencies?:typeof checkPersonalDockerDependencies;
  retention?:(file:string,apply:boolean)=>Promise<unknown>;
  now?:()=>Date;
  probe?:(url:string)=>Promise<boolean>;
@@ -181,6 +183,7 @@ export async function runPersonalWatch(argv:string[],deps:PersonalWatchDeps={}){
   if(alert)await notify(config.dataDirectory,alert.text).catch(containFailure('WATCH_DISK_ALERT_NOT_SENT',undefined));
   throw error;
  });
+ const dependencies=await (deps.dockerDependencies??checkPersonalDockerDependencies)(config.dockerDependencies);
  const up=await probe(`http://127.0.0.1:${config.http.port}/api/v1/ac/health`);
  let healthNotice:string|null=null;
  if(up){
@@ -200,7 +203,8 @@ export async function runPersonalWatch(argv:string[],deps:PersonalWatchDeps={}){
  await persist(state);
  const wanted=(deps.images??personalWatchImages)(config).filter(image=>imageId.test(image));
  let imageStatus:'ok'|'skipped'|'rebuilt'|'failed'='ok';
- if(wanted.length>0){
+ if(wanted.length>0&&dependencies.failed)imageStatus='skipped';
+ else if(wanted.length>0){
   let missing=false;
   for(const image of wanted){
    let present=false;
@@ -222,7 +226,7 @@ export async function runPersonalWatch(argv:string[],deps:PersonalWatchDeps={}){
   }
  }
  // Repeated errors, a full disk and logins about to expire. Each notice repeats at most at its own pace.
- const health:HealthNotice[]=[];
+ const health:HealthNotice[]=[...dependencies.notices];
  try{
   const log=await (deps.recentLog??defaultRecentLog)(`agent-control-gateway-${personalServiceName(installationFile)}`,ERROR_WINDOW_MINUTES);
   health.push(...repeatedErrorNotices(log));
@@ -241,7 +245,8 @@ export async function runPersonalWatch(argv:string[],deps:PersonalWatchDeps={}){
  await persist(state);
  const tags=[healthNotice===gatewayDownNotice?'down':'',healthNotice===gatewayUpNotice?'up':'',imageStatus==='rebuilt'?'images':'',...delivered.map(item=>item.key.split(':')[0]!)].filter(Boolean);
  const notice=tags.length?` notice=${tags.join('+')}`:'';
- summary=`watch gateway=${up?'up':'down'} failures=${state.consecutiveFailures} images=${imageStatus}`;tail=notice;
+ const dockerStatus=dependencies.failed?' docker=failed':config.dockerDependencies?' docker=ok':'';
+ summary=`watch gateway=${up?'up':'down'} failures=${state.consecutiveFailures} images=${imageStatus}${dockerStatus}`;tail=notice;
  }finally{
   // Always, after the alerts: the figure above was taken before this frees anything.
   try{

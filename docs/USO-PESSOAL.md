@@ -333,6 +333,21 @@ npm run personal:watch -- <instalação.json>
 
 O comando pede `GET http://127.0.0.1:<porta>/api/v1/ac/health`. Uma falha só fica em `<dataDirectory>/watch-state.json` (modo `0600`). Na segunda falha seguida ele manda "Agent Control fora do ar no servidor.". Quando o gateway volta a responder, manda "Agent Control voltou." uma vez. A saída é uma linha de resumo, sem segredos.
 
+Se a instalação usa Postgres em Docker, declare o nome do contêiner no JSON da instalação. Acrescente à lista outros contêineres persistentes de que ela dependa, usando os nomes no mesmo daemon que o vigia acessa.
+
+```json
+{
+  "dockerDependencies": {
+    "containers": ["ac-personal-pg"],
+    "autoStart": true
+  }
+}
+```
+
+O vigia e a manutenção conferem esses contêineres e aplicam `restart: unless-stopped` quando necessário. Com `autoStart: true`, eles também tentam iniciar contêineres parados, inclusive os que foram parados manualmente. O padrão é `false`. Em uma parada planejada, desative o início automático antes de parar um contêiner da lista. O vigia envia aviso quando corrige uma dependência ou quando ela segue indisponível. Sem a lista, a verificação de dependências Docker fica desativada.
+
+Para aplicar e conferir apenas as dependências, rode `npm run personal:maintenance -- <instalação.json> --dependencias-docker`. O comando devolve erro se alguma dependência continuar fora do ar ou não puder ser conferida.
+
 Se alguma imagem atual do `nativeBootstrap` (planejamento, worker, ferramentas ou QA) não existir no Docker, a vigia roda `npm run personal:images -- <instalação.json>`, reinicia `agent-control-gateway-<nome>` e manda "Imagens do Agent Control reconstruídas.". Há no máximo uma reconstrução por hora. O `<nome>` é o diretório da instalação, o mesmo critério de `personal:services`.
 
 O backup automático chama o mesmo backup, numa subpasta datada `AAAAMMDD-HHMMSS`, e em seguida roda o `restore-check` na cópia nova. Só depois que essa conferência passa (e a cópia externa, se houver, deu certo) as mais velhas são apagadas. Se a conferência falha, chega o aviso "A conferência do backup novo falhou. Nada foi apagado." e todas as cópias ficam.
@@ -455,13 +470,13 @@ O registro e a retenção de worktrees de trabalhadores, imagens candidatas de m
 
 Logs do gateway: `docker compose -f deploy/compose.personal.yml logs -f gateway`.
 
-Para atualizar uma instalação em systemd, faça `git pull` no servidor e `npm install`. Execute os comandos na ordem abaixo e avance só quando o comando anterior passar.
+Para atualizar uma instalação em systemd, obtenha a versão desejada e instale as dependências no checkout usado pela unidade. Com o painel já compilado, rode:
 
 ```sh
-npm run personal:backup -- <instalação.json> /caminho/vazio
-node --import tsx src/server-main.ts initialize <instalação.json>
-systemctl --user restart agent-control-gateway-<nome>
+npm run personal:update -- <instalação.json>
 ```
+
+Se você passou um nome a `personal:services`, acrescente o mesmo nome ao comando. A atualização confere se a unidade aponta para esse checkout e arquivo de instalação. Em seguida usa `personal:backup` no destino padrão, com `restore-check`, executa `initialize` para migrar o banco e reinicia a unidade do gateway. Ela espera o serviço ficar ativo e estável por 15 segundos sem reinício automático e confirma que a porta local serve o HTML do painel. Em caso de falha, o comando para e indica a etapa e o que conferir. Se a falha ocorrer após a migração, preserve o backup conferido enquanto corrige a causa.
 
 Em uma instalação em Compose, depois do backup, aplique as migrações com `docker compose -f deploy/compose.personal.yml run --rm gateway node --import tsx src/server-main.ts initialize /data/installation.json` para acessar o banco pela rede interna. Em seguida, suba o Compose de novo. Não use `git push --force`.
 
