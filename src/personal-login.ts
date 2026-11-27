@@ -28,7 +28,7 @@ export async function personalOwnerPrincipal(ledger:Ledger,config:Pick<LoginInst
 
 /** Sessions issued before the last password change or removal stop working, whichever route the server mounts first. */
 function bindPasswordEpoch(dataDirectory:string,sessions:BrowserSessions){
- sessions.bindCredentialEpoch(async()=>(await import('./personal-password.ts')).panelCredentialEpoch(dataDirectory));
+ sessions.bindCredentialEpoch(async()=>(await import('./personal-password.ts')).panelCredentialState(dataDirectory));
 }
 
 /** Password login. Issues the cookie for the ledger owner; no token is read. */
@@ -38,16 +38,17 @@ export function personalPasswordLogin(config:LoginInstallation,ledger:Ledger,ses
   sessions.checkOrigin(request);
   const input=z.object({user:z.string().min(1).max(40),password:z.string().min(1).max(200)}).strict().parse(await request.json());
   if(!config.managerTransport)throw new Refusal('PERSONAL_CONNECT_REQUIRED',503);
-  const {verifyPanelLogin,panelLoginDenied,panelSessionSeconds,panelCredentialEpoch}=await import('./personal-password.ts');
+  const {verifyPanelLogin,panelLoginDenied,panelSessionSeconds,panelCredentialState}=await import('./personal-password.ts');
   const {pairClientIp}=await import('./personal-pair.ts');
   const ip=pairClientIp(request.headers.get('x-forwarded-for'),request.headers.get('x-agent-control-remote-address'));
   const principal=await personalOwnerPrincipal(ledger,config);
-  const epoch=await panelCredentialEpoch(config.dataDirectory);
+  const {changedAt:epoch}=await panelCredentialState(config.dataDirectory);
+  if(!Number.isFinite(epoch))return panelLoginDenied('invalid');
   const verdict=await verifyPanelLogin(config.dataDirectory,input.user,input.password,Date.now(),ip);
   if(verdict!=='accepted')return panelLoginDenied(verdict);
-  const issued=await sessions.issuePrincipal(new Request(request.url,{method:'POST',headers:request.headers}),principal,panelSessionSeconds);
+  const issued=await sessions.issuePrincipal(new Request(request.url,{method:'POST',headers:request.headers}),principal,panelSessionSeconds,epoch);
   // A password change that landed while this login was being verified: the old credential must not leave a cookie behind.
-  return await panelCredentialEpoch(config.dataDirectory)===epoch?issued:panelLoginDenied('invalid');
+  return (await panelCredentialState(config.dataDirectory)).changedAt===epoch?issued:panelLoginDenied('invalid');
  };
 }
 

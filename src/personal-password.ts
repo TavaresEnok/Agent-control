@@ -1,11 +1,12 @@
 import {createHash, randomBytes, randomUUID, scrypt, timingSafeEqual} from 'node:crypto';
-import {chmod, readFile, rename, rm, writeFile} from 'node:fs/promises';
+import {open, readFile, rename, rm, writeFile} from 'node:fs/promises';
 import {isIP} from 'node:net';
-import {join, resolve} from 'node:path';
+import {dirname, join, resolve} from 'node:path';
 import {createInterface} from 'node:readline';
 import {Writable} from 'node:stream';
 import {z} from 'zod';
 import {Refusal} from './contracts.ts';
+import {withPrivateFileLock} from './private-file-lock.ts';
 
 const params={N:2**15,r:8,p:1,length:64} as const;
 const maxmem=64*1024*1024;
@@ -25,6 +26,7 @@ const credentialSchema=z.object({
  hash:z.string().regex(/^[a-f0-9]{128}$/),
  params:z.object({N:z.literal(params.N),r:z.literal(params.r),p:z.literal(params.p),length:z.literal(params.length)}).strict(),
  updatedAt:z.iso.datetime(),
+ changedAt:z.number().int().positive().optional(),
 }).strict();
 const attemptSchema=z.object({
  failures:z.array(z.object({ip:z.string().min(1).max(64),at:z.number().int().nonnegative()}).strict()).max(globalLimit),
@@ -36,8 +38,10 @@ type Attempts=z.infer<typeof attemptSchema>;
 
 function exclusive<T>(path:string,fn:()=>Promise<T>):Promise<T>{
  const previous=chains.get(path)??Promise.resolve();
- const run=previous.then(fn,fn);
- chains.set(path,run.then(()=>undefined,()=>undefined));
+ const run=previous.then(()=>withPrivateFileLock(path+'.lock','PANEL_LOGIN_STORE_BUSY',fn));
+ const tail=run.then(()=>undefined,()=>undefined);
+ chains.set(path,tail);
+ void tail.then(()=>{if(chains.get(path)===tail)chains.delete(path);});
  return run;
 }
 function paths(dataDirectory:string){
@@ -64,39 +68,51 @@ function hashPassword(password:string,salt:Buffer){
 }
 async function writePrivate(path:string,value:unknown){
  const temporary=`${path}.${randomUUID()}.tmp`;
- await writeFile(temporary,JSON.stringify(value)+'\n',{mode:0o600,flag:'wx'});
- await chmod(temporary,0o600);
- await rename(temporary,path);
- await chmod(path,0o600);
+ try{
+  await writeFile(temporary,JSON.stringify(value)+'\n',{mode:0o600,flag:'wx'});
+  await rename(temporary,path);
+ }finally{await rm(temporary,{force:true});}
 }
-async function readCredential(path:string):Promise<Credential|null>{
- try{return credentialSchema.parse(JSON.parse(await readFile(path,'utf8')));}
- catch(error){
-  const code=(error as NodeJS.ErrnoException).code;
-  if(code==='ENOENT'||error instanceof SyntaxError||error instanceof z.ZodError||(error as {name?:string}).name==='ZodError')return null;
-  throw error;
+async function readLoginState({login,epoch}:ReturnType<typeof paths>){
+ try{
+  const record:unknown=JSON.parse(await readFile(login,'utf8'));
+  const credential=credentialSchema.safeParse(record);
+  if(credential.success){
+   if(credential.data.changedAt!==undefined)return {credential:credential.data,changedAt:credential.data.changedAt,legacy:false};
+   return {credential:credential.data,changedAt:await legacyEpoch(epoch),legacy:true};
+  }
+  return {credential:null,changedAt:epochSchema.parse(record).changedAt,legacy:false};
+ }catch(error){
+  if((error as NodeJS.ErrnoException).code==='ENOENT')return {credential:null,changedAt:await legacyEpoch(epoch),legacy:true};
+  return {credential:null,changedAt:Infinity,legacy:false};
  }
+}
+async function legacyEpoch(path:string){
+ try{return epochSchema.parse(JSON.parse(await readFile(path,'utf8'))).changedAt;}
+ catch(error){return (error as NodeJS.ErrnoException).code==='ENOENT'?0:Infinity;}
+}
+async function commitLoginState(path:string,state:unknown){
+ const temporary=path+'.'+randomUUID()+'.tmp';
+ const handle=await open(temporary,'wx',0o600);
+ try{
+  try{await handle.writeFile(JSON.stringify(state)+'\n');await handle.sync();}
+  finally{await handle.close();}
+  await rename(temporary,path);
+  const parent=await open(dirname(path),'r');
+  try{await parent.sync();}finally{await parent.close();}
+ }finally{await rm(temporary,{force:true});}
 }
 async function readAttempts(path:string):Promise<Attempts>{
  try{return attemptSchema.parse(JSON.parse(await readFile(path,'utf8')));}
  catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return {failures:[],lockedUntil:0};throw error;}
 }
-/**
- * Moment of the last password change or removal, in milliseconds, or 0 when the password never changed.
- * A browser session created at or before it was issued under an older credential and must not be accepted.
- * A damaged file answers Infinity so every older session fails closed until the password is saved again.
- */
-export async function panelCredentialEpoch(dataDirectory:string){
- try{return epochSchema.parse(JSON.parse(await readFile(paths(dataDirectory).epoch,'utf8'))).changedAt;}
- catch(error){
-  if((error as NodeJS.ErrnoException).code==='ENOENT')return 0;
-  return Number.POSITIVE_INFINITY;
- }
+export async function panelCredentialState(dataDirectory:string){
+ const {changedAt,legacy}=await readLoginState(paths(dataDirectory));
+ return {changedAt,legacy};
 }
-async function markCredentialChange(dataDirectory:string,now:number){
- const previous=await panelCredentialEpoch(dataDirectory);
- const changedAt=Math.max(now,Number.isFinite(previous)?previous+1:0);
- await writePrivate(paths(dataDirectory).epoch,{changedAt});
+async function nextEpoch(dataDirectory:string){
+ const {changedAt}=await panelCredentialState(dataDirectory);
+ return Math.max(Date.now(),Number.isFinite(changedAt)?changedAt+1:0);
 }
 /** Asks twice with readline output silenced, unless AC_PANEL_PASSWORD is already set. */
 export async function promptPanelPassword(ask:(label:string)=>Promise<string>=hiddenQuestion){
@@ -131,24 +147,21 @@ export async function savePanelLogin(dataDirectory:string,user:string,password:s
  return exclusive(file.login,async()=>{
   const salt=randomBytes(16);
   const hash=await hashPassword(password,salt);
-  const record:Credential={user:normalized,salt:salt.toString('hex'),hash:hash.toString('hex'),params:{N:params.N,r:params.r,p:params.p,length:params.length},updatedAt:new Date(now).toISOString()};
-  await writePrivate(file.login,record);
+  const record:Credential={user:normalized,salt:salt.toString('hex'),hash:hash.toString('hex'),params:{N:params.N,r:params.r,p:params.p,length:params.length},updatedAt:new Date(now).toISOString(),changedAt:await nextEpoch(dataDirectory)};
   await writePrivate(file.attempts,{failures:[],lockedUntil:0});
-  // The credential is written first; the epoch then ends every session issued under the old one.
-  await markCredentialChange(dataDirectory,Date.now());
+  await commitLoginState(file.login,record);
   return {user:normalized};
  });
 }
 export async function removePanelLogin(dataDirectory:string){
  const file=paths(dataDirectory);
  return exclusive(file.login,async()=>{
-  await rm(file.login,{force:true});
   await rm(file.attempts,{force:true});
-  await markCredentialChange(dataDirectory,Date.now());
+  await commitLoginState(file.login,{changedAt:await nextEpoch(dataDirectory)});
  });
 }
 export async function panelPasswordConfigured(dataDirectory:string){
- try{return (await readCredential(paths(dataDirectory).login))!==null;}
+ try{return (await readLoginState(paths(dataDirectory))).credential!==null;}
  catch{return false;}
 }
 /** Wrong user and wrong password both return invalid. A missing user still runs scrypt. */
@@ -160,7 +173,7 @@ export async function verifyPanelLogin(dataDirectory:string,user:string,password
   if(attempts.lockedUntil>now)return 'limited';
   const failures=attempts.failures.filter(item=>now-item.at<windowMs);
   if(failures.filter(item=>item.ip===key).length>=attemptLimit||failures.length>=globalLimit)return 'limited';
-  const credential=await readCredential(file.login);
+  const {credential}=await readLoginState(file);
   const normalized=normalizeUser(user);
   const userOk=credential!==null&&same(credential.user,normalized);
   const bounded=password.length>=12&&password.length<=200;

@@ -58,7 +58,8 @@ test('the right password is accepted and the file keeps only the scrypt hash',as
   assert.equal((await stat(join(root,'panel-login-attempts.json'))).mode&0o777,0o600);
   await removePanelLogin(root);
   assert.equal(await panelPasswordConfigured(root),false);
-  await assert.rejects(stat(fileName),{code:'ENOENT'});
+  const removed=JSON.parse(await readFile(fileName,'utf8'));
+  assert.deepEqual(Object.keys(removed),['changedAt']);
  }finally{await rm(root,{recursive:true,force:true});}
 });
 

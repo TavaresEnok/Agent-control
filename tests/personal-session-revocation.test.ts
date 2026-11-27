@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomBytes,randomUUID} from 'node:crypto';
-import {mkdtemp,realpath,rm} from 'node:fs/promises';
+import {mkdir,mkdtemp,realpath,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Ledger} from '../src/ledger.ts';
@@ -37,6 +37,16 @@ test('a password change or removal ends the sessions issued under the old creden
   const old=cookieOf(first);
   assert.equal(await sessions.authenticate(probe(old)),principal);
 
+  // A failure while resetting the attempt file leaves both the password and its epoch intact.
+  const attemptFile=join(folder,'panel-login-attempts.json');
+  await rm(attemptFile);
+  await mkdir(attemptFile);
+  await assert.rejects(savePanelLogin(folder,'alice','another-horse-34'));
+  await assert.rejects(removePanelLogin(folder));
+  await rm(attemptFile,{recursive:true});
+  assert.equal((await attempt('alice','correct-horse-12')).status,200);
+  assert.equal(await sessions.authenticate(probe(old)),principal);
+
   // Change of password: the old cookie is refused, the new password issues a working one.
   await savePanelLogin(folder,'alice','another-horse-34');
   assert.equal(await sessions.authenticate(probe(old)),null);
@@ -46,7 +56,21 @@ test('a password change or removal ends the sessions issued under the old creden
   assert.equal(await sessions.authenticate(probe(renewed)),principal);
 
   // Removal of the password: the cookie issued under it is refused too.
-  await removePanelLogin(folder);
+  const issue=sessions.issuePrincipal.bind(sessions);
+  let stale:Response|undefined;
+  sessions.issuePrincipal=async(...args)=>{
+   await removePanelLogin(folder);
+   stale=await issue(...args);
+   return stale;
+  };
+  const raced=await attempt('alice','another-horse-34');
+  assert.equal(raced.status,401);
+  sessions.issuePrincipal=issue;
+  assert.ok(stale);
+  assert.equal(await sessions.authenticate(probe(cookieOf(stale))),null);
+  const restarted=new BrowserSessions(db,randomBytes(32),verify,{origin,secure:false,maxAgeSeconds:300});
+  personalPasswordLogin(config,db,restarted);
+  assert.equal(await restarted.authenticate(probe(renewed)),null);
   assert.equal(await sessions.authenticate(probe(renewed)),null);
   assert.equal(await sessions.authenticate(probe(old)),null);
 
