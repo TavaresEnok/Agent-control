@@ -88,6 +88,8 @@ test('login 0600 é aceito e a senha fica fora do objeto público', async () => 
       usernameSelector: '#user',
       passwordSelector: '#pass',
       submitSelector: '#go',
+      successSelector: '#pronto',
+      successRoutes: ['/painel'],
     }), {mode: 0o600});
     await chmod(path, 0o600);
     const opened = await readDesignLoginFile(path);
@@ -98,6 +100,7 @@ test('login 0600 é aceito e a senha fica fora do objeto público', async () => 
     assert.equal(JSON.stringify(opened.publicLogin).includes(password), false);
     assert.equal(Object.hasOwn(opened.publicLogin, 'password'), false);
     assert.equal(opened.login.password, password);
+    assert.deepEqual(opened.login.successRoutes, ['/painel']);
     opened.wipe();
     assert.equal(opened.login.password, '');
   } finally {

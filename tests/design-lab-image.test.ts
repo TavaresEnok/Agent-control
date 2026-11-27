@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import {createHash, randomUUID} from 'node:crypto';
 import {chmod, mkdtemp, readFile, readdir, rm, stat, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {dirname, join} from 'node:path';
+import {join} from 'node:path';
 import {test} from 'node:test';
 import {fileURLToPath} from 'node:url';
+import {designScratchRoot, removeDesignScratch} from '../src/design-containers.ts';
 import {writeDesignLoginState} from '../src/design-browser.ts';
 import {readDesignRepository} from '../src/design-command.ts';
 import {designBenchWorker} from '../src/design-bench.ts';
@@ -61,14 +62,16 @@ test('a imagem real encontra os defeitos plantados do laboratório', {skip: !ena
     await writeFile(loginFile, JSON.stringify(login), {mode: 0o600});
     await chmod(loginFile, 0o600);
     assert.equal((await stat(loginFile)).mode & 0o777, 0o600);
-    const statePath = await writeDesignLoginState('http://design-lab.local:8080', login, pin);
+    const statePath = await writeDesignLoginState('http://design-lab.local:8080/entrar', login, pin);
     assert.equal((await stat(statePath)).mode & 0o777, 0o600);
-    await rm(dirname(statePath), {recursive: true, force: true});
+    const scratch = await designScratchRoot(statePath);
+    assert.ok(scratch);
+    await removeDesignScratch(scratch);
     const result = await runDesignModule({
       activation: 'personal',
       projectId: randomUUID(),
       repo: labRoot,
-      targetUrl: 'http://design-lab.local:8080',
+      targetUrl: 'http://design-lab.local:8080/entrar',
       dataDirectory: data,
       intentId: randomUUID(),
       runId: randomUUID(),

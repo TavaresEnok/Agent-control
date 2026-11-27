@@ -477,7 +477,7 @@ test('a captura com sessão valida cada rota e abandona os PNGs se voltar ao log
       captureScreens(withSession, BASE, plans, directory, {login, loginUrl: BASE + '/acesso'}),
       error => isRefusal(error, 'DESIGN_CAPTURE_LOGIN_FAILED'),
     );
-    assert.deepEqual(checked, ['/painel', '/painel', '/expirada']);
+    assert.deepEqual(checked, ['/painel', '/painel', '/expirada', '/expirada']);
     assert.equal(driver.calls[0]?.op === 'goto' && driver.calls[0].url, BASE + '/acesso');
     assert.deepEqual(await readdir(directory), []);
   } finally {

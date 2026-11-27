@@ -46,7 +46,7 @@ try {
   if (new URL(page.url()).origin !== origin) process.exit(1);
   await page.fill(login.usernameSelector, login.username);
   await page.fill(login.passwordSelector, login.password);
-  const body = JSON.stringify(await submitLogin(page, context, login, origin));
+  const body = JSON.stringify(await submitLogin(page, context, login, origin, login.url));
   if (bodyLeaksPassword(body, login.username, login.password)) process.exit(2);
   writeFileSync('/output/state.json', body, {mode: 0o600});
   chmodSync('/output/state.json', 0o600);

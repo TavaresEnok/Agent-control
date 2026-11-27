@@ -1,32 +1,38 @@
 import assert from 'node:assert/strict';
 import {execFile} from 'node:child_process';
-import {chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile} from 'node:fs/promises';
+import {mkdir, mkdtemp, readFile, readdir, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
+import {randomUUID} from 'node:crypto';
+import {designScratchRoot, removeDesignScratch} from '../src/design-containers.ts';
 import {test} from 'node:test';
 import {createServer} from 'node:http';
 import {once} from 'node:events';
+import type {DesignLogin} from '../src/design-discover.ts';
 import {openDesignBrowser, writeDesignLoginState} from '../src/design-browser.ts';
 import {captureScreens} from '../src/design-capture.ts';
 import {promisify} from 'node:util';
-import {interpretDesignImageDocument} from '../src/design-image-run.ts';
+import {executeDesignImage, interpretDesignImageDocument} from '../src/design-image-run.ts';
 import {designExamStatus} from '../src/personal-design-cli.ts';
 
 const image = process.env.AC_DESIGN_CAPTURE_LAB_IMAGE;
-const origin = 'http://127.0.0.1:8080';
 const password = 'synthetic-capture-password';
 const exec = promisify(execFile);
 
 test('captura e ferramentas usam sessão em todas as rotas e descartam a tela de login', {skip: !image}, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'design-auth-lab-'));
+  const name = `ac-design-test-${randomUUID()}`;
+  const origin = `http://${name}.local:8080`;
+  let state: string | undefined;
   try {
     await writeFile(join(directory, 'serve.mjs'), `
       import {createServer} from 'node:http';
       const form = '<form method="post" action="/acesso"><input id="user" name="user"><input id="pass" name="pass" type="password"><button type="button" onclick="this.form.requestSubmit()">Entrar</button></form>';
       const visits = new Map();
-      const reauth = '<form action="/reauth"><input type="password"><button>Entrar</button></form>';
       const db = 'const open = indexedDB.open("auth", 1); open.onupgradeneeded = () => open.result.createObjectStore("tokens");';
-      let validCookie = 'lab=opened';
+      let generation = 0;
+      let validCookie;
+      let expired;
       const send = (res, body) => {
         res.writeHead(200, {'content-type': 'text/html', 'cache-control': 'no-store'});
         res.end('<!doctype html><html lang="pt-BR"><title>Laboratório</title><main>' + body + '</main></html>');
@@ -40,24 +46,30 @@ test('captura e ferramentas usam sessão em todas as rotas e descartam a tela de
           if (fields.get('user') !== 'laboratorio' || fields.get('pass') !== ${JSON.stringify(password)}) {
             return send(res, form);
           }
-          res.writeHead(200, {'set-cookie': 'lab=opened; Path=/; HttpOnly', 'content-type': 'text/html'});
+          validCookie = 'lab=' + ++generation;
+          res.writeHead(200, {'set-cookie': validCookie + '; Path=/; HttpOnly', 'content-type': 'text/html'});
           return res.end('<script>localStorage.lab = "local"; sessionStorage.lab = "session"; ' + db +
             'open.onsuccess = () => { const tx = open.result.transaction("tokens", "readwrite"); tx.objectStore("tokens").put("synthetic-token", "session"); tx.oncomplete = () => location.replace("/pt-BR/painel"); };</script>');
         }
-        if (req.url === '/') return send(res, '<script>if (location.hash === "#/entrar") document.currentScript.insertAdjacentHTML("afterend", ' + JSON.stringify(form) + ')</script>');
+        if (req.url === '/') {
+          const home = validCookie && req.headers.cookie === validCookie ? '<article>Conta aberta</article>' : form;
+          const email = '<form><input type="email"><button>Continuar</button></form>';
+          return send(res, '<script>document.currentScript.insertAdjacentHTML("afterend", location.hash.includes("?") ? ' +
+            JSON.stringify(email) + ' : ' + JSON.stringify(home) + ')</script>');
+        }
         if (req.url === '/acesso') return redirect('/#/entrar');
         if (req.url === '/publico') return redirect('/pt-BR/publico');
         if (req.url === '/pt-BR/publico') return send(res, form);
-        if (req.url === '/expirada' || req.headers.cookie !== validCookie) return redirect('/acesso');
-        if (req.url === '/painel' && validCookie === 'lab=opened') {
+        if (req.url === '/renovavel' && !expired) expired = validCookie;
+        if (req.url === '/expirada' || req.headers.cookie !== validCookie || (req.url === '/renovavel' && req.headers.cookie === expired)) return redirect('/#/entrar?origem=protegida');
+        if (req.url === '/painel' && validCookie === 'lab=1') {
           validCookie = 'lab=rotated';
           res.setHeader('set-cookie', validCookie + '; Path=/; HttpOnly');
         }
         if (req.url === '/painel') return redirect('/pt-BR/painel');
-        if (req.url === '/formulario') return send(res, form.replace('id="pass"', 'id="outraSenha"'));
-        if (req.url === '/senha-apenas') return send(res, reauth);
+        if (req.url === '/formulario') return send(res, form);
         if (req.url === '/shadow') return send(res, '<div id="host"></div><script>' +
-          'host.attachShadow({mode:"open"}).innerHTML = ' + JSON.stringify(reauth) + '</script>');
+          'host.attachShadow({mode:"open"}).innerHTML = ' + JSON.stringify(form) + '</script>');
         if (req.url === '/frame') return send(res, '<iframe src="/shadow"></iframe>');
         if (req.url === '/trocar-senha') return send(res, '<form><input id="pass" type="password"><button>Trocar senha</button></form>' +
           '<form><h1>Configurar 2FA</h1><input autocomplete="one-time-code"><button>Salvar</button></form><iframe hidden src="/formulario"></iframe>');
@@ -89,59 +101,39 @@ test('captura e ferramentas usam sessão em todas as rotas e descartam a tela de
           'open.onsuccess = () => { const read = open.result.transaction("tokens").objectStore("tokens").get("session"); read.onsuccess = () => { if (read.result !== "synthetic-token") location.replace("/acesso"); }; };' +
           'addEventListener("resize", () => { if (innerWidth === 1280 && innerHeight === 1024) location.replace("/acesso"); });</script>');
         return send(res, '<h1>Painel autenticado</h1><a href="/painel">Painel</a><a href="/spa">SPA</a>');
-      }).listen(8080, '127.0.0.1');
+      }).listen(8080, '0.0.0.0');
     `);
-    const loginDir = join(directory, 'login');
-    await mkdir(loginDir, {mode: 0o1777});
-    await chmod(loginDir, 0o1777);
-    const loginFile = join(loginDir, 'login.json');
-    await writeFile(loginFile, JSON.stringify({
-      url: origin + '/#/entrar', username: 'laboratorio', password,
-      usernameSelector: '#user', passwordSelector: '#pass', submitSelector: 'text=Entrar',
-      successSelector: 'h1',
-    }), {mode: 0o600});
-    await chmod(directory, 0o1777);
-    await exec('setfacl', ['-m', 'u:65532:r', loginFile]);
-    const accepted = ['/painel', '/so-lighthouse', '/so-pa11y', '/so-regua', '/so-teclado', '/spa', '/trocar-senha'];
+    const repository = join(directory, 'repo');
+    await mkdir(repository);
+    await exec('docker', ['run', '-d', '--rm', '--pull', 'never', '--name', name,
+      '--network', 'design-homologation', '--network-alias', `${name}.local`,
+      '--mount', `type=bind,source=${directory}/serve.mjs,destination=/serve.mjs,readonly`,
+      '--entrypoint', 'node', image!, '/serve.mjs']);
+    const url = origin + '/#/entrar';
+    const renewLogin = () => writeDesignLoginState(url, {
+      username: 'laboratorio', password, usernameSelector: '#user', passwordSelector: '#pass',
+      submitSelector: 'text=Entrar', successSelector: 'h1',
+    }, image);
+    state = await renewLogin();
+    const accepted = ['/painel', '/#/entrar', '/renovavel', '/so-lighthouse', '/so-pa11y', '/so-regua', '/so-teclado', '/spa', '/trocar-senha'];
     const failedActions = ['/clique-401', '/clique-sair'];
-    const rejected = ['/expirada', '/formulario', '/senha-apenas', '/frame'];
-    await writeFile(join(directory, 'pedido.json'), JSON.stringify({
-      routes: [
+    const rejected = ['/expirada', '/formulario', '/frame'];
+    let renewals = 0;
+    const exam = await executeDesignImage({
+      image: image!, targetUrl: url, repository, loginState: state,
+      renewLogin() { renewals++; return renewLogin(); },
+      plan: {routes: [
         ...[...accepted, ...rejected].map(route => ({route, states: ['padrao']})),
         ...failedActions.map(route => ({route, states: [{name: 'erro', acoes: ['clicar #acao']}]})),
-      ],
-      viewports: [375],
-    }));
-    await exec('setfacl', ['-m', 'u:65532:rw', join(directory, 'pedido.json')]);
-    const publicDir = join(directory, 'publico');
-    await mkdir(publicDir, {mode: 0o1777});
-    await chmod(publicDir, 0o1777);
-    await writeFile(join(publicDir, 'pedido.json'), JSON.stringify({
-      routes: [{route: '/publico', states: ['padrao']}], viewports: [375],
-    }));
-    await exec('docker', [
-      'run', '--rm', '--init', '--pull', 'never', '--network', 'none', '--user', '65532:65532',
-      '-e', 'HOME=/tmp', '-e', `DESIGN_TARGET_URL=${origin}`, '-v', `${directory}:/output`,
-      '-v', `${loginDir}:/login`, '--entrypoint', 'sh', image!,
-      '-ec', `trap 'chmod 0777 /output/capturas /output/publico/capturas /tmp/capturas 2>/dev/null || true' EXIT
-        node /output/serve.mjs &
-        mkdir -m 0777 /output/capturas
-        node /opt/design-tools/write-login-state.mjs
-        mv /output/state.json /login/state.json
-        /usr/local/bin/design-entrypoint.sh
-        rm /login/state.json
-        mv /output/capturas /output/achados-brutos.json /tmp/
-        mkdir -m 0777 /output/capturas
-        cat /output/publico/pedido.json > /output/pedido.json
-        /usr/local/bin/design-entrypoint.sh
-        mv /output/capturas /output/achados-brutos.json /output/publico/
-        mv /tmp/capturas /tmp/achados-brutos.json /output/`,
-    ], {timeout: 540_000});
-    const raw = await readFile(join(directory, 'achados-brutos.json'), 'utf8');
+      ], viewports: [375]},
+    });
+    assert.equal(exam.ok, true, exam.notes.join(' '));
+    assert.equal(renewals, 1 + rejected.length + failedActions.length);
+    const raw = JSON.stringify(exam.document);
     assert.equal(raw.includes(password), false);
     const doc = JSON.parse(raw) as {
       screenshots: {route: string; fileName: string; state: string}[];
-      unavailable: {route: string; status: number}[];
+      unavailable: {route: string; status: number; code: string}[];
       auditLoginFailures: {tool: string; route: string}[];
       reports: Record<'axe' | 'pa11y' | 'lighthouse', {route: string}[]> & {
         render: {route: string; viewport: number; motion?: unknown}[];
@@ -150,8 +142,9 @@ test('captura e ferramentas usam sessão em todas as rotas e descartam a tela de
       computed: {route: string}[];
     };
     assert.deepEqual(doc.screenshots.map(row => [row.route, row.state]), accepted.map(route => [route, 'padrao']));
-    assert.deepEqual((await readdir(join(directory, 'capturas'))).sort(), doc.screenshots.map(row => row.fileName).sort());
+    assert.deepEqual(exam.shots.map(shot => shot.fileName).sort(), doc.screenshots.map(row => row.fileName).sort());
     assert.deepEqual(doc.unavailable.map(row => [row.route, row.status]), [...rejected, ...failedActions].map(route => [route, 401]));
+    assert.ok(doc.unavailable.every(row => row.code === 'DESIGN_CAPTURE_LOGIN_FAILED'));
     const {axe, pa11y, lighthouse, render} = doc.reports;
     for (const [tool, reports] of Object.entries({axe, pa11y, lighthouse, render, computed: doc.computed})) {
       assert.deepEqual([...new Set(reports.map(row => row.route))].sort(), [...accepted, ...(['pa11y', 'lighthouse', 'render'].includes(tool) ? failedActions : [])]
@@ -179,17 +172,22 @@ test('captura e ferramentas usam sessão em todas as rotas e descartam a tela de
       const result = interpretDesignImageDocument({...doc, unavailable: doc.unavailable.filter(row => row.route === route), auditLoginFailures: []});
       assert.equal(designExamStatus(result).code, 1, route);
     }
-    const publicDoc = interpretDesignImageDocument(JSON.parse(await readFile(join(publicDir, 'achados-brutos.json'), 'utf8')));
-    assert.deepEqual(publicDoc.shotMeta.map(row => row.route), ['/publico']);
+    const publicDoc = await executeDesignImage({image: image!, targetUrl: origin, repository,
+      plan: {routes: [{route: '/publico'}], viewports: [375]}});
+    assert.deepEqual(publicDoc.shots.map(row => row.route), ['/publico']);
     assert.equal(designExamStatus(publicDoc).code, 0);
   } finally {
+    await exec('docker', ['rm', '-f', name]).catch(() => {});
+    const scratch = state && await designScratchRoot(state);
+    if (scratch) await removeDesignScratch(scratch);
     await rm(directory, {recursive: true, force: true});
   }
 });
 
-test('Chromium no host reconhece a perda de sessão e o UID da imagem lê seu estado', {skip: !image}, async () => {
+test('Chromium no host reconhece a perda de sessão e o UID da imagem lê seu estado', {skip: !image}, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'design-auth-host-'));
   const visits = new Set<string>();
+  let renewVisits = 0;
   const server = createServer(async (req, res) => {
     visits.add(req.url ?? '');
     const form = '<form><input id="user"><input id="pass" type="password"><button type="button">Entrar</button></form>';
@@ -199,13 +197,16 @@ test('Chromium no host reconhece a perda de sessão e o UID da imagem lê seu es
     const html = (body: string, status = 200) => {
       res.writeHead(status, {'content-type': 'text/html'}).end('<!doctype html><html><div id="root">' + body + '</div></html>');
     };
-    if (req.url === '/entrar' && req.headers.cookie === 'lab=opened') {
+    if (req.url === '/' && req.headers.cookie === 'lab=opened') {
       html('<h1>Painel autenticado na URL do login</h1>');
-    } else if (req.url === '/entrar?voltar=painel') {
+    } else if (req.url === '/?email=1') {
+      assert.equal(req.headers.cookie, 'lab=opened');
+      html('<form><input type="email"><button>Continuar</button></form>');
+    } else if (req.url === '/?destino=painel') {
       html('<h1>Entrar</h1><p>Entre para continuar.</p>');
-    } else if (req.url === '/entrar' || req.url === '/entrar?sem-cookie=1') {
-      const cookie = req.url === '/entrar' ? 'document.cookie = "lab=opened; Path=/"; ' : '';
-      const target = req.url === '/entrar' ? '/alias' : '/painel-idb';
+    } else if (req.url === '/' || req.url === '/?sem-cookie=1') {
+      const cookie = req.url === '/' ? 'document.cookie = "lab=opened; Path=/"; ' : '';
+      const target = req.url === '/' ? '/painel' : '/painel-idb';
       html(form + '<script>document.querySelector("button").onclick = () => {' +
         'if (document.querySelector("#user").value !== "laboratorio" || document.querySelector("#pass").value !== ' +
         JSON.stringify(password) + ') { location.replace("/negada"); return; }' +
@@ -213,28 +214,29 @@ test('Chromium no host reconhece a perda de sessão e o UID da imagem lê seu es
         'open.onupgradeneeded = () => open.result.createObjectStore("tokens");' +
         'open.onsuccess = () => { const tx = open.result.transaction("tokens", "readwrite");' +
         'tx.objectStore("tokens").put("synthetic-token", "session"); tx.oncomplete = () => location.replace(' + JSON.stringify(target) + '); }; };</script>');
-    } else if (req.url === '/fim-da-sessao') {
-      html('<main>Bem-vindo</main>'); // 200 e nenhum sinal visual de login.
-    } else if (req.url === '/apagar-sessao') {
-      html('<script>document.cookie = "lab=; Max-Age=0; Path=/";' +
-        'indexedDB.deleteDatabase("host-auth").onsuccess = () => location.replace("/fim-da-sessao")</script>');
     } else if (req.url === '/negada') {
       html('<h1>Sessão expirada</h1>', 401);
     } else if (req.url === '/painel-idb') {
       html('<h1>Painel IndexedDB</h1>');
     } else if (req.headers.cookie !== 'lab=opened' || req.url === '/expirada') {
-      redirect('/entrar?voltar=painel');
-    } else if (req.url === '/alias') {
-      redirect('/entrar?view=console');
+      redirect('/?destino=painel');
+    } else if (req.url === '/protegida') {
+      redirect('/?email=1');
+    } else if (req.url === '/renovavel' && ++renewVisits === 1) {
+      redirect('/?email=1');
+    } else if (req.url === '/painel') {
+      html('<h1 id="painel-pronto">Painel</h1><a id="acao" href="/negada">Abrir</a>');
+    } else if (req.url === '/sem-marcador') {
+      html('<h1>Outra página</h1>');
     } else if (req.url === '/trocar-senha') {
       html('<form><input id="pass" type="password"><button type="submit">Trocar senha</button></form>');
     } else if (req.url === '/formulario') {
-      html(form.replace('id="pass"', 'id="outraSenha"'));
+      html(form);
     } else if (req.url === '/senha-apenas') {
       html('<form><input type="password"><button>Entrar</button></form>');
     } else if (req.url === '/shadow') {
       html('<div id="host"></div><script>host.attachShadow({mode:"open"}).innerHTML = ' +
-        JSON.stringify('<form><input type="password"><button>Entrar</button></form>') + '</script>');
+        JSON.stringify(form) + '</script>');
     } else if (req.url === '/frame') {
       html('<iframe src="/formulario"></iframe>');
     } else if (req.url === '/2fa') {
@@ -251,10 +253,10 @@ test('Chromium no host reconhece a perda de sessão e o UID da imagem lê seu es
     const address = server.address();
     assert.ok(address && typeof address === 'object');
     const hostOrigin = `http://127.0.0.1:${address.port}`;
-    const loginUrl = hostOrigin + '/entrar';
+    const loginUrl = hostOrigin + '/';
     const login = {
       username: 'laboratorio', password, usernameSelector: '#user', passwordSelector: '#pass',
-      submitSelector: 'text=Entrar', successSelector: 'h1',
+      submitSelector: 'text=Entrar', successSelector: '#painel-pronto', successRoutes: ['/painel', '/sem-marcador'],
     };
     state = await writeDesignLoginState(loginUrl, login, image);
     const mounted = await exec('docker', [
@@ -264,7 +266,7 @@ test('Chromium no host reconhece a perda de sessão e o UID da imagem lê seu es
     ]);
     assert.equal(mounted.stdout.includes(password), false);
     const exported = JSON.parse(mounted.stdout);
-    assert.equal(exported.designLogin.path, '/entrar');
+    assert.equal(exported.designLogin.path, '/');
     assert.equal(exported.origins[0].indexedDB[0].name, 'host-auth');
     await assert.rejects(writeDesignLoginState(loginUrl, {...login, password: 'synthetic-wrong-password', successSelector: undefined}),
       {message: 'DESIGN_CAPTURE_LOGIN_FAILED'});
@@ -275,28 +277,45 @@ test('Chromium no host reconhece a perda de sessão e o UID da imagem lê seu es
     assert.equal(fromIdb.origins[0].indexedDB[0].name, 'host-auth');
 
     const plan = (route: string) => ({
-      screenId: 'lab', route, viewport: 375, theme: 'claro', state: 'padrao', fileName: `${route.slice(1)}.png`,
+      screenId: 'lab', route, viewport: 375, theme: 'claro', state: 'padrao', fileName: `${route.slice(1) || 'inicio'}.png`,
     } as const);
-    const capture = async (plans: Parameters<typeof captureScreens>[2]) => {
+    const capture = async (plans: Parameters<typeof captureScreens>[2], config: DesignLogin = login) => {
       const browser = await openDesignBrowser(loginUrl);
       try {
-        return await captureScreens(browser.driver, hostOrigin, plans, directory, {login, loginUrl});
+        return await captureScreens(browser.driver, hostOrigin, plans, directory, {login: config, loginUrl});
       } finally {
         await browser.close();
       }
     };
-    const accepted = ['/alias', '/entrar', '/trocar-senha', '/2fa'];
+    const accepted = ['/', '/renovavel', '/trocar-senha', '/2fa', '/senha-apenas'];
+    const {successSelector, successRoutes, ...noMarker} = login;
+    await t.test('a própria URL do login exibe a página autenticada sem marcador', async () => {
+      assert.equal((await capture([plan('/')], noMarker)).captures.length, 1);
+    });
+    await t.test('marcador usado apenas para confirmar a entrada não é exigido na raiz autenticada', async () => {
+      assert.equal((await capture([plan('/')], {...login, successRoutes: undefined})).captures.length, 1);
+    });
     assert.deepEqual((await capture(accepted.map(plan))).captures.map(row => row.route), accepted);
-    for (const route of ['/expirada', '/formulario', '/senha-apenas', '/frame', '/shadow', '/apagar-sessao']) {
-      await assert.rejects(capture([plan(route)]), {code: 'DESIGN_CAPTURE_LOGIN_FAILED'});
-      assert.ok(visits.has(route), route);
+    const failures = {
+      '/expirada': 'redirecionamento ao login sem campo de senha',
+      '/protegida': 'login por e-mail com HTTP 200 e cookie expirado ainda presente',
+      '/shadow': 'formulário configurado visível em Shadow DOM aberto',
+      '/formulario': 'formulário configurado servido na rota pedida',
+      '/frame': 'formulário configurado dentro de iframe visível',
+      '/sem-marcador': 'marcador ausente em rota que o exige',
+    };
+    for (const [route, description] of Object.entries(failures)) {
+      await t.test(description, async () => {
+        await assert.rejects(capture([plan(route)]), {code: 'DESIGN_CAPTURE_LOGIN_FAILED'});
+        assert.ok(visits.has(route), route);
+      });
     }
     await assert.rejects(capture([{
       ...plan('/painel'), state: 'erro', reach: {kind: 'acoes', steps: ['clicar #acao']},
     }]), {code: 'DESIGN_CAPTURE_LOGIN_FAILED'});
     assert.ok(visits.has('/negada'));
-    assert.ok(visits.has('/fim-da-sessao'));
-    assert.deepEqual((await readdir(directory)).sort(), ['2fa.png', 'alias.png', 'capturas.json', 'entrar.png', 'trocar-senha.png']);
+    assert.equal(renewVisits, 2);
+    assert.deepEqual((await readdir(directory)).sort(), ['2fa.png', 'capturas.json', 'inicio.png', 'renovavel.png', 'senha-apenas.png', 'trocar-senha.png']);
   } finally {
     server.close();
     if (state) await rm(dirname(state), {recursive: true, force: true});

@@ -4,7 +4,7 @@ import {Refusal} from '../src/contracts.ts';
 import {assertInternalDesignNetwork} from '../src/design-trust.ts';
 import {claimDesignContainer, closeDesignContainers, releaseDesignContainer, resetDesignContainersForTest, setDesignContainerRemoverForTest} from '../src/design-containers.ts';
 // @ts-expect-error módulo da imagem, em JavaScript puro
-import {bodyLeaksPassword, cookieChanged, cookieMap, loginOpened, samePage} from '../deploy/design-tools/login-decision.mjs';
+import {bodyLeaksPassword, cookieChanged, cookieMap, loginOpened, pageShowsLogin, samePage} from '../deploy/design-tools/login-decision.mjs';
 
 const base = {hiddenReads: 0, left: false, changed: false, secondStep: false, successRequired: false, successVisible: false};
 
@@ -42,9 +42,33 @@ test('cookie mudado ou novo é detectado; páginas iguais ignoram a barra final'
   assert.equal(samePage(new URL('https://a.local/painel'), new URL('https://a.local/entrar')), false);
   assert.equal(samePage(new URL('https://a.local/#/entrar?volta=1'), new URL('https://a.local/#/entrar/')), true);
   assert.equal(samePage(new URL('https://a.local/#/painel'), new URL('https://a.local/#/entrar')), false);
-  assert.equal(samePage(new URL('https://a.local/entrar?view=console'), new URL('https://a.local/entrar')), false);
+  assert.equal(samePage(new URL('https://a.local/entrar?view=console'), new URL('https://a.local/entrar')), true);
   assert.equal(samePage(new URL('https://a.local/entrar?returnTo=%2Fpainel'), new URL('https://a.local/entrar')), true);
   assert.equal(samePage(new URL('https://a.local/entrar#formulario'), new URL('https://a.local/entrar')), true);
+});
+
+test('a decisão da captura usa os caminhos sem query e o marcador apenas nas rotas declaradas', async () => {
+  const origin = 'https://a.local';
+  const login = {path: '/', usernameSelector: '#email', passwordSelector: '#senha', submitSelector: '#entrar',
+    successSelector: '#painel-pronto', successRoutes: ['/painel']};
+  const shown = new Set<string>();
+  const frame = {
+    locator: (selector: string) => ({filter: () => ({count: () => Number(shown.has(selector))})}),
+    childFrames: () => [],
+  };
+  const check = (requested: string, final: string) => pageShowsLogin(
+    {...frame, mainFrame: () => frame, url: () => origin + final}, origin + requested, login);
+  shown.add('#email');
+  assert.equal(await check('/protegida', '/?destino=protegida'), true);
+  assert.equal(await check('/protegida', '/?destino=protegida#/email'), true);
+  assert.equal(await check('/', '/?locale=pt'), false);
+  assert.equal(await check('/painel', '/painel?origem=inicio'), true);
+  shown.add('#painel-pronto');
+  assert.equal(await check('/painel', '/painel'), false);
+  assert.equal(await check('/protegida', '/'), true);
+  shown.add('#entrar');
+  shown.add('#senha');
+  assert.equal(await check('/painel', '/painel'), true);
 });
 
 test('a senha é achada crua, curta, escapada no JSON, codificada e em base64', () => {

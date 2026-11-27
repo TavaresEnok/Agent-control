@@ -165,9 +165,13 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     ? undefined
     : await stageDesignReferences({dataDirectory: input.dataDirectory, runId: input.runId, files: input.referenceFiles, repository: input.repo});
   let loginState: string | undefined;
-  if (input.image !== undefined && input.login !== undefined) {
+  const {login, image: imageConfig} = input;
+  const renewLogin = login && imageConfig
+    ? () => writeDesignLoginState(input.targetUrl, login, imageConfig.pinnedImage, input.trustCa)
+    : undefined;
+  if (renewLogin) {
     try {
-      loginState = await writeDesignLoginState(input.targetUrl, input.login, input.image.pinnedImage, input.trustCa);
+      loginState = await renewLogin();
     } catch (error) {
       if (error instanceof Refusal && (error.code === 'DESIGN_PASSWORD_LEAK' || error.code.startsWith('DESIGN_TRUST_CA_'))) throw error;
       throw new Refusal('DESIGN_CAPTURE_LOGIN_FAILED');
@@ -199,14 +203,14 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
   const image = await (async () => {
     try {
       return input.image === undefined || imagePlan === undefined ? undefined : await executeDesignImage({
-    image: input.image.pinnedImage,
-    repository: input.repo,
-    targetUrl: input.targetUrl,
-    plan: imagePlan,
-    ...(input.image.run === undefined ? {} : {run: input.image.run}),
-    ...(input.image.timeoutMs === undefined ? {} : {timeoutMs: input.image.timeoutMs}),
-    ...(loginState === undefined ? {} : {loginState}),
-    ...(input.trustCa === undefined ? {} : {trustCa: input.trustCa}),
+        image: input.image.pinnedImage,
+        repository: input.repo,
+        targetUrl: input.targetUrl,
+        plan: imagePlan,
+        ...(input.image.run === undefined ? {} : {run: input.image.run}),
+        ...(input.image.timeoutMs === undefined ? {} : {timeoutMs: input.image.timeoutMs}),
+        ...(loginState && renewLogin && {loginState, renewLogin}),
+        ...(input.trustCa === undefined ? {} : {trustCa: input.trustCa}),
       });
     } finally {
       // A pasta inteira do login sai, com o state.json que o uid da imagem gravou.

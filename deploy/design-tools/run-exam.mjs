@@ -5,7 +5,7 @@
  */
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync} from 'node:fs';
+import {existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {prepareTrust} from './trust.mjs';
@@ -832,10 +832,10 @@ function routeUrl(origin, route) {
   return url.href;
 }
 
-function readLoginState() {
+function readLoginState(path = LOGIN_STATE) {
   let raw;
   try {
-    raw = readFileSync(LOGIN_STATE, 'utf8');
+    raw = readFileSync(path, 'utf8');
   } catch (error) {
     if (error?.code === 'ENOENT') return null;
     throw error;
@@ -863,10 +863,29 @@ async function openAuthenticatedExam(chromium, chrome, origin, login) {
     const auditBrowser = await puppeteer.connect({browserURL: endpoint});
     const seed = new URL('/.ac-design-storage', origin).href;
     let sessionStorage = login.designLogin.sessionStorage ?? [];
+    let renewal = 0;
     return {
+      async renew() {
+        if (!existsSync('/login/renewal')) return false;
+        const sequence = ++renewal;
+        console.log('DESIGN_RENEW_LOGIN');
+        const path = `/login/renewal/${sequence}`;
+        const deadline = Date.now() + 90_000;
+        while (!existsSync(path) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 200));
+        try {
+          const fresh = readLoginState(path);
+          if (!fresh) return false;
+          await context.setStorageState(fresh.storageState);
+          login = fresh;
+          sessionStorage = fresh.designLogin.sessionStorage ?? [];
+          return true;
+        } catch {
+          return false;
+        }
+      },
       auditBrowser,
       port: session.port,
-      async withPage(run, audit = false) {
+      async withPage(requestedUrl, run, audit = false) {
         const page = await context.newPage();
         let navigation;
         try {
@@ -881,7 +900,7 @@ async function openAuthenticatedExam(chromium, chrome, origin, login) {
           if (!current) throw new Error('DESIGN_CAPTURE_LOGIN_FAILED');
           if (audit) await current.setBypassServiceWorker(true);
           navigation = watchNavigationFailure(current);
-          const unauthorized = async () => navigation.failed() || await pageShowsLogin(page, origin, login.designLogin);
+          const unauthorized = async () => navigation.failed() || await pageShowsLogin(page, requestedUrl, login.designLogin);
           const result = await run(current, unauthorized);
           // Uma passagem que caiu no login não substitui o estado de sessão da última aba válida.
           if (!await unauthorized()) {
@@ -1089,11 +1108,11 @@ async function main() {
   const unavailable = [];
   const findings = [];
   const seenFindings = new Set();
-  const markUnavailable = (cell, status, reason) => {
+  const markUnavailable = (cell, status, reason, failureCode) => {
     const code = Number.isInteger(status) && status > 0 ? status : 0;
-    unavailable.push({route: cell.route, viewport: cell.viewport, theme: cell.theme, state: cell.state, status: code});
+    unavailable.push({route: cell.route, viewport: cell.viewport, theme: cell.theme, state: cell.state, status: code, ...(failureCode && {code: failureCode})});
     const why = typeof reason === 'string' && reason.length > 0 ? reason : String(code);
-    note(`rota indisponível (${why}) ${cell.route} ${cell.viewport} ${cell.theme} ${cell.state}`);
+    note(`rota indisponível (${why}) ${cell.route} ${cell.viewport} ${cell.theme} ${cell.state}${failureCode ? ' ' + failureCode : ''}`);
     const key = `${cell.route}\u0000${code}`;
     if (seenFindings.has(key)) return;
     seenFindings.add(key);
@@ -1332,12 +1351,7 @@ async function main() {
     const fileName = routeShotName(cell.route, cell.viewport, cell.theme, cell.state);
     const label = cellLabel(cell);
     const url = cell.href ?? routeUrl(target.origin, cell.route);
-    const lostSession = async () => {
-      if (login === null) return false;
-      const lost = await unauthorized();
-      if (lost) markUnavailable(cell, 401, 'sessão não confirmada na rota');
-      return lost;
-    };
+    const lostSession = async () => login !== null && await unauthorized();
     try {
       await page.setViewportSize({width: cell.viewport, height: viewportHeight(cell.viewport)});
       await page.emulateMedia({colorScheme: cell.theme === 'escuro' ? 'dark' : 'light'});
@@ -1345,12 +1359,13 @@ async function main() {
       try {
         response = await page.goto(url, {waitUntil: 'load', timeout: 20000});
       } catch {
-        if (!await lostSession().catch(() => false)) markUnavailable(cell, 0);
+        if (await lostSession().catch(() => false)) return 'login';
+        markUnavailable(cell, 0);
         return;
       }
       const status = response?.status() ?? 0;
       const landed = new URL(page.url());
-      if (await lostSession()) return;
+      if (await lostSession()) return 'login';
       if (status >= 400 || status === 0 || landed.origin !== target.origin) {
         markUnavailable(cell, status >= 400 ? status : 0);
         return;
@@ -1363,7 +1378,7 @@ async function main() {
         return;
       }
       const acted = await runActions(page, cell.actions).catch(() => false);
-      if (await lostSession()) return;
+      if (await lostSession()) return 'login';
       if (!acted) {
         note(`estado ${cell.state} não capturado`);
         return;
@@ -1373,7 +1388,7 @@ async function main() {
         return;
       }
       const png = await page.screenshot({fullPage: true, type: 'png'});
-      if (await lostSession()) return;
+      if (await lostSession()) return 'login';
       const saveShot = () => {
         writeFileSync(join('/output/capturas', fileName), png);
         screenshots.push({fileName, route: cell.route, viewport: cell.viewport, theme: cell.theme, state: cell.state});
@@ -1382,14 +1397,14 @@ async function main() {
       const measureCell = login !== null || moved === null;
       const styles = measureCell ? await readStyleBlocks(page) : [];
       const samples = measureCell ? await page.evaluate(inPage(sampleProbe, SAMPLE_HELPERS)) : null;
-      if (await lostSession()) return;
+      if (await lostSession()) return 'login';
       let results;
       try {
         results = await new AxeBuilder({page}).withTags(AXE_TAGS).analyze();
       } catch (error) {
         axeFailures.push(`DESIGN_AXE_FAILED ${label} ${shortError(error)}`);
       }
-      if (await lostSession()) return;
+      if (await lostSession()) return 'login';
       let render;
       let renderRead;
       if (measureCell && renderCells.length < RENDER_CELL_MAX) {
@@ -1406,7 +1421,7 @@ async function main() {
         }, renderFailures, label);
         render = {file: label, route: cell.route, viewport: cell.viewport, theme: cell.theme, state: cell.state};
         if (wide && cell.state === 'padrao') render.states = await probeStates(page, label);
-        if (await lostSession()) return;
+        if (await lostSession()) return 'login';
       }
       if (login !== null) saveShot();
       if (measureCell) {
@@ -1433,7 +1448,7 @@ async function main() {
         pushRender(render);
       }
     } catch (error) {
-      if (await lostSession().catch(() => false)) return;
+      if (await lostSession().catch(() => false)) return 'login';
       axeFailures.push(`DESIGN_AXE_FAILED ${label} ${shortError(error)}`);
       note(`captura falhou ${cell.route} ${cell.viewport} ${cell.state}`);
     }
@@ -1445,9 +1460,16 @@ async function main() {
     try {
       const publicContext = await browser?.newContext({serviceWorkers: 'block'});
       const publicPage = await publicContext?.newPage();
-      const withPage = run => publicPage ? run(publicPage) : authenticated.withPage(run);
       for (const group of routeCells) {
-        for (const cell of group.cells) await withPage((page, unauthorized) => runCell(page, cell, unauthorized));
+        const url = routeUrl(target.origin, group.route);
+        const withPage = (run, requested = url) => publicPage ? run(publicPage) : authenticated.withPage(requested, run);
+        for (const cell of group.cells) {
+          const capture = () => withPage((page, unauthorized) => runCell(page, cell, unauthorized), cell.href ?? url);
+          if (await capture() !== 'login') continue;
+          if (await authenticated.renew() && await capture() !== 'login') continue;
+          markUnavailable(cell, 401, 'sessão não confirmada na rota', 'DESIGN_CAPTURE_LOGIN_FAILED');
+          break;
+        }
         // Uma vez por rota, depois das células: 320px, Tab e movimento reduzido.
         if (group.cells.length > 0) await runRoutePasses(withPage, group.route);
       }
@@ -1476,7 +1498,7 @@ async function main() {
   const pa11yFailures = [];
   const pa11yBin = '/opt/design-tools/node_modules/.bin/pa11y';
   const pa11yConfig = '/tmp/pa11y.json';
-  const runAuthenticatedPa11y = (route, url, viewport, runner) => authenticated.withPage(async (page, unauthorized) => {
+  const runAuthenticatedPa11y = (route, url, viewport, runner) => authenticated.withPage(url, async (page, unauthorized) => {
     const size = {width: viewport, height: viewportHeight(viewport)};
     await page.setViewport(size);
     const response = await page.goto(url, {waitUntil: 'load', timeout: 20000}).catch(() => null);
@@ -1578,7 +1600,7 @@ async function main() {
               chromeFlags: ['--headless=new', '--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
             });
           }
-          const result = authenticated ? await authenticated.withPage(measure, true) : await measure();
+          const result = authenticated ? await authenticated.withPage(url, measure, true) : await measure();
           const lhr = slimLighthouse(result?.lhr ?? null);
           if (!lhr || (login !== null && result?.lhr?.runtimeError)) {
             lhFailures.push(`DESIGN_LIGHTHOUSE_FAILED ${route.route} ${formFactor} sem LHR`);

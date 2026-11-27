@@ -68,6 +68,7 @@ export type DesignBrowserGuard = {
 };
 
 type DesignContext = DesignBrowserGuardContext & {
+  close(): Promise<void>;
   newPage(): Promise<DesignPage>;
 };
 
@@ -267,7 +268,7 @@ export async function writeDesignLoginState(targetUrl: string, login: DesignLogi
     await guard.goto(targetUrl);
     await guard.fill(login.usernameSelector, login.username);
     await guard.fill(login.passwordSelector, login.password);
-    const body = JSON.stringify(await submitLogin(page, context, login, target.origin));
+    const body = JSON.stringify(await submitLogin(page, context, login, target.origin, targetUrl));
     if (bodyLeaksPassword(body, login.username, login.password)) throw new Refusal('DESIGN_PASSWORD_LEAK');
     const path = join(directory, 'state.json');
     await writeFile(path, body, {mode: 0o600});
@@ -308,6 +309,7 @@ async function writeLoginStateInImage(targetUrl: string, login: DesignLogin, pin
       usernameSelector: login.usernameSelector,
       passwordSelector: login.passwordSelector,
       submitSelector: login.submitSelector,
+      successRoutes: login.successRoutes,
       ...(login.successSelector === undefined ? {} : {successSelector: login.successSelector}),
     }), {mode: 0o600});
     await chmod(cred, 0o600);
@@ -365,13 +367,21 @@ export async function openDesignBrowser(targetUrl: string): Promise<{driver: Des
     args: ['--no-sandbox', '--disable-dev-shm-usage'],
   });
   try {
-    const context = await browser.newContext(designBrowserContextOptions);
-    const page = await context.newPage();
-    const guard = await installDesignBrowserGuard(context, page, targetUrl);
+    let context = await browser.newContext(designBrowserContextOptions);
+    let page = await context.newPage();
+    let guard = await installDesignBrowserGuard(context, page, targetUrl);
     let closed = false;
-    let designLogin: Pick<DesignLogin, 'usernameSelector' | 'submitSelector' | 'successSelector'> & {path?: string} | undefined;
+    let designLogin: Omit<DesignLogin, 'username' | 'password'> & {path?: string} | undefined;
     let navigation = watchNavigationFailure(page);
     const driver: DesignCaptureDriver = {
+      async resetSession() {
+        navigation.stop();
+        await context.close();
+        context = await browser.newContext(designBrowserContextOptions);
+        page = await context.newPage();
+        guard = await installDesignBrowserGuard(context, page, targetUrl);
+        navigation = watchNavigationFailure(page);
+      },
       async setViewport(width, height) {
         await page.setViewportSize({width, height});
       },
@@ -402,12 +412,12 @@ export async function openDesignBrowser(targetUrl: string): Promise<{driver: Des
         await page.click(selector);
         guard.afterLogin();
       },
-      async submitLogin(login) {
-        ({designLogin} = await submitLogin(page, context, login, origin));
+      async submitLogin(login, loginUrl) {
+        ({designLogin} = await submitLogin(page, context, login, origin, loginUrl));
       },
       async verifyAuthenticated(url) {
         assertDesignDestination(url, page.url());
-        if (navigation.failed() || await pageShowsLogin(page, origin, designLogin)) {
+        if (navigation.failed() || await pageShowsLogin(page, url, designLogin)) {
           throw new Refusal('DESIGN_CAPTURE_LOGIN_FAILED');
         }
       },
