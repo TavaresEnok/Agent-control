@@ -13,6 +13,28 @@ import type {Ledger} from './ledger.ts';
 const Provider=z.enum(['codex','claude','grok']);
 export type ProviderLogin={accountId:string;provider:'codex'|'claude'|'grok';label:string;state:'pending'|'active'|'error';url?:string;userCode?:string};
 const sessions=new Map<string,ProviderLogin>();
+const terminalTimers=new Map<string,ReturnType<typeof setTimeout>>();
+let pendingLogins=0;
+const loginLifetime=10*60_000;
+type DeviceLoginOptions={signal?:AbortSignal;timeoutMs?:number;keepAlive?:boolean};
+
+function reserveDeviceLogin(){
+ if(pendingLogins>=3)throw new Refusal('PROVIDER_LOGIN_LIMIT',409);
+ pendingLogins++;
+ return ()=>{pendingLogins--;};
+}
+
+function rememberTerminal(login:ProviderLogin,state:'active'|'error'){
+ const {accountId,provider,label}=login;
+ sessions.set(accountId,{accountId,provider,label,state});
+ const forget=(id:string)=>{
+  clearTimeout(terminalTimers.get(id));
+  terminalTimers.delete(id);
+  sessions.delete(id);
+ };
+ terminalTimers.set(accountId,setTimeout(()=>forget(accountId),loginLifetime).unref());
+ if(terminalTimers.size>128)forget(terminalTimers.keys().next().value!);
+}
 /** Test team only. The permanent roster in AGENTS.md stays Codex for manager and programmer. */
 export const ACCOUNT_ADD_MODEL_ROLES=['manager','programmer','reviewer','qa','specialist','judge'] as const;
 /** Profiles each new account gets, and the roles its models are registered for (specialist is the module exam reviewer). */
@@ -25,65 +47,103 @@ export const ACCOUNT_ADD_ROLES={
 export function providerLogin(accountId:string){return sessions.get(accountId)??null;}
 
 function capture(accountId:string,chunk:Buffer){
- const current=sessions.get(accountId);if(!current)return;
+ const current=sessions.get(accountId);if(current?.state!=='pending')return;
  const text=chunk.toString('utf8');
  const url=text.match(/https:\/\/[^\s"'<>]+/)?.[0];
  const userCode=text.match(/(?:code|código|enter)[:\s]+([A-Z0-9-]{4,16})/i)?.[1];
- sessions.set(accountId,{...current,...(url?{url}:{}),...(userCode?{userCode}:{})});
+ sessions.set(accountId,{...current,...(url&&url.length<=2048?{url}:{}),...(userCode?{userCode}:{})});
 }
 
-function startDeviceLogin(provider:'codex'|'claude'|'grok',home:string,accountId:string){
- const command=provider==='codex'?'codex':provider==='claude'?'claude':'grok';
+export function startDeviceLogin(login:ProviderLogin,home:string,options:DeviceLoginOptions={},release=reserveDeviceLogin()){
+ const {provider,accountId}=login;
  const args=provider==='claude'?['setup-token']:['login','--device-auth'];
- const child=spawn(command,args,{env:{...process.env,CODEX_HOME:resolve(home,'.codex'),CLAUDE_CONFIG_DIR:home,HOME:provider==='grok'?home:process.env.HOME},stdio:['ignore','pipe','pipe'],detached:true});
- child.stdout.on('data',(chunk:Buffer)=>capture(accountId,chunk));
- child.stderr.on('data',(chunk:Buffer)=>capture(accountId,chunk));
- child.on('error',()=>{const current=sessions.get(accountId);if(current)sessions.set(accountId,{...current,state:'error'});});
- child.on('exit',code=>{const current=sessions.get(accountId);if(current&&current.state==='pending')sessions.set(accountId,{...current,state:code===0?'active':'error'});});
- child.unref();
- for(const stream of [child.stdout,child.stderr])(stream as {unref?:()=>void}|null)?.unref?.();
+ const env:NodeJS.ProcessEnv={HOME:home};
+ for(const name of ['PATH','LANG','LC_ALL','LC_CTYPE','TERM'] as const){
+  if(process.env[name]!==undefined)env[name]=process.env[name];
+ }
+ if(provider==='codex')env.CODEX_HOME=resolve(home,'.codex');
+ if(provider==='claude')env.CLAUDE_CONFIG_DIR=home;
+ let child:ReturnType<typeof spawn>;
+ try{
+  options.signal?.throwIfAborted();
+  child=spawn(provider,args,{env,stdio:['ignore','pipe','pipe'],detached:true});
+ }catch(error){release();throw error;}
+ sessions.set(accountId,login);
+ child.stdout!.on('data',(chunk:Buffer)=>capture(accountId,chunk));
+ child.stderr!.on('data',(chunk:Buffer)=>capture(accountId,chunk));
+ const kill=()=>{
+  if(!child.pid)return;
+  try{process.kill(-child.pid,'SIGKILL');}
+  catch(error){if((error as NodeJS.ErrnoException).code!=='ESRCH')console.error('PROVIDER_LOGIN_CANCEL_FAILED');}
+ };
+ const cancel=()=>{
+  if(sessions.get(accountId)?.state==='pending')rememberTerminal(login,'error');
+  kill();
+ };
+ const timer=setTimeout(cancel,options.timeoutMs??loginLifetime);
+ options.signal?.addEventListener('abort',cancel,{once:true});
+ child.once('exit',kill);
+ child.once('error',cancel);
+ const done=new Promise<void>(resolveDone=>child.once('close',code=>{
+  clearTimeout(timer);
+  options.signal?.removeEventListener('abort',cancel);
+  if(sessions.get(accountId)?.state==='pending')rememberTerminal(login,code===0?'active':'error');
+  release();
+  resolveDone();
+ }));
+ if(!options.keepAlive){
+  timer.unref();
+  child.unref();
+  for(const stream of [child.stdout,child.stderr])(stream as {unref?:()=>void}|null)?.unref?.();
+ }
+ return done;
 }
 
 /** Registers one real subscription account and starts device login. Secrets stay in the private home. */
-export async function addProviderAccount(config:Installation,ledger:Ledger,raw:{provider:string;label:string;authFile?:string}){
+export async function addProviderAccount(config:Installation,ledger:Ledger,raw:{provider:string;label:string;authFile?:string},options:DeviceLoginOptions={}){
  if(config.activation!=='personal')throw new Refusal('PERSONAL_ACTIVATION_REQUIRED',403);
  const provider=Provider.parse(raw.provider);
  const label=z.string().trim().min(1).max(100).parse(raw.label);
  const root=config.accountHomesDirectory;if(!root)throw new Refusal('ACCOUNT_HOMES_NOT_CONFIGURED',403);
- // Create the private homes directory before any ledger write, so a missing directory cannot leave an account without a home.
- await mkdir(root,{recursive:true,mode:0o700});
- await syncInstallationActivation(ledger,config.activation);
- const owner=config.project.owner,projectId=config.project.id;
- await ledger.pool.query('INSERT INTO ac_control_admins VALUES($1) ON CONFLICT DO NOTHING',[owner]);
- const capacity=new Capacity(ledger);
- if(!(await ledger.pool.query('SELECT 1 FROM ac_capacity_config WHERE id=1')).rowCount)
-  await capacity.configure(owner,{programmingLimit:4,evaluationLimit:2});
- const accountId=randomUUID();
- const subject=createHash('sha256').update(provider+'\0'+accountId).digest('hex');
- for(const profile of ACCOUNT_ADD_ROLES[provider])
-  await capacity.registerModel(owner,{provider,model:profile.model,efforts:['low','medium','high'],roles:[...ACCOUNT_ADD_MODEL_ROLES],source:'personal://account-add'});
- await capacity.addAccount(owner,projectId,{id:accountId,provider,label,resourceIdentity:provider+':'+subject,mode:'subscription_cli',eligibility:'documented_supported',eligibilitySource:'personal://owner',maxConcurrent:2});
- for(const profile of ACCOUNT_ADD_ROLES[provider])
-  await capacity.addProfile(owner,projectId,{id:randomUUID(),accountId,model:profile.model,effort:'medium',role:profile.role});
- await capacity.observeQuota(owner,accountId,{status:'available',source:'personal://account-add',ttlSeconds:3600});
- const repositories=[config.project.repo,...config.projects.map(project=>project.repo)];
- await new AccountHomes(ledger,root,repositories).initialize(owner,projectId,accountId);
- const home=resolve(root,accountId);
- const login:ProviderLogin={accountId,provider,label,state:'pending'};
- sessions.set(accountId,login);
- if(raw.authFile){
-  if(!isAbsolute(raw.authFile)||resolve(raw.authFile)!==raw.authFile)throw new Refusal('AUTH_FILE_INVALID',400);
-  const target=provider==='grok'?resolve(home,'.grok','auth.json'):provider==='claude'?resolve(home,'.credentials.json'):resolve(home,'.codex','auth.json');
-  if(provider==='grok')await mkdir(resolve(home,'.grok'),{recursive:true,mode:0o700});
-  else if(provider==='codex')await mkdir(resolve(home,'.codex'),{recursive:true,mode:0o700});
-  await copyFile(raw.authFile,target);
-  const file=await open(target,constants.O_RDONLY);
-  try{await file.chmod(0o600);}finally{await file.close();}
-  sessions.set(accountId,{...login,state:'active'});
- }else{
-  startDeviceLogin(provider,home,accountId);
-  const deadline=Date.now()+4000;
-  while(Date.now()<deadline&&sessions.get(accountId)?.state==='pending'&&!sessions.get(accountId)?.url)await new Promise(resolve=>setTimeout(resolve,200));
- }
- return sessions.get(accountId)!;
+ if(raw.authFile&&(!isAbsolute(raw.authFile)||resolve(raw.authFile)!==raw.authFile))throw new Refusal('AUTH_FILE_INVALID',400);
+ options.signal?.throwIfAborted();
+ let release=raw.authFile?undefined:reserveDeviceLogin();
+ try{
+  // Create the private homes directory before any ledger write, so a missing directory cannot leave an account without a home.
+  await mkdir(root,{recursive:true,mode:0o700});
+  await syncInstallationActivation(ledger,config.activation);
+  const owner=config.project.owner,projectId=config.project.id;
+  await ledger.pool.query('INSERT INTO ac_control_admins VALUES($1) ON CONFLICT DO NOTHING',[owner]);
+  const capacity=new Capacity(ledger);
+  if(!(await ledger.pool.query('SELECT 1 FROM ac_capacity_config WHERE id=1')).rowCount)
+   await capacity.configure(owner,{programmingLimit:4,evaluationLimit:2});
+  const accountId=randomUUID();
+  const subject=createHash('sha256').update(provider+'\0'+accountId).digest('hex');
+  for(const profile of ACCOUNT_ADD_ROLES[provider])
+   await capacity.registerModel(owner,{provider,model:profile.model,efforts:['low','medium','high'],roles:[...ACCOUNT_ADD_MODEL_ROLES],source:'personal://account-add'});
+  await capacity.addAccount(owner,projectId,{id:accountId,provider,label,resourceIdentity:provider+':'+subject,mode:'subscription_cli',eligibility:'documented_supported',eligibilitySource:'personal://owner',maxConcurrent:2});
+  for(const profile of ACCOUNT_ADD_ROLES[provider])
+   await capacity.addProfile(owner,projectId,{id:randomUUID(),accountId,model:profile.model,effort:'medium',role:profile.role});
+  await capacity.observeQuota(owner,accountId,{status:'available',source:'personal://account-add',ttlSeconds:3600});
+  const repositories=[config.project.repo,...config.projects.map(project=>project.repo)];
+  await new AccountHomes(ledger,root,repositories).initialize(owner,projectId,accountId);
+  const home=resolve(root,accountId);
+  const login:ProviderLogin={accountId,provider,label,state:'pending'};
+  if(raw.authFile){
+   const target=provider==='grok'?resolve(home,'.grok','auth.json'):provider==='claude'?resolve(home,'.credentials.json'):resolve(home,'.codex','auth.json');
+   if(provider==='grok')await mkdir(resolve(home,'.grok'),{recursive:true,mode:0o700});
+   else if(provider==='codex')await mkdir(resolve(home,'.codex'),{recursive:true,mode:0o700});
+   await copyFile(raw.authFile,target);
+   const file=await open(target,constants.O_RDONLY);
+   try{await file.chmod(0o600);}finally{await file.close();}
+   rememberTerminal(login,'active');
+  }else{
+   const reserved=release!;
+   release=undefined;
+   void startDeviceLogin(login,home,options,reserved);
+   const deadline=Date.now()+4000;
+   while(Date.now()<deadline&&sessions.get(accountId)?.state==='pending'&&!sessions.get(accountId)?.url)await new Promise(resolve=>setTimeout(resolve,200));
+  }
+  return sessions.get(accountId)??{...login,state:'error' as const};
+ }finally{release?.();}
 }

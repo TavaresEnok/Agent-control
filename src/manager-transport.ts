@@ -8,7 +8,7 @@ import type {CezarRuntime} from './cezar.ts';
 import {assertManagerTransportAllowed} from './native-bootstrap.ts';
 import {deliverPersonalPush,type PersonalPushNotice} from './personal-push.ts';
 
-type PersonalTransportOptions={transportOnly?:boolean;semanticPlanning?:import('./semantic-planning.ts').SemanticPlanning;managerChat?:import('./personal-manager-chat.ts').PersonalManagerChat;dataDirectory?:string;projectLabel?:string;managerEconomy?:import('./manager-discipline.ts').ManagerEconomy};
+type PersonalTransportOptions={transportOnly?:boolean;semanticPlanning?:import('./semantic-planning.ts').SemanticPlanning;managerChat?:import('./personal-manager-chat.ts').PersonalManagerChat;dataDirectory?:string;managerEconomy?:import('./manager-discipline.ts').ManagerEconomy};
 /** Optional configured transport only: the personal conversation kept in Postgres. Cezar still owns dispatch;
  * no model login, inference or account activation occurs during bootstrap. A bench bootstrap cannot open this
  * transport: substitutes are injected by the caller. */
@@ -33,7 +33,7 @@ async function startLocalManagerTransport(config:Installation,ledger:Ledger,runt
  const pushDirectory=personal?.transportOnly===false?personal.dataDirectory:undefined;
  const personalPush=pushDirectory?(notice:PersonalPushNotice)=>deliverPersonalPush(pushDirectory,notice):undefined;
  const registry=new ManagerRegistry(ledger,runtime.projectId,localEndpointFactory(ledger,runtime,{
-  transportOnly:personal?.transportOnly!==false,semanticPlanning:personal?.semanticPlanning,personalConversation:personal?.transportOnly===false,teamFeedRoot:personal?.transportOnly===false?join(config.dataDirectory,'native','execution-host'):undefined,dataDirectory:personal?.transportOnly===false?config.dataDirectory:undefined,managerChat:personal?.managerChat,projectLabel:personal?.projectLabel,managerEconomy:personal?.managerEconomy,deliverPersonalPush:personalPush}));
+  transportOnly:personal?.transportOnly!==false,semanticPlanning:personal?.semanticPlanning,personalConversation:personal?.transportOnly===false,teamFeedRoot:personal?.transportOnly===false?join(config.dataDirectory,'native','execution-host'):undefined,dataDirectory:personal?.transportOnly===false?config.dataDirectory:undefined,managerChat:personal?.managerChat,managerEconomy:personal?.managerEconomy,deliverPersonalPush:personalPush}));
  try{
   for(const item of contexts){
    const {projectId,...request}=item;

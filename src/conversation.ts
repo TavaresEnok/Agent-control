@@ -53,7 +53,7 @@ export class ConversationEndpoint {
   lastError: string | undefined;
   recoveredCheckpoint: Checkpoint | null = null;
   constructor(readonly ledger: Ledger, readonly runtime: CezarRuntime,
-    readonly options: { key: Uint8Array; principal: string; sessionId: string; authority: Authority; keyVersion?: number; encryptionVariant?: EncryptionVariant; notificationPolicy?:z.input<typeof NotificationPolicy>; transportOnly?:boolean; semanticPlanning?:SemanticPlanning; personalConversation?:boolean; teamFeedRoot?:string; dataDirectory?:string; managerChat?:import('./personal-manager-chat.ts').PersonalManagerChat; projectLabel?:string;managerEconomy?:import('./manager-discipline.ts').ManagerEconomy; deliverPersonalPush?:(notice:PersonalPushNotice)=>Promise<void> }, conversation?: ConversationTransport) {
+    readonly options: { key: Uint8Array; principal: string; sessionId: string; authority: Authority; keyVersion?: number; encryptionVariant?: EncryptionVariant; notificationPolicy?:z.input<typeof NotificationPolicy>; transportOnly?:boolean; semanticPlanning?:SemanticPlanning; personalConversation?:boolean; teamFeedRoot?:string; dataDirectory?:string; managerChat?:import('./personal-manager-chat.ts').PersonalManagerChat; managerEconomy?:import('./manager-discipline.ts').ManagerEconomy; deliverPersonalPush?:(notice:PersonalPushNotice)=>Promise<void> }, conversation?: ConversationTransport) {
     if(options.semanticPlanning&&(options.semanticPlanning.ledger!==ledger||options.transportOnly))throw new Refusal('SEMANTIC_MANAGER_CONFIGURATION_INVALID');
     this.notifications=new Notifications(ledger,options.notificationPolicy);
     this.conversation = conversation ?? new LocalConversationTransport({ledger,contextId:options.authority.contextId,principal:options.principal});
@@ -277,7 +277,7 @@ export class ConversationEndpoint {
    if(this.options.personalConversation&&isRepeatablePersonalNotice(text,localId)){
     const recent=await recentPersonalNotices(this.ledger.pool,this.options.authority.contextId).catch(containFailure('PERSONAL_NOTICE_HISTORY_UNAVAILABLE',[]));
     if(suppressRepeatedPersonalNotice({text,localId,recent})){
-     console.error(JSON.stringify({event:'PERSONAL_NOTICE_SUPPRESSED',text}));
+     console.error(JSON.stringify({event:'PERSONAL_NOTICE_SUPPRESSED'}));
      return;
     }
    }
@@ -291,7 +291,7 @@ export class ConversationEndpoint {
    const body=personalPushBody(text,localId.startsWith('answer-'));
    if(body===null)return;
    const deliver=this.options.deliverPersonalPush;
-   const notice:PersonalPushNotice={messageId:localId,title:this.options.projectLabel||'Agent Control',body,url:'/p/'+this.runtime.projectId+'/conversa'};
+   const notice:PersonalPushNotice={messageId:localId,title:'Nova mensagem no Agent Control',body,url:'/p/'+this.runtime.projectId+'/conversa'};
    void Promise.resolve().then(()=>deliver(notice)).catch(()=>{console.error(JSON.stringify({event:'PERSONAL_PUSH_FAILED'}));});
   }
   private async stopLatest(){

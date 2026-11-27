@@ -22,3 +22,25 @@ test('a manager reply, a proposal and a team report are never suppressed',()=>{
  assert.equal(suppressRepeatedPersonalNotice({text:'Programador (grok · grok-4 · medium) terminou.',localId:'team-1-completed',recent:[{text:'Programador (grok · grok-4 · medium) terminou.',ageMs:0}]}),false);
  assert.equal(suppressRepeatedPersonalNotice({text:'Equipe:\n• Gerente: grok',kind:'team-report',recent:[{text:'Equipe:\n• Gerente: grok',ageMs:0}]}),false);
 });
+
+test('operational log events omit private error and repeated notice text',async t=>{
+ const {logLedgerSessionError}=await import('../src/ledger-session-errors.ts');
+ const {ConversationEndpoint}=await import('../src/conversation.ts');
+ const privateText='PRIVATE-SYNTHETIC-MARKER';
+ const notice='Atenção — '+privateText;
+ const log=t.mock.method(console,'error',()=>{});
+ logLedgerSessionError(new Error(privateText));
+ logLedgerSessionError(Object.assign(new Error(privateText),{code:privateText}));
+ logLedgerSessionError(Object.assign(new Error(privateText),{code:'25P03'}));
+ const endpoint=Object.assign(Object.create(ConversationEndpoint.prototype),{
+  options:{personalConversation:true,authority:{contextId:'synthetic'}},
+  ledger:{pool:{query:async()=>({rows:[{text:notice,age_ms:0}]})}},
+ }) as {say(id:string,text:string):Promise<void>};
+ await endpoint.say('notice-1',notice);
+ assert.deepEqual(log.mock.calls.map(call=>call.arguments),[
+  ['LEDGER_SESSION_ERROR','UNKNOWN'],
+  ['LEDGER_SESSION_ERROR','UNKNOWN'],
+  ['LEDGER_SESSION_ERROR','25P03'],
+  ['{"event":"PERSONAL_NOTICE_SUPPRESSED"}'],
+ ]);
+});

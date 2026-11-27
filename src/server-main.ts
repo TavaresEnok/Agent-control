@@ -58,8 +58,12 @@ async function main(){
   if(!path||!provider||!label||(flag!==undefined&&flag!=='--auth-file')||(flag==='--auth-file'&&!authFile)||extra.length>(flag?4:2))throw Error('INVALID_INSTALLATION_COMMAND');
   const config=await loadInstallation(path);
   const ledger=new Ledger(config.databaseUrl,config.installationAuthority?.token);
-  try{const {addProviderAccount}=await import('./account-add.ts');console.log(JSON.stringify(await addProviderAccount(config,ledger,{provider,label,authFile})));}
-  finally{await ledger.close();}
+  const cancel=new AbortController(),abort=()=>cancel.abort();
+  process.once('SIGINT',abort);process.once('SIGTERM',abort);
+  try{
+   const {addProviderAccount}=await import('./account-add.ts');
+   console.log(JSON.stringify(await addProviderAccount(config,ledger,{provider,label,authFile},{signal:cancel.signal,keepAlive:true})));
+  }finally{await ledger.close();}
   return;
  }
  if(command==='pair'){
@@ -208,7 +212,7 @@ async function main(){
    try{
     await runtime.start(execute?'execution':'administration-only');
     const control=new Control(ledger,quotaRegistry.adapters,project.id,undefined,{reviewDigest:runtime.engineering?.options.nativeVerification?nativeReviewVerifierDigest:undefined,qaDigest:runtime.engineering?.options.nativeQa?.verifierDigest,nativeExecutionEnabled:runtime.nativeExecutionReady});
-    const registry=await startConfiguredManagerTransport(config,ledger,runtime,{transportOnly:prepared.report.state!=='active',semanticPlanning:personalRuntime?.semantic,managerChat:personalRuntime?.managerChat,...(config.activation==='personal'?{dataDirectory:config.dataDirectory,projectLabel:[config.project,...config.projects].find(item=>item.id===runtime.projectId)?.label,managerEconomy:managerEconomyOf([config.project,...config.projects].find(item=>item.id===runtime.projectId)?.economy)}:{})});
+    const registry=await startConfiguredManagerTransport(config,ledger,runtime,{transportOnly:prepared.report.state!=='active',semanticPlanning:personalRuntime?.semantic,managerChat:personalRuntime?.managerChat,...(config.activation==='personal'?{dataDirectory:config.dataDirectory,managerEconomy:managerEconomyOf([config.project,...config.projects].find(item=>item.id===runtime.projectId)?.economy)}:{})});
     configurationControls.set(project.id,control);if(registry)managerTransports.set(project.id,registry);return runtime;
    }catch(error){await runtime.close();throw error;}
   });
@@ -216,7 +220,7 @@ async function main(){
   const personalPanel=config.activation==='personal'?{roots:config.projectRoots,projectRepos:[config.project.repo,...config.projects.map(project=>project.repo)],installationPath:path,dataDirectory:config.dataDirectory,projectId:config.project.id,owner:config.project.owner,scheduleRestart(){setTimeout(()=>stopGateway(),1000);}}:undefined;
   const pairCodeLogin=config.activation==='personal'?personalCodeLogin(config,ledger,sessions):undefined;
   const passwordLogin=config.activation==='personal'?personalPasswordLogin(config,ledger,sessions):undefined;
-  const appFor=(runtime:InstanceType<typeof CezarRuntime>)=>createApi(ledger,runtime,verify,contextId=>managerTransports.get(runtime.projectId)?.authority(contextId),{sessions,providerAdapters:quotaRegistry.adapters,managerStatus:async contextId=>{const status=await managerTransports.get(runtime.projectId)?.status(contextId);const active=prepared.report.state==='active';return status?{...status,executionEnabled:active,semanticManagerEnabled:active}:undefined;},quotaRegistry,configurationControl:configurationControls.get(runtime.projectId),personalAccounts:config.activation==='personal'?{add:(_principal,input)=>import('./account-add.ts').then(m=>m.addProviderAccount(config,ledger,input)),status:(_principal,accountId)=>import('./account-add.ts').then(m=>m.providerLogin(accountId)),readConversation:(principal,query)=>{const registry=managerTransports.get(runtime.projectId);if(!registry)throw new Refusal('CONVERSATION_UNAVAILABLE',503);return registry.readPanelConversation(principal,query.after,query.limit);},sendMessage:(principal,input)=>{const registry=managerTransports.get(runtime.projectId);if(!registry)throw new Refusal('CONVERSATION_UNAVAILABLE',503);return registry.enqueuePanelMessage(principal,input.text,input.localId);}} :undefined,personalPanel,pairCodeLogin,passwordLogin,...(config.activation==='personal'&&personalRuntime?{personalVerification:(()=>{
+  const appFor=(runtime:InstanceType<typeof CezarRuntime>)=>createApi(ledger,runtime,verify,contextId=>managerTransports.get(runtime.projectId)?.authority(contextId),{sessions,providerAdapters:quotaRegistry.adapters,managerStatus:async contextId=>{const status=await managerTransports.get(runtime.projectId)?.status(contextId);const active=prepared.report.state==='active';return status?{...status,executionEnabled:active,semanticManagerEnabled:active}:undefined;},quotaRegistry,configurationControl:configurationControls.get(runtime.projectId),personalAccounts:config.activation==='personal'?{add:(_principal,input)=>import('./account-add.ts').then(m=>m.addProviderAccount(config,ledger,input,{signal:shutdownAbort.signal})),status:(_principal,accountId)=>import('./account-add.ts').then(m=>m.providerLogin(accountId)),readConversation:(principal,query)=>{const registry=managerTransports.get(runtime.projectId);if(!registry)throw new Refusal('CONVERSATION_UNAVAILABLE',503);return registry.readPanelConversation(principal,query.after,query.limit);},sendMessage:(principal,input)=>{const registry=managerTransports.get(runtime.projectId);if(!registry)throw new Refusal('CONVERSATION_UNAVAILABLE',503);return registry.enqueuePanelMessage(principal,input.text,input.localId);}} :undefined,personalPanel,pairCodeLogin,passwordLogin,...(config.activation==='personal'&&personalRuntime?{personalVerification:(()=>{
    const bound=personalRuntime;
    if(!bound)throw new Error('PERSONAL_RUNTIME_REQUIRED');
    const executions=bound.executions;

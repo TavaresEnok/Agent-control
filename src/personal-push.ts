@@ -1,23 +1,24 @@
 import {randomUUID} from 'node:crypto';
 import {createRequire} from 'node:module';
+import {request} from 'node:https';
 import {chmod, mkdir, readFile, rename, writeFile} from 'node:fs/promises';
 import {join, resolve} from 'node:path';
 import {z} from 'zod';
 import {Refusal} from './contracts.ts';
 import {privateDirectory} from './installation.ts';
 
-const {generateVAPIDKeys, sendNotification, WebPushError}=createRequire(import.meta.url)('web-push') as typeof import('web-push');
+const {generateVAPIDKeys, generateRequestDetails, WebPushError}=createRequire(import.meta.url)('web-push') as typeof import('web-push');
 
 /** Generic contact for the push service. Never the installation owner's email. */
 export const personalPushSubject='mailto:agent-control@localhost';
+const personalPushTitle='Nova mensagem no Agent Control';
 
 /** Whether a personal-mode manager message should wake the phone. Pure: the same text and flag always decide the same way. */
 export function personalPushBody(text:string,ownerQuestionReply:boolean):string|null{
  const trimmed=text.trim();
- const line=trimmed.split('\n')[0]?.trim()??'';
  const notify=trimmed.startsWith('Proposta de plano')||text.includes('execução concluída')||text.includes('falhou')||trimmed.startsWith('Atenção')||ownerQuestionReply;
  if(!notify)return null;
- return line.length>140?line.slice(0,140):line;
+ return '';
 }
 const subscriptionLimit=20;
 const sentLimit=400;
@@ -32,9 +33,27 @@ const subscriptionFileSchema=z.object({subscriptions:z.array(subscriptionSchema)
 const sentFileSchema=z.object({ids:z.array(z.string().min(1).max(500)).max(sentLimit)}).strict();
 export type PersonalPushSubscription=z.infer<typeof subscriptionSchema>;
 export type PersonalPushNotice={messageId:string;title:string;body:string;url:string};
-export type PersonalPushSender=(subscription:{endpoint:string;keys:{p256dh:string;auth:string}},payload:string,vapid:{subject:string;publicKey:string;privateKey:string})=>Promise<void>;
+export type PersonalPushSender=(subscription:{endpoint:string;keys:{p256dh:string;auth:string}},payload:string,vapid:{subject:string;publicKey:string;privateKey:string},signal:AbortSignal)=>Promise<void>;
 
-const defaultSender:PersonalPushSender=(subscription,payload,vapid)=>sendNotification(subscription,payload,{vapidDetails:vapid,TTL:12*60*60,urgency:'high'}).then(()=>undefined);
+const defaultSender:PersonalPushSender=(subscription,payload,vapid,signal)=>{
+ const details=generateRequestDetails(subscription,payload,{vapidDetails:vapid,TTL:12*60*60,urgency:'high'});
+ return new Promise<void>((resolve,reject)=>{
+  let status:number|undefined;
+  let failure:Error|undefined;
+  const delivery=request(details.endpoint,{method:details.method,headers:details.headers,agent:false,signal,timeout:3000},response=>{
+   status=response.statusCode;
+   response.destroy();
+  });
+  delivery.once('timeout',()=>delivery.destroy(new Error('PUSH_SOCKET_TIMEOUT')));
+  delivery.once('error',error=>{failure=error;});
+  delivery.once('close',()=>{
+   if(failure){reject(failure);return;}
+   if(status!==undefined&&status>=200&&status<300)resolve();
+   else reject(Object.assign(new Error('PUSH_DELIVERY_FAILED'),{statusCode:status}));
+  });
+  delivery.end(details.body);
+ });
+};
 
 function exclusive<T>(directory:string,fn:()=>Promise<T>):Promise<T>{
  const previous=chains.get(directory)??Promise.resolve();
@@ -139,7 +158,7 @@ export async function unsubscribePersonalPush(dataDirectory:string,id:string){
   return true;
  });
 }
-export async function deliverPersonalPush(dataDirectory:string,notice:PersonalPushNotice,sender:PersonalPushSender=defaultSender){
+export async function deliverPersonalPush(dataDirectory:string,notice:PersonalPushNotice,sender:PersonalPushSender=defaultSender,timeoutMs=8000){
  const directory=await pushDirectory(dataDirectory);
  const prepared=await exclusive(directory,async()=>{
   const keys=await loadKeys(directory);
@@ -151,15 +170,28 @@ export async function deliverPersonalPush(dataDirectory:string,notice:PersonalPu
   return {keys,subscriptions};
  });
  if(!prepared)return;
- const payload=JSON.stringify({title:notice.title,body:notice.body,url:notice.url});
- for(const subscription of prepared.subscriptions){
-  try{await sender({endpoint:subscription.endpoint,keys:subscription.keys},payload,{subject:personalPushSubject,publicKey:prepared.keys.publicKey,privateKey:prepared.keys.privateKey});}
-  catch(error){
-   const status=statusCode(error);
-   if(status===404||status===410)await unsubscribePersonalPush(dataDirectory,subscription.id);
-   else console.error(JSON.stringify({event:'PERSONAL_PUSH_FAILED',status:status??null}));
-  }
- }
+ const payload=JSON.stringify({title:personalPushTitle,body:'',url:notice.url});
+ const round=new AbortController();
+ const timer=setTimeout(()=>round.abort(),timeoutMs);
+ const gone:string[]=[];
+ let next=0;
+ try{
+  await Promise.all(Array.from({length:Math.min(4,prepared.subscriptions.length)},async()=>{
+   while(!round.signal.aborted){
+    const subscription=prepared.subscriptions[next++];
+    if(!subscription)return;
+    const signal=AbortSignal.any([round.signal,AbortSignal.timeout(4000)]);
+    try{await sender({endpoint:subscription.endpoint,keys:subscription.keys},payload,{subject:personalPushSubject,publicKey:prepared.keys.publicKey,privateKey:prepared.keys.privateKey},signal);}
+    catch(error){
+     const status=statusCode(error);
+     if(status===404||status===410)gone.push(subscription.id);
+     else console.error(JSON.stringify({event:'PERSONAL_PUSH_FAILED',status:status??null}));
+    }
+   }
+  }));
+ }finally{clearTimeout(timer);}
+ for(const id of gone)await unsubscribePersonalPush(dataDirectory,id);
+
 }
 export async function sendPersonalPushTest(dataDirectory:string,sender?:PersonalPushSender){
  await deliverPersonalPush(dataDirectory,{messageId:'test-'+randomUUID(),title:'Agent Control',body:'Teste do Agent Control',url:'/'},sender);

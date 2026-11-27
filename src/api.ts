@@ -4,6 +4,7 @@ import {confirmPersonalHost,createRemotePersonalProject,listRemoteFolders,person
 import {ownerRequest} from './personal-owner-request.ts';
 import {claimPersonalSend,parseConversationQuery,personalMessageInput,releasePersonalSend} from './personal-panel-conversation.ts';
 import {serverTiming} from './request-timing.ts';
+import {readRequestBody} from './request-json.ts';
 import {nativeReviewVerifierDigest} from './native-verification.ts';
 import type {AdministrativeOperations} from './administrative-operations.ts';
 import { Hono } from 'hono';
@@ -60,7 +61,7 @@ function localNativeRequest(url:URL,raw:Request){
   const headers=new Headers(raw.headers);headers.set('host','127.0.0.1');headers.delete('origin');
   return new Request(local,{method:raw.method,headers,signal:raw.signal});
 }
-const seenRuns=new Map<string,string>();
+const seenRunLifetime=30*24*60*60_000;
 const planTaskList=z.array(z.object({id:z.string(),title:z.string().optional(),summary:z.string().optional(),name:z.string().optional(),writePaths:z.array(z.string()).optional()}).passthrough());
 /** Plan tasks per child run, for panel titles. A failed read is logged and leaves the default titles. */
 export async function planTasksByRun(ledger:Pick<Ledger,'pool'>,runIds:readonly string[]):Promise<Map<string,PlanTaskSummary[]>>{
@@ -79,8 +80,9 @@ export async function planTasksByRun(ledger:Pick<Ledger,'pool'>,runIds:readonly 
   }
   return found;
 }
-async function ownerTitled<T extends {title?:unknown}>(ledger:Ledger,run:T,tasks?:readonly PlanTaskSummary[],now=Date.now()):Promise<T & {archived?:boolean}>{
-  const id=(run as {id?:unknown}).id;if(typeof id==='string'&&seenRuns.has(id))run={...run,seenAt:seenRuns.get(id)};
+async function ownerTitled<T extends {title?:unknown}>(ledger:Ledger,run:T,tasks?:readonly PlanTaskSummary[],now=Date.now(),seenAt?:string):Promise<T & {archived?:boolean}>{
+  const id=(run as {id?:unknown}).id;
+  if(seenAt)run={...run,seenAt};
   const title=typeof run.title==='string'?run.title:'';
   const match=/^Intent ([0-9a-f-]{36})$/.exec(title);
   if(match){
@@ -149,6 +151,23 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
   manager: (contextId: string) => Authority | undefined, options: ApiOptions = {}) {
   const {sessions, providerAdapters = [],
     administrative, managerStatus, semanticPlanning, quotaRegistry, configurationControl, personalAccounts, personalPanel, pairCodeLogin, passwordLogin, personalVerification} = options;
+  const seenRuns=new Map<string,{principal:string;at:number}>();
+  const seenKey=(principal:string,runId:string)=>JSON.stringify([principal,runId]);
+  const runSeenAt=(principal:string,runId:unknown,now=Date.now())=>{
+    if(typeof runId!=='string')return undefined;
+    const key=seenKey(principal,runId),entry=seenRuns.get(key);
+    if(!entry)return undefined;
+    if(now-entry.at>=seenRunLifetime){seenRuns.delete(key);return undefined;}
+    return new Date(entry.at).toISOString();
+  };
+  const authorizeRun=async(principal:string,runId:string)=>{
+    const bound=await ledger.pool.query('SELECT context_id FROM ac_intents WHERE run_id=$1',[runId]);
+    if(!bound.rowCount)throw new Refusal('RUN_FORBIDDEN',403);
+    await ledger.tx(async db=>{
+      const scope=await ledger.authorize(db,principal,bound.rows[0].context_id,false);
+      if(scope.project_id!==runtime.projectId)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
+    });
+  };
   const projectMembership = (principal: string) => ledger.pool.query('SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2', [runtime.projectId, principal]);
   const projectOwnership = (principal: string) => ledger.pool.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'", [runtime.projectId, principal]);
   const requireInstallationOwner = async (principal: string) => {
@@ -186,7 +205,11 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     if (!principal) return c.json({ error: 'AUTH_REQUIRED' }, 401);
     c.set('principal', principal); await next();
   });
-  app.use('/api/v1/ac/*',bodyLimit({maxSize:256*1024,onError:c=>c.json({error:'REQUEST_BODY_TOO_LARGE'},413)}));
+  const limitAcBody=bodyLimit({maxSize:256*1024,onError:c=>c.json({error:'REQUEST_BODY_TOO_LARGE'},413)});
+  app.use('/api/v1/ac/*',(c,next)=>{
+    if(c.req.method==='POST'&&((c.req.path==='/api/v1/ac/auth/code'&&pairCodeLogin)||(c.req.path==='/api/v1/ac/auth/password'&&passwordLogin)))return next();
+    return limitAcBody(c,next);
+  });
   app.onError((e, c) => {
     const refusal=e instanceof Refusal?e:environmentRefusal(e);
     if (refusal) return c.json({ error: refusal.code }, refusal.status);
@@ -545,12 +568,30 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     // here, so the page does not retry them in a loop; every real mutation still goes through the conversation.
     const plain=new URL(c.req.url).pathname.replace(/^\/api\/v1\/p\/[^/]+/,'/api/v1');
     // "Read" marks live in this process only; the page needs the receipt back or it retries forever.
-    const read=/^\/api\/v1\/runs\/([a-f0-9-]{36})\/(read|unread)$/.exec(plain);
-    if(c.req.method==='POST'&&read){const at=read[2]==='read'?new Date().toISOString():undefined;if(at)seenRuns.set(read[1]!,at);else seenRuns.delete(read[1]!);return c.json({id:read[1],seenAt:at??null});}
+    const read=/^\/api\/v1\/runs\/([^/]+)\/(read|unread)$/.exec(plain);
+    if(c.req.method==='POST'&&read){
+      const scoped=c.req.path.match(/^\/api\/v1\/p\/([^/]+)/);
+      if(scoped&&![runtime.projectId,'default'].includes(scoped[1]))throw new Refusal('PROJECT_FORBIDDEN',403);
+      const runId=Id.parse(read[1]).toLowerCase(),principal=c.get('principal');
+      await authorizeRun(principal,runId);
+      const key=seenKey(principal,runId);
+      seenRuns.delete(key);
+      if(read[2]==='unread')return c.json({id:runId,seenAt:null});
+      const now=Date.now();
+      for(const [old,entry] of seenRuns)if(now-entry.at>=seenRunLifetime)seenRuns.delete(old);
+      const owned=[...seenRuns].filter(([,entry])=>entry.principal===principal);
+      if(owned.length>=256)seenRuns.delete(owned[0]![0]);
+      if(seenRuns.size>=2048)seenRuns.delete(seenRuns.keys().next().value!);
+      seenRuns.set(key,{principal,at:now});
+      return c.json({id:runId,seenAt:new Date(now).toISOString()});
+    }
     if(c.req.method==='POST'&&/^\/api\/v1\/telemetry\/[a-z-]+$/.test(plain))return c.body(null,204);
     // View preferences are kept by the browser for the session; echo them instead of storing them.
-    if(c.req.method==='PUT'&&plain==='/api/v1/workspace/ui-state'){const text=await c.req.text();if(text.length>65536)return c.json({error:'UI_STATE_TOO_LARGE'},413);
-     try{return c.json(JSON.parse(text||'{}'));}catch{return c.json({error:'UI_STATE_INVALID'},400);}}
+    if(c.req.method==='PUT'&&plain==='/api/v1/workspace/ui-state'){
+      const text=await readRequestBody(c.req.raw,65536,3000,true);
+      if(text instanceof Response)return text.status===413?c.json({error:'UI_STATE_TOO_LARGE'},413):text;
+      try{return c.json(JSON.parse(text||'{}'));}catch{return c.json({error:'UI_STATE_INVALID'},400);}
+    }
     if(c.req.method==='GET'&&/^\/api\/v1\/runs\/[a-f0-9-]{36}\/(?:drafts|history-context)$/.test(plain))return c.json(plain.endsWith('drafts')?{drafts:[]}:{});
     // The managed page polls these and only needs a quiet empty answer. Writes stay refused below.
     if(personalAccounts&&c.req.method==='GET'&&plain==='/api/v1/star-count')return c.json({available:false,url:'https://github.com/open-mercato/cezar'});
@@ -585,20 +626,15 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
       const childIds=listed.flatMap(run=>typeof run.id==='string'&&typeof run.title==='string'&&childRunTaskId(run.title)?[run.id]:[]);
       const tasks=await planTasksByRun(ledger,childIds);
       const now=Date.now();
-      return c.json(await Promise.all(listed.map(run=>ownerTitled(ledger,run,typeof run.id==='string'&&typeof run.title==='string'&&childRunTaskId(run.title)?tasks.get(run.id)??[]:undefined,now))));
+      return c.json(await Promise.all(listed.map(run=>ownerTitled(ledger,run,typeof run.id==='string'&&typeof run.title==='string'&&childRunTaskId(run.title)?tasks.get(run.id)??[]:undefined,now,runSeenAt(c.get('principal'),run.id,now)))));
     }
     const run = path.match(/^\/api\/v1\/runs\/([a-f0-9-]{36})(?:\/(events|history|diff|layouts|usage|dispatch|todos|git\/status|changes))?$/);
     if (run) {
-      const bound = await ledger.pool.query('SELECT context_id FROM ac_intents WHERE run_id=$1', [run[1]]);
-      if (!bound.rowCount) throw new Refusal('RUN_FORBIDDEN', 403);
-      await ledger.tx(async db => {
-        const scope=await ledger.authorize(db,c.get('principal'),bound.rows[0].context_id,false);
-        if(scope.project_id!==runtime.projectId)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
-      });
+      await authorizeRun(c.get('principal'),Id.parse(run[1]));
       if(!run[2]){
         const native=await runtime.native.fetch(nativeRequest);
         if(!native.ok||!native.headers.get('content-type')?.includes('json'))return native;
-        return c.json(await ownerTitled(ledger,await native.json() as {title?:unknown}),native.status as 200);
+        return c.json(await ownerTitled(ledger,await native.json() as {title?:unknown},undefined,undefined,runSeenAt(c.get('principal'),run[1]!.toLowerCase())),native.status as 200);
       }
       return runtime.native.fetch(nativeRequest);
     }
