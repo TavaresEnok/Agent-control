@@ -1,5 +1,5 @@
 function jsonError(error:string,status:number,noStore:boolean){
- return Response.json({error},{status,headers:noStore?{'cache-control':'no-store'}:undefined});
+ return new Response(JSON.stringify({error}),{status,headers:{'content-type':'application/json',...(noStore?{'cache-control':'no-store'}:{})}});
 }
 /**
  * Shared JSON reader. The limit is chosen by the exact route.
@@ -8,39 +8,47 @@ function jsonError(error:string,status:number,noStore:boolean){
  * on overflow, deadline and caller abort.
  */
 export async function readJsonBody(request:Request,limit:number,timeoutMs:number,noStore:boolean):Promise<unknown|Response>{
- if(request.signal.aborted)return jsonError('REQUEST_ABORTED',400,noStore);
  if(!/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(request.headers.get('content-type')??''))return jsonError('UNSUPPORTED_MEDIA_TYPE',415,noStore);
  if(!/^(?:identity)?$/i.test(request.headers.get('content-encoding')??''))return jsonError('UNSUPPORTED_CONTENT_ENCODING',415,noStore);
- if(Number(request.headers.get('content-length')??0)>limit)return jsonError('REQUEST_BODY_TOO_LARGE',413,noStore);
+ const body=await readRequestBody(request,limit,timeoutMs,noStore);
+ return body instanceof Response?body:JSON.parse(body);
+}
+
+export async function readRequestBody(request:Request,limit:number,timeoutMs:number,noStore:boolean):Promise<string|Response>{
+ if(request.signal.aborted)return jsonError('REQUEST_ABORTED',400,noStore);
+ if(Number(request.headers.get('content-length')??0)>limit){
+  void request.body?.cancel().catch(()=>{/* The declared size already caused a refusal. */});
+  return jsonError('REQUEST_BODY_TOO_LARGE',413,noStore);
+ }
  const reader=request.body?.getReader();let total=0;const chunks:Uint8Array[]=[];
  if(reader){
-  let timer:ReturnType<typeof setTimeout>|undefined;
-  const deadline=Symbol('body deadline'),aborted=Symbol('body aborted');
-  const timeout=new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(deadline),timeoutMs);});
-  let onAbort=()=>{};
-  const cancellation=new Promise<never>((_,reject)=>{
-   onAbort=()=>reject(aborted);
-   if(request.signal.aborted)reject(aborted);
-   else request.signal.addEventListener('abort',onAbort,{once:true});
-  });
-  void cancellation.catch(()=>{/* marks the rejection handled; raced below */});
+  let interrupted:Response|undefined;
+  const cancel=(error:string,status:number)=>{
+   interrupted??=jsonError(error,status,noStore);
+   void reader.cancel().catch(()=>{/* The request already has its abort, timeout or size response. */});
+  };
+  const abort=()=>cancel('REQUEST_ABORTED',400);
+  const timer=setTimeout(()=>cancel('REQUEST_BODY_TIMEOUT',408),timeoutMs);
+  request.signal.addEventListener('abort',abort,{once:true});
   try{
    for(;;){
-    if(request.signal.aborted){void reader.cancel().catch(()=>{/* best-effort cancel of a stream that is abandoned anyway */});return jsonError('REQUEST_ABORTED',400,noStore);}
-    const part=await Promise.race([reader.read(),timeout,cancellation]);
+    const part=await reader.read();
+    if(interrupted)return interrupted;
     if(part.done)break;
     total+=part.value.byteLength;
-    if(total>limit){void reader.cancel().catch(()=>{/* best-effort cancel of a stream that is abandoned anyway */});return jsonError('REQUEST_BODY_TOO_LARGE',413,noStore);}
+    if(total>limit){cancel('REQUEST_BODY_TOO_LARGE',413);return interrupted!;}
     chunks.push(part.value);
    }
   }catch(error){
-   void reader.cancel().catch(()=>{/* best-effort cancel of a stream that is abandoned anyway */});
-   if(error===deadline)return jsonError('REQUEST_BODY_TIMEOUT',408,noStore);
-   if(error===aborted)return jsonError('REQUEST_ABORTED',400,noStore);
+   if(interrupted)return interrupted;
+   void reader.cancel().catch(()=>{/* Keep the original read error. */});
    throw error;
-  }finally{clearTimeout(timer);request.signal.removeEventListener('abort',onAbort);}
+  }finally{
+   clearTimeout(timer);
+   request.signal.removeEventListener('abort',abort);
+   reader.releaseLock();
+  }
  }
  const bytes=new Uint8Array(total);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}
- return JSON.parse(new TextDecoder().decode(bytes));
+ return new TextDecoder().decode(bytes);
 }
-

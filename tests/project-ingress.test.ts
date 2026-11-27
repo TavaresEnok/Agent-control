@@ -59,3 +59,31 @@ test('HTTP runtime project boundary rejects a foreign context even when principa
   await db.close();await isolated.close();
  }
 });
+
+test('unscoped and project-scoped UI preferences stop reading once the byte limit is exceeded',async()=>{
+ const project='00000000-0000-4000-8000-000000000001';
+ const ledger={} as Ledger;
+ const app=createApi(ledger,{projectId:project,nativeExecutionReady:false} as CezarRuntime,async()=> 'owner',()=>undefined);
+ const encode=new TextEncoder();
+ for(const prefix of ['/api/v1','/api/v1/p/'+project]){
+  const url='http://localhost'+prefix+'/workspace/ui-state';
+  const text=JSON.stringify({filter:'á'.repeat(100)});
+  const valid=await app.request(url,{method:'PUT',body:text});
+  assert.equal(valid.status,200);
+  assert.deepEqual(await valid.json(),JSON.parse(text));
+  let cancelled=false,read=0;
+  const oversized=new ReadableStream({
+   pull(controller){
+    read++;
+    if(read===8){controller.enqueue(encode.encode('"}'));controller.close();}
+    else controller.enqueue(encode.encode(read===1?'{"filter":"':'á'.repeat(8192)));
+   },
+   cancel(){cancelled=true;},
+  });
+  const rejected=await app.fetch(new Request(url,{method:'PUT',body:oversized,duplex:'half'} as RequestInit));
+  assert.equal(rejected.status,413);
+  assert.deepEqual(await rejected.json(),{error:'UI_STATE_TOO_LARGE'});
+  assert.equal(cancelled,true);
+  assert.ok(read<8);
+ }
+});

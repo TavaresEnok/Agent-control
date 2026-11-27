@@ -4,6 +4,7 @@ import {confirmPersonalHost,createRemotePersonalProject,listRemoteFolders,person
 import {ownerRequest} from './personal-owner-request.ts';
 import {claimPersonalSend,parseConversationQuery,personalMessageInput,releasePersonalSend} from './personal-panel-conversation.ts';
 import {serverTiming} from './request-timing.ts';
+import {readRequestBody} from './request-json.ts';
 import {nativeReviewVerifierDigest} from './native-verification.ts';
 import type {AdministrativeOperations} from './administrative-operations.ts';
 import { Hono } from 'hono';
@@ -553,8 +554,11 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     if(c.req.method==='POST'&&read){const at=read[2]==='read'?new Date().toISOString():undefined;if(at)seenRuns.set(read[1]!,at);else seenRuns.delete(read[1]!);return c.json({id:read[1],seenAt:at??null});}
     if(c.req.method==='POST'&&/^\/api\/v1\/telemetry\/[a-z-]+$/.test(plain))return c.body(null,204);
     // View preferences are kept by the browser for the session; echo them instead of storing them.
-    if(c.req.method==='PUT'&&plain==='/api/v1/workspace/ui-state'){const text=await c.req.text();if(text.length>65536)return c.json({error:'UI_STATE_TOO_LARGE'},413);
-     try{return c.json(JSON.parse(text||'{}'));}catch{return c.json({error:'UI_STATE_INVALID'},400);}}
+    if(c.req.method==='PUT'&&plain==='/api/v1/workspace/ui-state'){
+      const text=await readRequestBody(c.req.raw,65536,3000,true);
+      if(text instanceof Response)return text.status===413?c.json({error:'UI_STATE_TOO_LARGE'},413):text;
+      try{return c.json(JSON.parse(text||'{}'));}catch{return c.json({error:'UI_STATE_INVALID'},400);}
+    }
     if(c.req.method==='GET'&&/^\/api\/v1\/runs\/[a-f0-9-]{36}\/(?:drafts|history-context)$/.test(plain))return c.json(plain.endsWith('drafts')?{drafts:[]}:{});
     // The managed page polls these and only needs a quiet empty answer. Writes stay refused below.
     if(personalAccounts&&c.req.method==='GET'&&plain==='/api/v1/star-count')return c.json({available:false,url:'https://github.com/open-mercato/cezar'});
