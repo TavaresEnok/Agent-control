@@ -144,7 +144,7 @@ export async function composePersonalExecutionSupervisors(
    hostRoot:boot.execution.hostRoot,accountRoot:boot.execution.accountRoot,protectedRepositories,signingKeyPem:executionPem,dataDirectory:config.dataDirectory,simple:simpleIsolation(config),
    providerNetworkId:boot.execution.providerNetworkId,provider,workerEnv:boot.execution.workerEnv,toolsEnv:boot.execution.toolsEnv,accountSubjects,disabledMeasurementProjects,personalEgress}));
   for(const pair of (boot.execution.retiredImages??[]).filter(x=>x.workerImage!==boot.execution.workerImage||x.toolsImage!==boot.execution.toolsImage))
-   executions.push(new PersonalExecutionSupervisor(ledger,{id:boot.execution.id+'-'+provider,workerImage:pair.workerImage,toolsImage:pair.toolsImage,active:false,
+   executions.push(new PersonalExecutionSupervisor(ledger,{id:boot.execution.id+'-'+provider,workerImage:pair.workerImage,toolsImage:pair.toolsImage,active:false,dataDirectory:config.dataDirectory,
     hostRoot:boot.execution.hostRoot,accountRoot:boot.execution.accountRoot,protectedRepositories,signingKeyPem:executionPem,
     providerNetworkId:boot.execution.providerNetworkId,provider,workerEnv:boot.execution.workerEnv,toolsEnv:boot.execution.toolsEnv,accountSubjects,disabledMeasurementProjects}));
  }

@@ -43,6 +43,11 @@ export async function findHostCollector(module:Module):Promise<HostCollector|und
  const command=module==='banco'?['/usr/bin/ruby','--disable=rubyopt','/opt/banco/collector.rb']:[`/usr/local/bin/${module}-entrypoint.sh`];
  try{
   await access(command[0]!,constants.X_OK);
+  if(module==='verify'){
+   for(const name of ['gitleaks','osv-scanner','syft','grype','opengrep','hadolint','trivy','checkov']){
+    await access('/usr/local/bin/'+name,constants.X_OK);
+   }
+  }
   const hash=createHash('sha256');
   for(const path of [command[0]!,...files[module]]){
    const info=await stat(path);

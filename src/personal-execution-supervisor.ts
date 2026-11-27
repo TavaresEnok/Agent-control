@@ -34,11 +34,13 @@ export class PersonalExecutionSupervisor extends NativeExecutionSupervisor{
  }
  override async start(principal:string,authority:Authority,raw:z.input<typeof NativeExecutionRequest>,signal?:AbortSignal){
   const input=NativeExecutionRequest.parse(raw);
+  // Replays use the recorded mode even after the installation toggles isolation.
+  // A host reconciliation takes its own grant lock.
+  const prior=(await this.ledger.pool.query('SELECT launch_digest FROM ac_native_execution_jobs WHERE id=$1',[input.jobId])).rows[0];
+  if(prior)return this.reconcile(principal,authority,input);
   if(!this.config.simple||input.designPurpose)return super.start(principal,authority,input,signal);
   const workflow=(await this.ledger.pool.query("SELECT command->'payload'->>'workflow' workflow FROM ac_intents WHERE id=$1",[input.intentId])).rows[0]?.workflow;
   if(workflow==='design-readonly-v1')return super.start(principal,authority,input,signal);
-  const prior=(await this.ledger.pool.query('SELECT launch_digest FROM ac_native_execution_jobs WHERE id=$1',[input.jobId])).rows[0];
-  if(prior)return this.reconcile(principal,authority,input);
   return withGrantLaunchLock(this.ledger,input.grantId,async()=>{
    const concurrent=await this.hostRow(input.jobId);
    if(concurrent){await this.validateReplay(principal,authority,input,concurrent);return {state:'running' as const};}
