@@ -336,3 +336,32 @@ test('registro publico de login nunca serializa a senha', () => {
     (error: unknown) => error instanceof Refusal && error.code === 'DESIGN_PASSWORD_LEAK',
   );
 });
+
+test('rota do React Router fica com o arquivo da página importada, sem inventar rota pelo nome em pages/', () => {
+  const routes = [
+    'import { Route, Routes } from "react-router";',
+    'import { TeamsPage } from "@/pages/teams-page";',
+    'import ReportsPage from "./pages/reports-page";',
+    'const MfaPage = lazy(() => import("./pages/mfa-page"));',
+    'export function AppRoutes() {',
+    '  return <Routes>',
+    '    <Route path="/equipes" element={<TeamsPage />} />',
+    '    <Route path="relatorios" element={<ReportsPage />} />',
+    '    <Route path="/mfa" element={<MfaPage />} />',
+    '  </Routes>;',
+    '}',
+  ].join('\n');
+  const found = discoverRoutesFromSource([
+    {path: 'web/src/routes.tsx', text: routes},
+    {path: 'web/src/pages/teams-page.tsx', text: 'export function TeamsPage(){return null}\n'},
+    {path: 'web/src/pages/reports-page.tsx', text: 'export default function ReportsPage(){return null}\n'},
+    {path: 'web/src/pages/mfa-page.tsx', text: 'export default function MfaPage(){return null}\n'},
+    {path: 'web/src/pages/solta-page.tsx', text: 'export default function Solta(){return null}\n'},
+  ]);
+  assert.equal(found.find(item => item.route === '/equipes')?.file, 'web/src/pages/teams-page.tsx');
+  assert.equal(found.find(item => item.route === '/relatorios')?.file, 'web/src/pages/reports-page.tsx');
+  assert.equal(found.find(item => item.route === '/mfa')?.file, 'web/src/pages/mfa-page.tsx');
+  assert.equal(found.some(item => ['/teams-page', '/reports-page', '/mfa-page'].includes(item.route)), false);
+  // Arquivo em pages/ que nenhuma <Route> importa continua na convenção de pastas.
+  assert.equal(found.find(item => item.file === 'web/src/pages/solta-page.tsx')?.route, '/solta-page');
+});

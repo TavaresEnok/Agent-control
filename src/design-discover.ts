@@ -45,6 +45,8 @@ type RouteHit = {
   route: string;
   line: number;
   index: number;
+  /** Componente do `element={<Nome />}` da <Route>, quando houver. */
+  component?: string;
 };
 
 const TEST_FILE = /\.(?:test|spec|stories|story)\.[cm]?[jt]sx?$|\.d\.ts$/i;
@@ -80,10 +82,11 @@ export function isApiRoute(route: string): boolean {
  */
 /** Rotas `:param` ou `[id]` que a descoberta não resolveu porque não havia exemplo na declaração. */
 export function dynamicRoutesMissingExample(files: readonly {path: string; text: string}[]): string[] {
+  const routed = routedElementFiles(files);
   const skipped = new Set<string>();
   for (const file of files) {
     if (isNonScreenFile(file.path)) continue;
-    const next = nextRoute(file.path);
+    const next = routed.has(file.path) ? null : nextRoute(file.path);
     if (next !== null && isDynamicRoute(next) && !isApiRoute(next)) skipped.add((next.split(/[?#]/)[0] ?? next));
     const masked = maskComments(file.text);
     const opener = /<Route(?![A-Za-z0-9_])/g;
@@ -104,14 +107,19 @@ export function dynamicRoutesMissingExample(files: readonly {path: string; text:
 }
 
 export function discoverRoutesFromSource(files: readonly {path: string; text: string}[]): DiscoveredRoute[] {
+  const routed = routedElementFiles(files);
   const hits: RouteHit[] = [];
   for (const file of files) {
     if (isNonScreenFile(file.path)) continue;
-    const next = nextRoute(file.path);
+    // Arquivo que uma <Route element={<X/>}> já liga a uma rota declarada: a pasta pages/ não inventa outra pelo nome.
+    const next = routed.has(file.path) ? null : nextRoute(file.path);
     if (next !== null && !isDynamicRoute(next)) {
       hits.push({file: file.path, route: next, line: 1, index: -1});
     }
-    hits.push(...routesInText(file.path, file.text));
+    for (const hit of routesInText(file.path, file.text)) {
+      const target = hit.component === undefined ? undefined : resolveComponentFile(file, hit.component, files);
+      hits.push(target === undefined || isNonScreenFile(target) ? hit : {...hit, file: target, line: 1});
+    }
   }
   const unique = dedupeHits(hits.filter(hit => !isApiRoute(hit.route)));
   const used = new Set<string>();
@@ -529,8 +537,57 @@ function collectJsxRoutes(file: string, masked: string, hits: RouteHit[], consum
     if (route === null) continue;
     const index = start + pathMatch.index;
     consumed.add(index);
-    hits.push({file, route, line: lineAt(masked, index), index});
+    const component = /\belement\s*=\s*\{\s*<([A-Z][A-Za-z0-9_]*)/.exec(tag)?.[1];
+    hits.push(component === undefined ? {file, route, line: lineAt(masked, index), index} : {file, route, line: lineAt(masked, index), index, component});
   }
+}
+
+const RESOLVE_SUFFIXES = ['', '.tsx', '.ts', '.jsx', '.js', '/index.tsx', '/index.ts', '/index.jsx', '/index.js'];
+
+/** Caminho do módulo de onde `name` foi importado (import estático ou `lazy(() => import(...))`), só se o arquivo estiver no conjunto. */
+function resolveComponentFile(file: {path: string; text: string}, name: string, files: readonly {path: string}[]): string | undefined {
+  const escaped = name.replace(/[$]/g, '\\$&');
+  const named = new RegExp(`import\\s+(?:[A-Za-z0-9_$]+\\s*,\\s*)?\\{[^}]*\\b${escaped}\\b[^}]*\\}\\s*from\\s*(['"])([^'"]+)\\1`);
+  const fallback = new RegExp(`import\\s+${escaped}\\b[^;]*?from\\s*(['"])([^'"]+)\\1`);
+  const lazy = new RegExp(`\\b${escaped}\\s*=\\s*(?:React\\.)?lazy\\s*\\(\\s*\\(\\)\\s*=>\\s*import\\s*\\(\\s*(['"])([^'"]+)\\1`);
+  const spec = (named.exec(file.text) ?? fallback.exec(file.text) ?? lazy.exec(file.text))?.[2];
+  if (spec === undefined) return undefined;
+  const own = file.path.replace(/\\/g, '/').split('/').slice(0, -1);
+  let dir: string[];
+  let rest = spec;
+  if (spec.startsWith('.')) dir = own;
+  else if (/^[@~]\//.test(spec)) {
+    // Atalho de projeto Vite/TS (`@/` ou `~/`): aponta para a pasta src mais próxima do arquivo de rotas.
+    const src = own.lastIndexOf('src');
+    if (src < 0) return undefined;
+    dir = own.slice(0, src + 1);
+    rest = spec.slice(2);
+  } else return undefined;
+  for (const part of rest.split('/')) {
+    if (part === '.' || part === '') continue;
+    if (part === '..') dir.pop();
+    else dir.push(part);
+  }
+  const base = dir.join('/').replace(/\.(?:[cm]?js)$/, '');
+  const paths = new Set(files.map(item => item.path.replace(/\\/g, '/')));
+  for (const suffix of RESOLVE_SUFFIXES) {
+    if (paths.has(base + suffix)) return base + suffix;
+  }
+  return undefined;
+}
+
+/** Arquivos que alguma <Route element={<X/>}> do projeto liga a uma rota declarada. */
+function routedElementFiles(files: readonly {path: string; text: string}[]): Set<string> {
+  const routed = new Set<string>();
+  for (const file of files) {
+    if (isNonScreenFile(file.path) || !/<Route(?![A-Za-z0-9_])/.test(file.text)) continue;
+    for (const hit of routesInText(file.path, file.text)) {
+      if (hit.component === undefined) continue;
+      const target = resolveComponentFile(file, hit.component, files);
+      if (target !== undefined) routed.add(target);
+    }
+  }
+  return routed;
 }
 
 function collectGoRoutes(file: string, masked: string, hits: RouteHit[], consumed: Set<number>): void {
