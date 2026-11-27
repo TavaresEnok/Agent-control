@@ -1,4 +1,5 @@
 import {describe, test} from 'node:test';
+import {once} from 'node:events';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {mkdtemp, readFile, realpath, rm, stat} from 'node:fs/promises';
@@ -129,4 +130,35 @@ test('a spoofed forwarded header cannot dodge the per-address limit',async()=>{
   }
   assert.equal(await redeemPairCode(root,held.code,9_000_010,pairClientIp('198.51.100.77','203.0.113.5')),'limited');
  }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('issuance in another process and gateway redemption share the same lock',async t=>{
+ const {spawn}=await import('node:child_process');
+ const root=await directory();
+ t.after(()=>rm(root,{recursive:true,force:true}));
+ const issued=await createPairCode(root);
+ const lock=spawn('/usr/bin/flock',[join(root,'pair-codes.json.lock'),'/bin/sh','-c','echo locked; read release'],{stdio:['pipe','pipe','inherit']});
+ const lockClosed=once(lock,'close');
+ await once(lock.stdout,'data');
+ const child=spawn(process.execPath,['--import','tsx','--input-type=module','-e',
+  "import {createPairCode} from './src/personal-pair.ts'; console.log('ready'); console.log((await createPairCode(process.argv[1])).code);",root],
+  {stdio:['ignore','pipe','inherit']});
+ const childClosed=once(child,'close');
+ let output='';
+ child.stdout.on('data',chunk=>{output+=String(chunk);});
+ let redeemed=false;
+ const redeem=redeemPairCode(root,issued.code).then(result=>{redeemed=true;return result;});
+ try{
+  await once(child.stdout,'data');
+  await new Promise(resolve=>setTimeout(resolve,100));
+  assert.equal(redeemed,false);
+  assert.equal(output.trim(),'ready');
+ }finally{
+  lock.stdin.end('release\n');
+  await Promise.all([lockClosed,childClosed,redeem]);
+ }
+ assert.equal((await childClosed)[0],0);
+ assert.equal(await redeem,'accepted');
+ assert.equal(await redeemPairCode(root,issued.code),'invalid');
+ assert.equal(await redeemPairCode(root,output.trim().split('\n')[1]??''),'accepted');
 });

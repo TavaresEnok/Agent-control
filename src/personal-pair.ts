@@ -4,13 +4,13 @@ import {BlockList,isIP} from 'node:net';
 import {join, resolve} from 'node:path';
 import {z} from 'zod';
 import {Refusal} from './contracts.ts';
+import {withPrivateFileLock} from './private-file-lock.ts';
 
 const alphabet='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const lifetimeMs=10*60*1000;
 const windowMs=60*1000;
 const attemptLimit=5;
 const globalLimit=100;
-const chains=new Map<string,Promise<unknown>>();
 const failureSchema=z.union([
  z.number().int().nonnegative(),
  z.object({ip:z.string().min(1).max(64),at:z.number().int().nonnegative()}).strict(),
@@ -23,12 +23,6 @@ const fileSchema=z.object({
 type Failure={ip:string;at:number};
 type Store={codes:{hash:string;expiresAt:number}[];failures:Failure[];lockedUntil:number};
 
-function exclusive<T>(path:string,fn:()=>Promise<T>):Promise<T>{
- const previous=chains.get(path)??Promise.resolve();
- const run=previous.then(fn,fn);
- chains.set(path,run.then(()=>undefined,()=>undefined));
- return run;
-}
 function codePath(dataDirectory:string){
  const root=resolve(dataDirectory);
  if(root!==dataDirectory)throw new Refusal('NON_CANONICAL_PRIVATE_DIRECTORY');
@@ -113,7 +107,7 @@ function normalize(code:string){return code.trim().toUpperCase().replaceAll(' ',
 /** Prints nothing. The caller shows the code once; only its hash is stored. */
 export async function createPairCode(dataDirectory:string,now=Date.now()){
  const path=codePath(dataDirectory);
- return exclusive(path,async()=>{
+ return withPrivateFileLock(path+'.lock','PAIR_CODE_STORE_BUSY',async()=>{
   const store=await readStore(path);
   store.codes=store.codes.filter(item=>item.expiresAt>now).slice(-19);
   const code=randomCode();
@@ -127,7 +121,7 @@ export async function createPairCode(dataDirectory:string,now=Date.now()){
 export async function redeemPairCode(dataDirectory:string,code:string,now=Date.now(),ip='unknown'):Promise<'accepted'|'invalid'|'limited'>{
  const path=codePath(dataDirectory);
  const key=clientKey(ip);
- return exclusive(path,async()=>{
+ return withPrivateFileLock(path+'.lock','PAIR_CODE_STORE_BUSY',async()=>{
   const store=await readStore(path);
   // A lock written by the previous global limiter still blocks every address until it expires.
   if(store.lockedUntil>now)return 'limited';
