@@ -408,14 +408,25 @@ export async function protectedDigests(config:Installation,deps:RetentionDeps,do
  const retired=new Set<string>();
  const boot=config.nativeBootstrap as {planning?:{retiredImageIds?:string[]};execution?:{retiredImages?:{workerImage?:string;toolsImage?:string}[]}}|undefined;
  for(const text of [...(boot?.planning?.retiredImageIds??[]),...(boot?.execution?.retiredImages??[]).flatMap(pair=>[pair.workerImage??'',pair.toolsImage??''])])for(const digest of digestsIn(text))retired.add(digest);
+ const owners=projectsOf(config);
+ for(const entry of (await loadRegistry(config)).images){
+  const owner=owners.find(project=>project.id===entry.projectId);
+  if(!owner||owner.economy?.imageRetention===false)pinned.add(entry.imageId);
+ }
  const roots=new Set([deps.productRoot??here,...projectsOf(config).map(item=>item.repo)]);
  const installed=join(config.dataDirectory,'verify-image.json');
  const simple=join(config.dataDirectory,'simple-tools-image.json');
  const files=[installed,simple,...[...roots].flatMap(root=>[join(root,'deploy','design-image-digest.txt'),...VERIFICATION_MODULES.map(module=>join(root,'deploy','modules',module,'digest.txt'))])];
  for(const file of files){
   let text:string;
-  try{text=await readFile(file,'utf8');}
-  catch(error){if(errno(error,'ENOENT')||errno(error,'ENOTDIR'))continue;throw error;}
+  try{
+   const handle=await open(file,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
+   try{
+    const info=await handle.stat();
+    if(!info.isFile()||info.size>65536)throw new Refusal('RETENTION_IMAGE_PIN_INVALID');
+    text=await handle.readFile('utf8');
+   }finally{await handle.close();}
+  }catch(error){if(errno(error,'ENOENT'))continue;throw error;}
   if(file===installed||file===simple)text=JSON.parse(text).image;
   if(typeof text!=='string'||!digestsIn(text).size)throw new Refusal('RETENTION_IMAGE_PIN_INVALID');
   for(const digest of digestsIn(text))pinned.add(digest);
@@ -504,8 +515,10 @@ async function proveImage(entry:ImageEntry,guard:{pinned:Set<string>;retired:Set
  }
  let digests:string[],size:number|undefined;
  try{
-  const [image]=JSON.parse(inspected.stdout) as {Id?:string;RepoDigests?:string[];Size?:number}[];
+  const [image]=JSON.parse(inspected.stdout) as {Id?:string;RepoTags?:string[];RepoDigests?:string[];Size?:number}[];
   if(image?.Id!==entry.imageId)return no('o id da imagem não é o registrado');
+  if([...(image.RepoTags??[]),...(image.RepoDigests??[])].some(name=>/chatisp.*homolog|ac-test-db-journal|(?:^|[/:_-])design(?:[/:_-]|$)|agent-control-exam-tools:simple/i.test(name)))
+   return no('imagem protegida da instalação');
   digests=[image.Id,...(image.RepoDigests??[]).flatMap(item=>[...digestsIn(item)])];
   size=Number.isSafeInteger(image.Size)&&image.Size!>=0?image.Size:undefined;
  }catch{return no('resposta ilegível do Docker');}

@@ -1,3 +1,4 @@
+import {hostCollectorArgs,type HostCollector} from './simple-host-tools.ts';
 import {extractGitArchive} from './git-archive-snapshot.ts';
 import {randomUUID} from 'node:crypto';
 import {chmod, lstat, mkdir, mkdtemp, readdir, readFile, rm, writeFile} from 'node:fs/promises';
@@ -263,6 +264,7 @@ export async function runModuleCollectorContainer(input: {
   journal: ReturnType<typeof moduleContainerJournal>;
   retention?: ModuleRetention;
   snapshot?:string;
+  hostCollector?:HostCollector;
   commonTools?:boolean;
 }): Promise<{code: number; output: ModuleCollectorOutput}> {
   if (!input.journal) throw new Refusal('VERIFY_CONTAINER_JOURNAL_REQUIRED', 503);
@@ -285,6 +287,11 @@ export async function runModuleCollectorContainer(input: {
       evidenceFile = join(evidenceDir, 'evidence.json');
       await writeFile(evidenceFile, `${JSON.stringify(validated)}\n`, {encoding: 'utf8', mode: 0o644, flag: 'wx'});
       await chmod(evidenceFile, 0o644);
+    }
+    if(input.hostCollector){
+      const run=input.executeProcess??runBoundedCollectorProcess;
+      const result=await run(hostCollectorArgs(input.hostCollector,snapshot,{evidence:evidenceFile}),{timeoutMs,maxStdoutBytes,signal:input.signal});
+      return {code:result.code,output:parseModuleCollectorOutput(result.stdout,{maxStdoutBytes,module:input.module})};
     }
     const token = randomUUID();
     const baseArgs = moduleCollectorArguments({

@@ -1,3 +1,4 @@
+import {findHostCollector} from './simple-host-tools.ts';
 import {simpleToolsImage} from './simple-tools-image.ts';
 import {sharedSimpleWorktree} from './simple-worktree.ts';
 import {containFailure} from './failure-log.ts';
@@ -261,11 +262,16 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
   const timeoutMs = input.timeoutMs ?? DEFAULT_COLLECTOR_TIMEOUT_MS;
   const maxStdoutBytes = input.maxStdoutBytes ?? MAX_COLLECTOR_STDOUT_BYTES;
   const needImage = input.collectorOutput === undefined && input.runCollector === undefined;
-  const {image,intentId}=await withInstallationImageLock(input.dataDirectory,true,async()=>{
+  const localCollector=input.isolation==='simple'&&needImage&&(!input.image||input.image.startsWith('host-'))
+    ?await findHostCollector(input.module):undefined;
+  if(input.image?.startsWith('host-')&&input.image!==localCollector?.identity)throw new Refusal('VERIFY_MODULE_IMAGE_MISSING',503);
+  const {image,intentId,commonTools}=await withInstallationImageLock(input.dataDirectory,true,async()=>{
+    const commonImage=input.isolation==='simple'&&needImage&&!localCollector
+      ? await simpleToolsImage(input.dataDirectory).catch(error=>{if(!input.image)throw error;return undefined;}) : undefined;
     const image = input.image !== undefined
       ? assertPinnedModuleImage(input.image)
       : needImage
-        ? input.isolation==='simple'?await simpleToolsImage(input.dataDirectory):await readPinnedModuleImage(input.module, input.rootDir)
+        ? localCollector?.identity??commonImage??await readPinnedModuleImage(input.module, input.rootDir)
         : undefined;
 
     const intentId = await beginModuleRunTx({
@@ -280,7 +286,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       preparedDir,
       image,
     });
-    return {image,intentId};
+    return {image,intentId,commonTools:commonImage!==undefined&&commonImage===image};
   });
 
   let shared: Awaited<ReturnType<typeof sharedSimpleWorktree>> | undefined;
@@ -324,7 +330,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       const recoveryDirectory = join(await requireDataDirectory(input.dataDirectory), 'performance-docker');
       await reconcilePerformanceResources({recoveryDirectory, signal: input.signal});
       const {coverage, findings, measurement, comparedExamId} = await runPerformanceModule({
-        snapshotPath: snapshot, imageDigest: image!, commonPin:input.isolation==='simple'?await simpleToolsImage(input.dataDirectory):undefined, signal: input.signal, timeoutMs, maxStdoutBytes,
+        snapshotPath: snapshot, imageDigest: image!, sharedCheckout:Boolean(shared), commonPin:commonTools?image:undefined, signal: input.signal, timeoutMs, maxStdoutBytes,
         recoveryDirectory, previousMeasurements: signal => previousPerformanceMeasurements(input, runId, image!, signal),
       });
       collectorData = validateModuleCollectorObject({coverage, findings}, input.module);
@@ -334,7 +340,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
     } else {
       const executed = await runModuleCollectorContainer({
         snapshot,
-        commonTools:input.isolation==='simple',
+        commonTools,hostCollector:localCollector,
         image: image!,
         module: input.module,
         repoPath: input.repoPath,

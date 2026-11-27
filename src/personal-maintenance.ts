@@ -5,6 +5,7 @@ import {randomUUID} from 'node:crypto';
 import {chmod,lstat,readFile,rename,writeFile} from 'node:fs/promises';
 import {basename,dirname,join,resolve} from 'node:path';
 import {Id,Refusal,type Authority} from './contracts.ts';
+import {simpleToolsImage} from './simple-tools-image.ts';
 import {simpleJobRetention,simpleDockerRetention,simpleTempRetention} from './personal-simple-retention.ts';
 import {loadInstallation,simpleIsolation,type Installation} from './installation.ts';
 import {Ledger} from './ledger.ts';
@@ -107,7 +108,13 @@ export async function runPersonalCapacityWaitRetention(config:Installation,apply
  * of one stage never keeps the next one from running. A failure is reported after every stage has had its turn. */
 export async function runRetentionStages(config:Installation,apply:boolean,deps:Pick<MaintenanceDeps,'jobRetention'|'artifactRetention'|'verifyDatabaseRetention'|'capacityWaitRetention'>={}):Promise<string[]>{
  const stages:[string,string,(config:Installation,apply:boolean)=>Promise<string[]>][]=[
-  ['jobs','work/ de jobs',deps.jobRetention??(simpleIsolation(config)?simpleJobRetention:runPersonalJobRetention)],
+  ['jobs','work/ de jobs',deps.jobRetention??(simpleIsolation(config)?async(config,apply)=>{
+   const ledger=new Ledger(config.databaseUrl);
+   try{
+    const recovered=await recoverPersonalOrphanedExams(config,ledger,{limit:100,deadline:Date.now()+60000},apply);
+    return [...recovered,...await simpleJobRetention(config,apply)];
+   }finally{await ledger.close();}
+  }:runPersonalJobRetention)],
   ['verify-db','bases de vulnerabilidades',deps.verifyDatabaseRetention??((config,apply)=>runVerifyDatabaseRetention(config.dataDirectory,apply))],
   ['capacity-waits','esperas de capacidade',deps.capacityWaitRetention??runPersonalCapacityWaitRetention],
   ['artifacts','artefatos (worktrees, imagens e temporários)',deps.artifactRetention??runPersonalArtifactRetention],
@@ -571,7 +578,7 @@ async function runMaintenanceStages(config:Installation,file:string,deps:Mainten
  };
  await stage('bases',async()=>{
   try{
-   await (deps.refreshDatabases??(()=>refreshVerifyDatabases({dataDirectory:config.dataDirectory}).then(()=>undefined)))(config.dataDirectory);
+   await (deps.refreshDatabases??(async()=>{await refreshVerifyDatabases({dataDirectory:config.dataDirectory,image:simpleIsolation(config)?await simpleToolsImage(config.dataDirectory):undefined});}))(config.dataDirectory);
    return {outcome:'ok',lines:['Bases de vulnerabilidade atualizadas.']};
   }catch{return {outcome:'failed',lines:['Bases de vulnerabilidade não atualizadas. A base anterior permanece.']};}
  });

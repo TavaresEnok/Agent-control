@@ -6,7 +6,7 @@ import {installationVolumes} from './personal-disk.ts';
 import {serve} from '@hono/node-server';
 import {z} from 'zod';
 import {join} from 'node:path';
-import {Installation,readPrivateFile,loadInstallation,sessionKey,initializeInstallation,prepareInstallationOperator,privateDirectory,syncInstallationActivation} from './installation.ts';
+import {Installation,simpleIsolation,readPrivateFile,loadInstallation,sessionKey,initializeInstallation,prepareInstallationOperator,privateDirectory,syncInstallationActivation} from './installation.ts';
 import {assertInstallationMigrations,inspectInstallationReadiness,migrationsPendingText} from './installation-readiness.ts';
 import {Refusal} from './contracts.ts';
 import {Ledger} from './ledger.ts';
@@ -254,18 +254,9 @@ async function main(){
      const {readCurrentVerifyDatabase}=await import('./verify-db.ts');
      const databasesDirectory=(await readCurrentVerifyDatabase(config.dataDirectory))?.directory;
      if(!databasesDirectory)throw new Refusal('VERIFY_DB_REQUIRED',409);
-     let image:string;
-     try{
-      const {readFile}=await import('node:fs/promises');
-      const parsed=JSON.parse(await readFile(join(config.dataDirectory,'verify-image.json'),'utf8')) as {image?:unknown};
-      if(!parsed||typeof parsed!=='object'||typeof parsed.image!=='string'||parsed.image.length<1)throw new Refusal('VERIFY_IMAGE_UNPINNED',409);
-      image=parsed.image;
-     }catch(error){
-      if(error instanceof Refusal)throw error;
-      const code=error&&typeof error==='object'&&'code' in error?(error as {code?:unknown}).code:undefined;
-      if(code==='ENOENT'||error instanceof SyntaxError)throw new Refusal('VERIFY_IMAGE_UNPINNED',409);
-      throw error;
-     }
+     const simple=simpleIsolation(config);
+     const image=simple?(await (await import('./simple-host-tools.ts')).findHostCollector('verify'))?.identity??await (await import('./simple-tools-image.ts')).simpleToolsImage(config.dataDirectory)
+      :await (await import('./verify-command.ts')).readPinnedImage(config.dataDirectory);
      const {createCapacityNativeWorker}=await import('./verify-native-launch.ts');
      const {beginPersonalVerification,examRunOptions}=await import('./verify-command.ts');
      const examOptions=examRunOptions(project.economy);
@@ -286,7 +277,7 @@ async function main(){
       }))
       :executions;
      const worker=createCapacityNativeWorker({supervisors:scopedExecutions,ledger,principal,authority,base:commit,releaseGrant:(grantId,how)=>releaseGrant(principal,authority,grantId,how),pollBackoff:examOptions.pollBackoff});
-     return beginPersonalVerification({projectId:panel.projectId,mapEnabled:examOptions.mapEnabled,batch:examOptions.batch,productionOnly:examOptions.productionOnly,dataDirectory:panel.dataDirectory,repoPath:project.repo,...(body.url?{url:body.url}:{}),...(allowedAccountIds?{allowedAccountIds}:{}),ledger,principal,authority,policyRevision,commit,worker,databasesDirectory,image,installationPath:path,accountRoot:personalAccountRoot(config)});
+     return beginPersonalVerification({simple,projectId:panel.projectId,mapEnabled:examOptions.mapEnabled,batch:examOptions.batch,productionOnly:examOptions.productionOnly,dataDirectory:panel.dataDirectory,repoPath:project.repo,...(body.url?{url:body.url}:{}),...(allowedAccountIds?{allowedAccountIds}:{}),ledger,principal,authority,policyRevision,commit,worker,databasesDirectory,image,installationPath:path,accountRoot:personalAccountRoot(config)});
     },
     recheck:async(principal,authority,input)=>{
      const project=[config.project,...config.projects].find(item=>item.id===input.projectId);

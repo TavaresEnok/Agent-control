@@ -1,3 +1,6 @@
+import {containFailure} from './failure-log.ts';
+import {findHostCollector,hostCollectorArgs} from './simple-host-tools.ts';
+import {simpleIsolation} from './installation.ts';
 import {sharedSimpleWorktree} from './simple-worktree.ts';
 import {simpleToolsImage} from './simple-tools-image.ts';
 import {extractGitArchive,stripScannerSuppressions,suppressionNote} from './git-archive-snapshot.ts';
@@ -442,7 +445,9 @@ export async function defaultRunTools(
   const own = spec.snapshot === undefined;
   const snapshot = spec.snapshot ?? await prepareExamSnapshot(spec.repository, spec.commit, spec.staticPersonalExam, spec.retention);
   try {
-    const args = verifyExamArguments({
+    const host=spec.commonTools&&spec.image.startsWith('host-verify@')?await findHostCollector('verify'):undefined;
+    if(spec.image.startsWith('host-verify@')&&host?.identity!==spec.image)throw new Refusal('VERIFY_TOOLS_FAILED');
+    const args = host ? hostCollectorArgs(host,snapshot,{databases:spec.databases,output:spec.output}) : verifyExamArguments({
       image: spec.image,
       repository: spec.staticPersonalExam && !spec.commonTools ? join(snapshot, 'repository') : snapshot,
       commonTools:spec.commonTools,
@@ -705,7 +710,7 @@ async function runJob(input: {
   } finally {
     // The one snapshot lives for the whole exam and goes away here, done or failed.
     if(input.shared)await input.shared.release();
-    else { snapshotSuppressions.delete(snapshot); await rm(snapshot, {recursive: true, force: true}).catch(() => undefined); }
+    else { snapshotSuppressions.delete(snapshot); await rm(snapshot, {recursive: true, force: true}).catch(containFailure('VERIFY_SNAPSHOT_CLEANUP_FAILED',undefined)); }
     // The job reached its end (done or failed): leftovers may now age out.
     await endRound({dataDirectory: ready.dataDirectory, projectId: ready.projectId, roundId: id});
     try { await releaseExamDatabase(ready.dataDirectory, input.databaseStamp, id); }
@@ -873,7 +878,7 @@ function readHead(repoPath: string): Promise<string> {
   });
 }
 
-async function readPinnedImage(dataDirectory: string): Promise<string> {
+export async function readPinnedImage(dataDirectory: string): Promise<string> {
   let parsed: unknown;
   try {
     parsed = JSON.parse((await readPrivateFile(join(dataDirectory, 'verify-image.json'))).toString('utf8'));
@@ -978,8 +983,8 @@ export async function resolvePersonalVerification(
       releaseGrant: (grantId, how) => releaseCapacityGrant(ledger, principal, authority!, grantId, how),
       pollBackoff: examRunOptions(project.economy).pollBackoff,
     });
-    const simple=config.activation==='personal'&&config.isolation!=='strict';
-    const image = simple?await simpleToolsImage(config.dataDirectory):await readPinnedImage(config.dataDirectory);
+    const simple=simpleIsolation(config);
+    const image = simple?(await findHostCollector('verify'))?.identity??await simpleToolsImage(config.dataDirectory):await readPinnedImage(config.dataDirectory);
     const databases = await readCurrentVerifyDatabase(config.dataDirectory);
     if (!databases) throw new Refusal('VERIFY_DB_REQUIRED', 409);
     if (parsed.url === undefined) {

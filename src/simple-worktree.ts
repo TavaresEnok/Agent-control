@@ -2,10 +2,9 @@ import {execFile,spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {constants} from 'node:fs';
 import {chmod,lstat,mkdir,open,readdir,realpath} from 'node:fs/promises';
-import {join} from 'node:path';
+import {basename,join} from 'node:path';
 import {promisify} from 'node:util';
 import {isScannerSuppressionName,stripScannerSuppressions} from './git-archive-snapshot.ts';
-import {basename} from 'node:path';
 import {withInstallationImageLock} from './personal-image-lock.ts';
 
 const exec=promisify(execFile);
@@ -26,7 +25,7 @@ export const removeSimpleWorktree=(repo:string,path:string)=>worktreeGit(repo,['
 
 // A private parent protects the host path. Only the bound subtree needs
 // directory traversal and read permissions for the collector uid.
-async function readableCheckout(path:string){
+export async function readableCheckout(path:string){
  await chmod(path,0o755);
  for(const entry of await readdir(path,{withFileTypes:true})){
   const child=join(path,entry.name);
@@ -46,7 +45,18 @@ export async function sharedSimpleWorktree(dataDirectory:string,repository:strin
  const suppressed=security?(await worktreeGit(repo,['ls-tree','--name-only','-rz',commit])).split('\0').filter(name=>isScannerSuppressionName(basename(name))):[];
  const path=join(root,createHash('sha256').update(repo).digest('hex')+'-'+commit+(suppressed.length?'-security':''));
  const reader=await withInstallationImageLock(root,false,async()=>{
-  const exists=await lstat(path).catch((e:NodeJS.ErrnoException)=>{if(e.code!=='ENOENT')throw e;});
+  let exists=await lstat(path).catch((e:NodeJS.ErrnoException)=>{if(e.code!=='ENOENT')throw e;});
+  if(exists){
+   const previous=await open(path,constants.O_DIRECTORY|constants.O_NOFOLLOW|constants.O_RDONLY);
+   try{
+    const lock=spawnSync('/usr/bin/flock',['--exclusive','--nonblock','3'],{stdio:['ignore','ignore','ignore',previous.fd]}).status;
+    if(lock===0){
+     // No live reader. A process may have died mid-checkout or mid-permission change.
+     await removeSimpleWorktree(repo,path);
+     exists=undefined;
+    }else if(lock!==1)throw Error('WORKTREE_LOCK_FAILED');
+   }finally{await previous.close();}
+  }
   if(!exists){
    await addSimpleWorktree(repo,commit,path);
    try{
@@ -80,7 +90,9 @@ export async function releaseIdleSharedWorktrees(dataDirectory:string,repo:strin
  const root=join(dataDirectory,'native','shared-worktrees');
  const listed=await readdir(root).catch((e:NodeJS.ErrnoException)=>{if(e.code==='ENOENT')return [];throw e;});
  if(!listed.length)return [];
- const prefix=createHash('sha256').update(await realpath(repo)).digest('hex')+'-';
+ const repository=await realpath(repo).catch((e:NodeJS.ErrnoException)=>{if(e.code!=='ENOENT')throw e;});
+ if(!repository)return [];
+ const prefix=createHash('sha256').update(repository).digest('hex')+'-';
  return withInstallationImageLock(root,false,async()=>{
   const lines:string[]=[];
   for(const name of listed){

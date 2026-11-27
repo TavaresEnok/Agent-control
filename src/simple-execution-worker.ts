@@ -15,7 +15,7 @@ import {addSimpleWorktree,removeSimpleWorktree,sharedSimpleWorktree,worktreeGit}
 import {claudeLimitFromText} from './quota-exhaustion.ts';
 import {providerFailureCode} from './exam-login.ts';
 
-export type HostJob={input:Input;repo:string;dataDirectory:string;home:string;provider:'codex'|'claude'|'grok';model:string;effort:string};
+export type HostJob={input:Input;repo:string;dataDirectory:string;home:string;reviewBase?:string;provider:'codex'|'claude'|'grok';model:string;effort:string};
 
 async function runCli(job:HostJob,cwd:string,task:string){
  const {input,provider,model,home}=job;
@@ -96,7 +96,11 @@ export async function runSimpleWorker(root:string,job:HostJob,invoke=runCli){
    const shared=await sharedSimpleWorktree(job.dataDirectory,job.repo,input.base);
    cwd=shared.path;release=shared.release;
   }
-  const task=input.task+(input.outputSchema?'\nReturn JSON matching '+JSON.stringify(input.outputSchema):'');
+  const change=job.reviewBase?await new GitArtifacts(job.repo).diff(input.base,job.reviewBase):undefined;
+  const material=change?'\nChanged files: '+JSON.stringify(change.files)+'\nDiff against base:\n'+change.diff+
+   (change.truncated?'\nInspect the remaining changed files in the current checkout.':''):'';
+  const task=input.task+material+(input.outputSchema?'\nReturn JSON matching '+JSON.stringify(input.outputSchema):'');
+  assertNoNativeTaskSecrets(task,secrets);
   const response=await invoke(job,cwd,task);
   if(input.role==='programmer'){
    const artifact=await finalizeSimpleWork(job.repo,cwd,input,secrets);

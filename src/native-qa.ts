@@ -1,4 +1,4 @@
-import {addSimpleWorktree,removeSimpleWorktree} from './simple-worktree.ts';
+import {addSimpleWorktree,readableCheckout,removeSimpleWorktree} from './simple-worktree.ts';
 import {demuxDockerLogs,qaEvidenceLogLine,qaGitIssues,qaLogIssues,type QaEvidenceIssue} from './qa-evidence.ts';
 import {assertDiskSpaceForLaunch} from './personal-disk.ts';
 import {envMatches} from './native-execution-docker-observation.ts';
@@ -204,7 +204,8 @@ export class NativeQa{
    if(this.simple)await addSimpleWorktree(this.repository,artifact.commit_id,p.work);
    else await new GitArtifacts(this.repository).snapshot(artifact.commit_id,artifact.base_id,p.work);
    if(this.contract.prepareArgv)await this.ensureProjectCache();
-   else if(!this.simple)await setQaSnapshotPermissions(p.work,true);
+   else if(this.simple)await readableCheckout(p.work);
+   else await setQaSnapshotPermissions(p.work,true);
   }
   catch(error){
    // This catch covers only preparation, before the first Docker request.
@@ -249,7 +250,7 @@ export class NativeQa{
     if(row?.state!=='uncertain'||row.container_id||grant?.state!=='uncertain')throw new Refusal('NATIVE_QA_RECONCILIATION_REQUIRED');
     await cancelPreparedNativeResources(c,this.docker,stage.id,grantId,authority);
     await c.query("UPDATE ac_native_qa_jobs SET state='failed',receipt=$2 WHERE id=$1",[stage.id,receipt]);await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1",[grantId,receipt]);
-   });return {state:'failed' as const,receipt};
+   });await this.releaseSimpleWork(stage.id);return {state:'failed' as const,receipt};
   }
   await this.ledger.tx(async c=>{await this.authorize(c,principal,authority,intentId,true);await c.query("UPDATE ac_native_qa_jobs SET container_id=$2,state='running' WHERE id=$1 AND state='uncertain'",[stage.id,id]);await c.query("UPDATE ac_capacity_grants SET state='running' WHERE id=$1 AND state='uncertain'",[grantId]);});
   return {state:'running' as const};

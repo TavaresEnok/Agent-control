@@ -2,7 +2,6 @@ import {Refusal} from './contracts.ts';
 import {failureCode} from './failure-log.ts';
 import type {Installation} from './installation.ts';
 import type {Ledger} from './ledger.ts';
-import {hostLaunchDigest} from './personal-execution-supervisor.ts';
 import {orphanedExamIntentSql} from './native-execution-shared.ts';
 import {composePersonalExecutionSupervisors} from './personal-runtime.ts';
 
@@ -22,10 +21,9 @@ export async function recoverPersonalOrphanedExams(config: Installation, ledger:
   JOIN ac_capacity_grants g ON g.id=j.grant_id
   WHERE ${manual ? 'j.id=$1' : `j.state IN ('running','uncertain') AND ${orphanedExamIntentSql}
    AND NOT EXISTS(SELECT 1 FROM ac_managers m WHERE m.context_id=j.context_id AND m.lease_until>clock_timestamp())`}
-   AND j.launch_digest IS DISTINCT FROM $2
    ${'contextId' in selection ? 'AND j.context_id=$1' : ''}
   ORDER BY (g.state='released'),j.created_at,j.id ${'limit' in selection ? 'LIMIT $1' : ''}`,
-  [manual ? selection.jobId : 'contextId' in selection ? selection.contextId : selection.limit, hostLaunchDigest])).rows;
+  [manual ? selection.jobId : 'contextId' in selection ? selection.contextId : selection.limit])).rows;
  if (!candidates.length) {
   if (manual) throw new Refusal('NATIVE_EXECUTION_JOB_NOT_FOUND',404);
   return [];

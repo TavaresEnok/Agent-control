@@ -1,8 +1,9 @@
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-import {lstat,readdir,readFile,realpath} from 'node:fs/promises';
+import {lstat,opendir,readdir,readFile,realpath,unlink} from 'node:fs/promises';
 import {basename,join,resolve,sep} from 'node:path';
 import {tmpdir} from 'node:os';
+import {withInstallationImageLock} from './personal-image-lock.ts';
 import {Ledger} from './ledger.ts';
 import type {Installation} from './installation.ts';
 import {inventoryJobWork,releaseRegisteredDirectory} from './native-work-retention.ts';
@@ -22,13 +23,17 @@ async function containers(all:boolean){
  return ids.length?JSON.parse(await docker(['container','inspect',...ids])) as {Image:string;Mounts:{Source:string}[]}[]:[];
 }
 
-export async function simpleJobRetention(config:Installation,apply:boolean){
+const activeMounts=async()=>(await containers(false)).flatMap(c=>c.Mounts.map(m=>m.Source));
+type JobInstallation=Pick<Installation,'project'|'projects'|'databaseUrl'|'dataDirectory'>&{
+ nativeBootstrap?:{state:'active';execution:{hostRoot:string}}|{state:'bench'|'disabled'|'configured'};
+};
+export async function simpleJobRetention(config:JobInstallation,apply:boolean,mounts:()=>Promise<string[]>=activeMounts){
  const boot=config.nativeBootstrap;
  if(boot?.state!=='active')return [];
  const root=boot.execution.hostRoot;
  const {ids}=await inventoryJobWork(root);
  const ledger=new Ledger(config.databaseUrl);
- const liveMounts=(await containers(false)).flatMap(c=>c.Mounts.map(m=>m.Source));
+ const liveMounts=await mounts();
  const lines:string[]=[];
  try{
   const rows=await ledger.pool.query<{id:string;repo:string|null}>(`SELECT j.id,r.repo FROM (
@@ -77,6 +82,10 @@ export function oldTestVolume(volume:{Name:string;CreatedAt:string;Labels?:Recor
 }
 
 export async function simpleDockerRetention(config:Installation,apply:boolean){
+ return withInstallationImageLock(config.dataDirectory,false,()=>retainDockerResources(config,apply));
+}
+
+async function retainDockerResources(config:Installation,apply:boolean){
  const lines:string[]=[];
  const guards=await protectedDigests(config,{},async args=>({stdout:await docker(args),code:0}));
  const pins=new Set([...guards.pinned,...guards.retired,...guards.foreign]);
@@ -88,7 +97,13 @@ export async function simpleDockerRetention(config:Installation,apply:boolean){
   // Never force removal. With multiple tags, deleting by ID fails safely; avoid
   // dropping a tag that has since moved to a newer build.
   try{
-   if(apply)await docker(['image','rm',image.Id]);
+   if(apply){
+    const fresh=await protectedDigests(config,{},async args=>({stdout:await docker(args),code:0}));
+    const [current]=JSON.parse(await docker(['image','inspect',image.Id]));
+    const currentPins=new Set([...fresh.pinned,...fresh.foreign,...fresh.retired]);
+    if(!removableSimpleImage(current,currentPins,used))continue;
+    await docker(['image','rm',image.Id]);
+   }
    lines.push((apply?'Imagem removida ':'Imagem elegível ')+image.Id);
   }catch{lines.push('Imagem preservada pelo Docker '+image.Id);}
  }
@@ -102,19 +117,38 @@ export async function simpleDockerRetention(config:Installation,apply:boolean){
  return lines;
 }
 
+const protectedTempName=(name:string)=>protectedName(name)||/backup|verifica[cç][oõ]es|^PG_VERSION$|^basebackup|\.(?:dump|sql|backup)(?:\.|$)/i.test(name);
+export async function discardableTempContents(path:string,device:bigint,cutoff:number):Promise<boolean>{
+ const entries=await opendir(path);
+ for await(const entry of entries){
+  if(entry.name==='.git'||protectedTempName(entry.name))return false;
+  const child=join(path,entry.name),info=await lstat(child,{bigint:true});
+  if(info.dev!==device||info.uid!==BigInt(process.getuid!())||Number(info.mtimeMs)>cutoff)return false;
+  if(info.isDirectory()&&!await discardableTempContents(child,device,cutoff))return false;
+ }
+ return true;
+}
+
 export async function simpleTempRetention(config:Installation,apply:boolean){
  const root=await realpath(tmpdir()),mounts=await readFile('/proc/self/mountinfo','utf8');
  const protectedPaths=[config.dataDirectory,...[config.project,...config.projects].map(p=>p.repo),
   ...(await containers(true)).flatMap(c=>c.Mounts.map(m=>m.Source))];
  const lines:string[]=[];
  for(const entry of await readdir(root,{withFileTypes:true})){
-  if(!entry.isDirectory()||!/^(?:ac-|chatisp-)[A-Za-z0-9._-]{1,120}$/.test(entry.name)||protectedName(entry.name)||/backup|verificacoes/i.test(entry.name))continue;
+  if(!(entry.isDirectory()||entry.isFile())||!/^(?:ac-|chatisp-)[A-Za-z0-9._-]{1,120}$/.test(entry.name)||protectedTempName(entry.name))continue;
   const path=resolve(root,entry.name),info=await lstat(path,{bigint:true});
   if(info.uid!==BigInt(process.getuid!())||Date.now()-Number(info.mtimeMs)<day||protectedPaths.some(p=>overlap(p,path))||mountedInside(mounts,path)||await defaultProcessInside(path))continue;
   // Git checkouts may be unmerged worker branches. Registered worker worktrees
   // use the existing merge and clean-tree checks in artifact retention.
-  if(await lstat(join(path,'.git')).then(s=>s.isFile(),()=>false))continue;
-  if(apply)await releaseRegisteredDirectory(path,{dev:String(info.dev),ino:String(info.ino)});
+  if(entry.isDirectory()){
+   if(!await discardableTempContents(path,info.dev,Date.now()-day).catch(()=>false /* unreadable content must be preserved */))continue;
+   if(apply)await releaseRegisteredDirectory(path,{dev:String(info.dev),ino:String(info.ino)});
+  }else{
+   if(/\.(?:tar|gz|xz|zst|zip|7z|oci)(?:\.|$)/i.test(entry.name))continue;
+   const current=await lstat(path,{bigint:true});
+   if(current.dev!==info.dev||current.ino!==info.ino||current.mtimeNs!==info.mtimeNs)continue;
+   if(apply)await unlink(path);
+  }
   lines.push((apply?'Temporário removido ':'Temporário elegível ')+basename(path));
  }
  return lines;

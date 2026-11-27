@@ -11,6 +11,7 @@ import type {Ledger} from '../../src/ledger.ts';
 import type {ModuleExamProvider} from '../../src/module-exam-egress.ts';
 import type {ModuleExamRuntime} from '../../src/module-exam-native.ts';
 import {reviewFixtureVerdict} from './module-exam-review.ts';
+import {PersonalExecutionSupervisor} from '../../src/personal-execution-supervisor.ts';
 import {NativeExecutionSupervisor} from '../../src/native-execution-supervisor.ts';
 
 type Mount = {Type: 'bind'; Source: string; Destination: string; RW: boolean};
@@ -118,7 +119,7 @@ export function moduleExamFixtureAnswer(launch: Launch): ReturnType<Answer> {
 
 /** Simulates only the Docker socket and inference output. Capacity and the native supervisor stay real. */
 export async function createModuleExamFixture(input: {
-  root: string; repo: string; ledger: Ledger; owner: string; project: string; answer?: Answer;
+  root: string; repo: string; ledger: Ledger; owner: string; project: string; answer?: Answer; simple?:boolean;
 }) {
   const {root, repo, ledger, owner, project} = input;
   const hostRoot = join(root, 'fixture-spool'), accountRoot = join(root, 'fixture-accounts');
@@ -128,6 +129,7 @@ export async function createModuleExamFixture(input: {
   const image = 'sha256:' + 'd'.repeat(64);
   const signingKeyPem = generateKeyPairSync('ed25519').privateKey.export({format: 'pem', type: 'pkcs8'}).toString();
   const runtime: ModuleExamRuntime[number][] = [];
+  const Supervisor=input.simple?PersonalExecutionSupervisor:NativeExecutionSupervisor;
   const profiles = [];
   let highProfile = '';
   for (const provider of ['claude', 'codex'] as const) {
@@ -159,7 +161,8 @@ export async function createModuleExamFixture(input: {
       await writeFile(join(account, '.codex', 'auth.json'), JSON.stringify({auth_mode: 'chatgpt',
         tokens: {account_id: subject, access_token: 'synthetic-codex-access-only-fixture', refresh_token: 'synthetic-codex-refresh-only-fixture'}}), {mode: 0o600});
     }
-    runtime.push({provider, accountIds: new Set([accountId]), supervisor: new NativeExecutionSupervisor(ledger, {
+    runtime.push({provider, accountIds: new Set([accountId]), supervisor: new Supervisor(ledger, {
+      simple:input.simple,dataDirectory:join(root,'data'),
       id: 'fixture-' + provider, provider, workerImage: image, toolsImage: image, hostRoot, accountRoot,
       protectedRepositories: [repo], signingKeyPem, providerNetworkId: 'e'.repeat(64), socketPath: socket,
       accountSubjects: [{accountId, subjectDigest}], workerEnv: [], toolsEnv: [],

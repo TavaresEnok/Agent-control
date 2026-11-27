@@ -1,6 +1,6 @@
 import {execFile} from 'node:child_process';
-import {sign} from 'node:crypto';
-import {lstat,mkdir,readFile,rm,writeFile} from 'node:fs/promises';
+import {randomUUID,sign} from 'node:crypto';
+import {lstat,mkdir,readFile,realpath,rename,rm,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {promisify} from 'node:util';
@@ -42,7 +42,7 @@ export class PersonalExecutionSupervisor extends NativeExecutionSupervisor{
   return withGrantLaunchLock(this.ledger,input.grantId,async()=>{
    const concurrent=await this.hostRow(input.jobId);
    if(concurrent){await this.validateReplay(principal,authority,input,concurrent);return {state:'running' as const};}
-   if(!this.active||input.model||input.effort)throw new Refusal('NATIVE_EXECUTION_NOT_ELIGIBLE');
+   if(!this.active||!this.config.provider||input.model||input.effort)throw new Refusal('NATIVE_EXECUTION_NOT_ELIGIBLE');
    await assertDiskSpaceForLaunch([...(this.ledger.launchVolumes??[]),this.config.hostRoot]);
    await this.diskGuard?.assertAdmission();
    signal?.throwIfAborted();
@@ -56,13 +56,15 @@ export class PersonalExecutionSupervisor extends NativeExecutionSupervisor{
    });
    await new AccountHomes(this.ledger,this.config.accountRoot,this.config.protectedRepositories).inspectGranted(principal,input.grantId,authority);
    const repo=await this.jobRepository(this.ledger.pool,g.project_id);
+   const reviewBase=input.artifactId&&!input.moduleExam&&input.role!=='programmer'
+    ?(await this.ledger.pool.query('SELECT base_id FROM ac_artifacts WHERE id=$1 AND commit_id=$2',[input.artifactId,input.base])).rows[0]?.base_id:undefined;
    await this.directory(this.config.hostRoot);
    await mkdir(p.root,{mode:0o700});
    try{
     await mkdir(p.output,{mode:0o700});
     await writeFile(join(p.root,'request.json'),JSON.stringify(input),{mode:0o600,flag:'wx'});
     const home=join(this.config.accountRoot,g.account_id);
-    await writeFile(join(p.root,'host-job.json'),JSON.stringify({input,repo,home,provider:this.config.provider,model:g.model,effort:g.effort,dataDirectory:this.config.dataDirectory}),{mode:0o600,flag:'wx'});
+    await writeFile(join(p.root,'host-job.json'),JSON.stringify({input,repo,home,reviewBase,provider:this.config.provider,model:g.model,effort:g.effort,dataDirectory:this.config.dataDirectory}),{mode:0o600,flag:'wx'});
     await this.ledger.tx(async c=>{
      const current=await this.identity(c,principal,authority,input);
      if(this.profileDigest(current)!==this.profileDigest(g))throw new Refusal('NATIVE_EXECUTION_GRANT_MISMATCH');
@@ -96,6 +98,9 @@ export class PersonalExecutionSupervisor extends NativeExecutionSupervisor{
    const result=await this.readResult(input,1);
    if(await lstat(join(p.root,'stop-requested')).catch((e:NodeJS.ErrnoException)=>{if(e.code!=='ENOENT')throw e;})){
     result.exitCode=1;result.failureCode='EXECUTION_NATIVE_STOPPED';result.output='';
+    const pending=join(p.output,'result.stopped');
+    await writeFile(pending,JSON.stringify(result),{mode:0o600});
+    await rename(pending,join(p.output,'execution-result.json'));
    }
    if(result.jobId!==input.jobId)throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');
    const artifact=result.exitCode===0&&input.role==='programmer'?NativeArtifactIdentity.parse(JSON.parse(await readFile(join(p.output,'artifact.json'),'utf8'))):null;
@@ -108,6 +113,7 @@ export class PersonalExecutionSupervisor extends NativeExecutionSupervisor{
     await releaseIdleSharedWorktrees(this.config.dataDirectory,await this.jobRepository(this.ledger.pool,ctx.project_id),true,input.base);
    }
    await rm(join(p.root,'host-job.json'),{force:true});
+   await writeFile(join(p.root,'worker-terminal.log'),(result.failureCode??'completed')+'\n',{mode:0o600});
    const physical={isolation:'simple',jobId:input.jobId,unit:unit(input.jobId),state:'exited',exitCode:result.exitCode,workerExitCode:result.exitCode,normalizedTokensUsed:result.normalizedTokensUsed,failureCode:result.failureCode};
    const payload={schemaVersion:1,isolation:'simple',jobId:input.jobId,intentId:input.intentId,grantId:input.grantId,contextId:authority.contextId,
     sessionId:input.sessionId,accountId:row.account_id,profileId:row.profile_id,profileDigest:row.profile_digest,epoch:Number(row.manager_epoch),
@@ -136,6 +142,7 @@ export class PersonalExecutionSupervisor extends NativeExecutionSupervisor{
     await exec('systemctl',['--user','stop',unit(input.jobId)]);
    }
   });
+  await this.reconcile(principal,authority,input);
   return {state:'stop_requested' as const};
  }
 
@@ -144,6 +151,24 @@ export class PersonalExecutionSupervisor extends NativeExecutionSupervisor{
   const status=await this.reconcileRegistered(principal,authority,id);
   if(status.state==='completed'||status.state==='failed')return {state:'acknowledged',interval:'ack_lost',grant:'released',removed:[],replayed:false,receipt:status.receipt} satisfies NativeExecutionRecovery;
   return {state:'uncertain',interval:'before_terminal_evidence',grant:'preserved',removed:[],replayed:false} satisfies NativeExecutionRecovery;
+ }
+
+ override async recoverOrphanedExam(principal:string,id:string,scope:{contextId:string;projectId:string;repository:string},apply:boolean){
+  const row=await this.hostRow(id);
+  if(!row)return super.recoverOrphanedExam(principal,id,scope,apply);
+  const context=await this.ledger.tx(c=>this.ledger.authorize(c,principal,scope.contextId));
+  if(context.role!=='owner'||context.project_id!==scope.projectId||row.context_id!==scope.contextId||
+     await this.jobRepository(this.ledger.pool,scope.projectId)!==await realpath(scope.repository))
+   throw new Refusal('NATIVE_EXECUTION_SCOPE_MISMATCH');
+  const exam=await this.ledger.pool.query(`SELECT 1 FROM ac_intents i WHERE id=$1 AND command->'payload'->>'workflow'='security-verify-readonly-v1'`,[row.intent_id]);
+  if(!exam.rowCount||row.role!=='specialist')throw new Refusal('NATIVE_EXECUTION_NOT_ELIGIBLE');
+  if(await activeUnit(id))throw new Refusal('NATIVE_EXECUTION_BUSY');
+  if(!apply)return 'eligible' as const;
+  const authority=await this.ledger.acquire(principal,scope.contextId,randomUUID(),'personal-host-recovery',60);
+  try{
+   await this.retireTerminal(principal,authority,id);
+   return 'recovered' as const;
+  }finally{await this.ledger.releaseLease(authority);}
  }
 
  override async retireTerminal(principal:string,authority:Authority,id:string){
@@ -161,8 +186,10 @@ export class PersonalExecutionSupervisor extends NativeExecutionSupervisor{
   const proof={isolation:'simple',jobId:id,state:'exited',unit:unit(id)};
   await this.ledger.tx(async c=>{
    await this.ledger.fence(c,authority,true);
-   await c.query(`UPDATE ac_worktree_writers w SET state='neutralized',proof_digest=$2,revocation_job_id=$1,revocation_proof=$3
-    FROM ac_intents i WHERE i.id=$4 AND i.context_id=$5 AND w.parent_intent_id=i.parent_intent_id AND w.run_id=i.run_id AND w.holder_intent_id=i.id AND w.state='held'`,[id,digest(proof),proof,row.intent_id,authority.contextId]);
+   const updated=await c.query(`UPDATE ac_worktree_writers w SET state='neutralized',proof_digest=$2,revocation_job_id=$1,revocation_proof=$3
+    FROM ac_intents i WHERE i.id=$4 AND i.context_id=$5 AND w.parent_intent_id=i.parent_intent_id AND w.run_id=i.run_id AND w.holder_intent_id=i.id AND w.state='held' AND w.manager_epoch=$6`,[id,digest(proof),proof,row.intent_id,authority.contextId,row.manager_epoch]);
+   if(!updated.rowCount&&!(await c.query("SELECT 1 FROM ac_worktree_writers WHERE revocation_job_id=$1 AND proof_digest=$2 AND state='neutralized'",[id,digest(proof)])).rowCount)
+    throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
   });
   return {state:'neutralized' as const};
  }

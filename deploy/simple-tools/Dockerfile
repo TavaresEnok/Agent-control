@@ -20,6 +20,7 @@ RUN --mount=from=verify,target=/inputs/verify \
       tar -C "$input" --exclude=./ms-playwright -cf - . | tar -C "$dest" -xf -; \
     done; hardlink --ignore-time --respect-xattrs /opt/ac-collectors
 COPY --chmod=0555 collect.sh /usr/local/bin/ac-collect
+RUN printf '#!/bin/sh\nexec /usr/local/bin/ac-collect verify-db "$@"\n' > /usr/local/bin/verify-db-fetch.sh && chmod 0555 /usr/local/bin/verify-db-fetch.sh
 ENV PROOT_NO_SECCOMP=1
 USER 65532:65532
 RUN /usr/local/bin/ac-collect banco --check && /usr/local/bin/ac-collect qa --check && /usr/local/bin/ac-collect conformidade --check

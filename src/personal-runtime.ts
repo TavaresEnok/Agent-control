@@ -9,7 +9,7 @@ import {readFile} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {GitArtifacts} from './git.ts';
 import {assertSshOutsideMountRoots,pushIntegratedRemote,registerPersonalRemote,retryPendingRemotePushes} from './personal-ssh.ts';
-import type {Installation} from './installation.ts';
+import {simpleIsolation,type Installation} from './installation.ts';
 import type {Ledger} from './ledger.ts';
 import {NativeExecutionSupervisor,openGrantLaunchLockSession,releaseGrantLaunchLock,tryGrantLaunchLock} from './native-execution-supervisor.ts';
 import {orphanedExamIntentSql} from './native-execution-shared.ts';
@@ -141,7 +141,7 @@ export async function composePersonalExecutionSupervisors(
   const accountSubjects=subjects(provider);
   if(!accountSubjects.length)continue;
   executions.push(new PersonalExecutionSupervisor(ledger,{id:boot.execution.id+'-'+provider,workerImage:boot.execution.workerImage,toolsImage:boot.execution.toolsImage,
-   hostRoot:boot.execution.hostRoot,accountRoot:boot.execution.accountRoot,protectedRepositories,signingKeyPem:executionPem,dataDirectory:config.dataDirectory,simple:config.activation==='personal'&&config.isolation!=='strict',
+   hostRoot:boot.execution.hostRoot,accountRoot:boot.execution.accountRoot,protectedRepositories,signingKeyPem:executionPem,dataDirectory:config.dataDirectory,simple:simpleIsolation(config),
    providerNetworkId:boot.execution.providerNetworkId,provider,workerEnv:boot.execution.workerEnv,toolsEnv:boot.execution.toolsEnv,accountSubjects,disabledMeasurementProjects,personalEgress}));
   for(const pair of (boot.execution.retiredImages??[]).filter(x=>x.workerImage!==boot.execution.workerImage||x.toolsImage!==boot.execution.toolsImage))
    executions.push(new PersonalExecutionSupervisor(ledger,{id:boot.execution.id+'-'+provider,workerImage:pair.workerImage,toolsImage:pair.toolsImage,active:false,
@@ -197,7 +197,7 @@ export async function composePersonalRuntime(config:Installation,ledger:Ledger){
    const quality=new Quality(ledger,reviewKey,git);
    const qaContract=await resolvePersonalProjectQa({dataDirectory:config.dataDirectory,projectId,image:boot.qa.image,fallback:boot.qa});
    const cacheRoot=qaContract.prepareArgv?resolve(join(config.dataDirectory,'qa-cache',projectId)):undefined;
-   const nativeQa=new NativeQa(ledger,quality,repo,boot.execution.hostRoot,qaContract,reviewKey,undefined,undefined,undefined,cacheRoot,config.isolation!=='strict');
+   const nativeQa=new NativeQa(ledger,quality,repo,boot.execution.hostRoot,qaContract,reviewKey,undefined,undefined,undefined,cacheRoot,simpleIsolation(config));
    await syncPersonalQaPolicy(ledger,owner,projectId,nativeQa.verifierDigest);
    // A new QA contract publishes a new quality revision; live conversation templates must follow it.
    await refreshPersonalTemplates(ledger,projectId);
