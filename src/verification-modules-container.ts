@@ -53,7 +53,7 @@ export function moduleDigestPath(module: VerificationModule, rootDir?: string): 
   return join(base, 'deploy', 'modules', module, 'digest.txt');
 }
 
-export async function readPinnedModuleImage(module: VerificationModule, rootDir?: string): Promise<string> {
+export async function readOptionalPinnedModuleImage(module: VerificationModule, rootDir?: string): Promise<string | undefined> {
   const path = moduleDigestPath(module, rootDir);
   let text: string;
   try {
@@ -62,10 +62,16 @@ export async function readPinnedModuleImage(module: VerificationModule, rootDir?
     text = await readFile(path, 'utf8');
   } catch (error) {
     if (error instanceof Refusal) throw error;
-    if (isErrno(error, 'ENOENT')) throw new Refusal('VERIFY_IMAGE_UNPINNED');
+    if (isErrno(error, 'ENOENT')) return undefined;
     throw error;
   }
   return parsePinnedModuleImage(text);
+}
+
+export async function readPinnedModuleImage(module: VerificationModule, rootDir?: string): Promise<string> {
+  const image = await readOptionalPinnedModuleImage(module, rootDir);
+  if (!image) throw new Refusal('VERIFY_IMAGE_UNPINNED');
+  return image;
 }
 
 /** In laboratory runs (`AC_MODULE_LAB=1`), resolves the immutable Docker image from `deploy/modules/<modulo>/digest.txt`. */

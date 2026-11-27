@@ -1,5 +1,5 @@
-import {findHostCollector} from './simple-host-tools.ts';
-import {isInstalledCommonImage,simpleToolsImage} from './simple-tools-image.ts';
+import {findHostCollector, type HostCollector} from './simple-host-tools.ts';
+import {availableSimpleToolsImage, isInstalledCommonImage, localImageId} from './simple-tools-image.ts';
 import {sharedSimpleWorktree} from './simple-worktree.ts';
 import {containFailure} from './failure-log.ts';
 import {withInstallationImageLock} from './personal-image-lock.ts';
@@ -27,7 +27,7 @@ import {isSecretClassBasename} from './verify-redact.ts';
 import {Achado, CoverageRow, REMEDIATION_ACCEPTANCE, VerifyWorkerCall} from './verify-types.ts';
 import {DEFAULT_COLLECTOR_TIMEOUT_MS, EXCERPT_LIMIT, MAX_COLLECTOR_STDOUT_BYTES, MULTILINE_CONTROL_CHAR, ModuleCollectorOutput, ModuleRawFinding, ModuleToolCoverage, type VerificationModuleRunInput, type VerificationModuleRunResult, assertModuleRepoRelativePath, assertReportOutsideRepo, assertVerificationModule, collectorMeasuredDetailFile, documentationCoverage, isErrno, isProtectedLocation, locateRepoFile, resolveInsideRepo} from './verification-modules-contracts.ts';
 import {parseModuleCollectorOutput, sanitizeText, validateModuleCollectorObject} from './verification-modules-collector.ts';
-import {type ModuleRetention, assertPinnedModuleImage, prepareModuleSnapshot, readPinnedModuleImage, removeModuleSnapshot, runModuleCollectorContainer} from './verification-modules-container.ts';
+import {type ModuleRetention, assertPinnedModuleImage, prepareModuleSnapshot, readOptionalPinnedModuleImage, readPinnedModuleImage, removeModuleSnapshot, runModuleCollectorContainer} from './verification-modules-container.ts';
 import {assertNoLiveAccessKey, moduleReportDirectoryName, moduleReviewPromptEvidence, requireDataDirectory, writeModuleReport} from './verification-modules-report.ts';
 import {reconcileReports, recoverModuleContainers} from './verification-modules-persistence.ts';
 
@@ -235,6 +235,34 @@ export async function validateModuleCollectorPublication(snapshot: string, colle
   }
 }
 
+async function selectModuleCollector(input: VerificationModuleRunInput): Promise<{
+  image?: string; commonTools?: boolean; hostCollector?: HostCollector;
+}> {
+  const image = input.image === undefined ? undefined : assertPinnedModuleImage(input.image);
+  const needCollector = input.collectorOutput === undefined && input.runCollector === undefined;
+  const simple = input.isolation === 'simple' && needCollector;
+  if (image?.startsWith('host-')) {
+    const hostCollector = simple ? await findHostCollector(input.module) : undefined;
+    if (hostCollector?.identity !== image) throw new Refusal('VERIFY_MODULE_IMAGE_MISSING', 503);
+    return {image, hostCollector};
+  }
+  if (!needCollector) return {image};
+  if (!simple) return {image: image ?? await readPinnedModuleImage(input.module, input.rootDir)};
+
+  if (image) {
+    // A remeasurement must keep its recorded image even if the current pin changed.
+    const common = await availableSimpleToolsImage(input.dataDirectory).catch(() => undefined);
+    return {image, commonTools: image === common || await isInstalledCommonImage(image)};
+  }
+  const common = await availableSimpleToolsImage(input.dataDirectory);
+  if (common) return {image: common, commonTools: true};
+  const pinned = await readOptionalPinnedModuleImage(input.module, input.rootDir);
+  if (pinned && await localImageId(pinned)) return {image: pinned};
+  const hostCollector = await findHostCollector(input.module);
+  if (hostCollector) return {image: hostCollector.identity, hostCollector};
+  throw new Refusal('SIMPLE_TOOLS_IMAGE_MISSING', 503);
+}
+
 /**
  * Full execution path for verification modules 2 to 9 (`qa`, `arquitetura`, `dependencias`,
  * `banco`, `prontidao`, `desempenho`, `documentacao`, `conformidade`).
@@ -261,19 +289,8 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
     moduleReportDirectoryName(createdAt, runId, input.module));
   const timeoutMs = input.timeoutMs ?? DEFAULT_COLLECTOR_TIMEOUT_MS;
   const maxStdoutBytes = input.maxStdoutBytes ?? MAX_COLLECTOR_STDOUT_BYTES;
-  const needImage = input.collectorOutput === undefined && input.runCollector === undefined;
-  const localCollector=input.isolation==='simple'&&needImage&&(!input.image||input.image.startsWith('host-'))
-    ?await findHostCollector(input.module):undefined;
-  if(input.image?.startsWith('host-')&&input.image!==localCollector?.identity)throw new Refusal('VERIFY_MODULE_IMAGE_MISSING',503);
-  const {image,intentId,commonTools}=await withInstallationImageLock(input.dataDirectory,true,async()=>{
-    const commonImage=input.isolation==='simple'&&needImage&&!localCollector
-      ? await simpleToolsImage(input.dataDirectory).catch(error=>{if(!input.image)throw error;return undefined;}) : undefined;
-    const image = input.image !== undefined
-      ? assertPinnedModuleImage(input.image)
-      : needImage
-        ? localCollector?.identity??commonImage??await readPinnedModuleImage(input.module, input.rootDir)
-        : undefined;
-
+  const {image, intentId, commonTools, hostCollector} = await withInstallationImageLock(input.dataDirectory, true, async () => {
+    const collector = await selectModuleCollector(input);
     const intentId = await beginModuleRunTx({
       ledger: input.ledger,
       principal: input.principal,
@@ -284,10 +301,9 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       runId,
       repoPath: input.repoPath,
       preparedDir,
-      image,
+      image: collector.image,
     });
-    const commonTools=Boolean(commonImage&&commonImage===image||input.isolation==='simple'&&needImage&&input.image&&!localCollector&&await isInstalledCommonImage(input.image));
-    return {image,intentId,commonTools};
+    return {...collector, intentId};
   });
 
   let shared: Awaited<ReturnType<typeof sharedSimpleWorktree>> | undefined;
@@ -341,7 +357,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
     } else {
       const executed = await runModuleCollectorContainer({
         snapshot,
-        commonTools,hostCollector:localCollector,
+        commonTools, hostCollector,
         image: image!,
         module: input.module,
         repoPath: input.repoPath,

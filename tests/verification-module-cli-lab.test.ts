@@ -15,8 +15,12 @@ import {
   readModuleAchadoMarkdown,
   readModuleReport,
   readPinnedModuleImage,
+  runBoundedCollectorProcess,
+  runVerificationModule,
 } from '../src/verification-modules.ts';
 import {REMEDIATION_ACCEPTANCE} from '../src/verify-types.ts';
+import {sharedSimpleWorktree} from '../src/simple-worktree.ts';
+import {withModuleRecoveryFixture} from './fixtures/module-recovery.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
 const exec = promisify(execFile);
@@ -365,8 +369,7 @@ async function verifyModuleEndToEnd(
       throw new Error(`Falhas na fixture sintética de ${module}: ${JSON.stringify(failed.rows)}`, {cause: error});
     });
     assert.ok(runLines.length >= 2, `saída inesperada de personal:${module}: ${JSON.stringify(runLines)}`);
-    const runId = runLines.at(-2)!;
-    const reportDir = runLines.at(-1)!;
+    const [runId, reportDir] = runLines;
     assert.match(runId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
     assert.equal(reportDir.startsWith(join(dataDirectory, 'verificacoes', projectId)), true);
     assert.equal(reportDir.endsWith(`-${module}`), true);
@@ -530,7 +533,7 @@ async function verifyModuleEndToEnd(
       assert.ok(firstMeasurement.performance_measurement.k6Routes.length > 0);
       assert.equal(toolCovRows.find(row => row.tool === 'medicao-anterior-independente')?.status, 'skipped');
       const repeated = await runPersonalCliSubprocess(module, [installationPath, projectId]);
-      const repeatedId = repeated.at(-2)!;
+      const [repeatedId] = repeated;
       assert.notEqual(repeatedId, runId);
       const comparison = (await db.pool.query(
         "SELECT detail, status FROM ac_verify_tool_coverage WHERE run_id=$1 AND tool='medicao-anterior-independente'",
@@ -691,6 +694,38 @@ test('encerrar heartbeat do gerente cancela novas renovações', async ({mock}) 
   await stopHeartbeat();
   mock.timers.tick(MAIN_MANAGER_HEARTBEAT_MS);
   assert.equal(heartbeat.mock.callCount(), 1);
+});
+
+test('Arquitetura no modo simples usa a imagem fixada e monta o checkout compartilhado só para leitura quando falta a comum', {
+  skip: !LAB_ENABLED || !resolveSelectedLabModules().includes('arquitetura'),
+}, async () => {
+  await withModuleRecoveryFixture(process.env.AC_TEST_DATABASE_URL!, async base => {
+    const module = 'arquitetura';
+    const image = await readPinnedModuleImage(module);
+    const missing = 'sha256:' + randomUUID().replaceAll('-', '').repeat(2);
+    await writeFile(join(base.dataDirectory, 'simple-tools-image.json'), JSON.stringify({image: missing}), {mode: 0o600});
+    const {contextId} = await base.ledger.ensureExamContext(base.principal, base.projectId, module);
+    const authority = await base.ledger.acquire(base.principal, contextId, randomUUID(), 'lab-arquitetura', 60);
+    const reader = await sharedSimpleWorktree(base.dataDirectory, base.repoPath, base.commit);
+    try {
+      let created = false;
+      const result = await runVerificationModule({...base, module, authority, isolation: 'simple',
+        executeCollectorProcess: async (args, options) => {
+          if (args[1] === 'create') {
+            assert.ok(args.includes(image));
+            assert.ok(args.includes(`type=bind,src=${reader.path},dst=/repo,readonly`));
+            created = true;
+          }
+          return runBoundedCollectorProcess(args, options);
+        }});
+      assert.equal(result.hasToolFailure, false, JSON.stringify(result.toolCoverage));
+      assert.ok(created);
+      const {rows} = await base.ledger.pool.query('SELECT collector_image, status FROM ac_verify_runs WHERE id=$1', [result.runId]);
+      assert.deepEqual(rows, [{collector_image: image, status: 'done'}]);
+    } finally {
+      await reader.release();
+    }
+  });
 });
 
 test(

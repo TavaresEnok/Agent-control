@@ -15,17 +15,16 @@ export async function availableSimpleToolsImage(dataDirectory:string){
  }catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
  // An existing single-user installation can use the shared local build.
  // Resolve once per run, so moving the tag cannot switch a running collector.
- const found=await exec('docker',['image','inspect','--format','{{.Id}}',reference]).catch(()=>undefined);
- if(!found)return undefined;
- const id=found.stdout.trim();
- if(!/^sha256:[a-f0-9]{64}$/.test(id))throw new Refusal('VERIFY_IMAGE_UNPINNED');
- return id;
+ return localImageId(reference);
 }
 
-export async function simpleToolsImage(dataDirectory:string){
- const image=await availableSimpleToolsImage(dataDirectory);
- if(!image)throw new Refusal('SIMPLE_TOOLS_IMAGE_MISSING',503);
- return image;
+export async function localImageId(reference: string) {
+  // If Docker cannot resolve the reference locally, try the next collector.
+  const found = await exec('docker', ['image', 'inspect', '--format', '{{.Id}}', reference], {timeout: 15_000}).catch(() => undefined);
+  if (!found) return undefined;
+  const id = found.stdout.trim();
+  if (!/^sha256:[a-f0-9]{64}$/.test(id)) throw new Refusal('VERIFY_IMAGE_UNPINNED');
+  return id;
 }
 
 /** A remeasurement can request the previous common image after its tag moves. */
