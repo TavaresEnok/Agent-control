@@ -252,7 +252,7 @@ export function administrativeEndpointDispatcher(registry:ManagerRegistry,servic
  if(registry.ledger!==service.ledger)throw new Refusal('ADMIN_SERVICE_LEDGER_MISMATCH',403);
  return async(contextId:string,raw:unknown)=>service.execute(await registry.administrativeCapability(contextId,service),raw);
 }
-export type ConversationEndpointOptions={transportOnly?:boolean;semanticPlanning?:SemanticPlanning;personalConversation?:boolean;teamFeedRoot?:string;dataDirectory?:string;managerChat?:import('./personal-manager-chat.ts').PersonalManagerChat;projectLabel?:string;managerEconomy?:import('./manager-discipline.ts').ManagerEconomy;deliverPersonalPush?:(notice:import('./personal-push.ts').PersonalPushNotice)=>Promise<void>};
+export type ConversationEndpointOptions={transportOnly?:boolean;semanticPlanning?:SemanticPlanning;personalConversation?:boolean;teamFeedRoot?:string;dataDirectory?:string;managerChat?:import('./personal-manager-chat.ts').PersonalManagerChat;managerEconomy?:import('./manager-discipline.ts').ManagerEconomy;deliverPersonalPush?:(notice:import('./personal-push.ts').PersonalPushNotice)=>Promise<void>};
 /** Personal transcript in Postgres (ac_personal_messages). Only a private per-endpoint content-key copy reaches the endpoint. */
 export function localEndpointFactory(ledger:Ledger,runtime:CezarRuntime,options:ConversationEndpointOptions):ManagerEndpointFactory{
  return input=>new ConversationEndpoint(ledger,runtime,{...options,principal:input.principal,sessionId:input.sessionId,

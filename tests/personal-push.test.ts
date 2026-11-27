@@ -54,6 +54,7 @@ test('a device subscribes once, a gone subscription is removed, and the private 
   await deliverPersonalPush(root,{messageId:'m1',title:'Projeto',body:'linha',url:'/p/11111111-1111-4111-8111-111111111111/conversa'},sender);
   await deliverPersonalPush(root,{messageId:'m1',title:'Projeto',body:'linha',url:'/p/11111111-1111-4111-8111-111111111111/conversa'},sender);
   assert.equal(sent.length,2);
+  for(const payload of sent)assert.deepEqual(JSON.parse(payload),{title:'Nova mensagem no Agent Control',body:'',url:'/p/11111111-1111-4111-8111-111111111111/conversa'});
   const after=await listPersonalPush(root);
   assert.deepEqual(after.subscriptions.map(item=>item.id),[listed.subscriptions[1]?.id]);
   assert.equal(await unsubscribePersonalPush(root,after.subscriptions[0]!.id),true);
@@ -77,7 +78,7 @@ test('the installation keeps at most twenty subscriptions and the test notice us
   await assert.rejects(subscribePersonalPush(root,{endpoint:endpoint(20),keys}),(error:unknown)=>error instanceof Refusal&&error.code==='SUBSCRIPTION_LIMIT');
   await sendPersonalPushTest(root,async(_subscription,payload)=>{bodies.push(payload);});
   assert.equal(bodies.length,20);
-  assert.equal(JSON.parse(bodies[0]!).body,'Teste do Agent Control');
+  assert.deepEqual(JSON.parse(bodies[0]!),{title:'Nova mensagem no Agent Control',body:'',url:'/'});
   for(const blocked of ['http://fcm.googleapis.com/no','https://push.example.test/device','https://fcm.googleapis.com:8443/wp','https://user:pass@fcm.googleapis.com/wp','https://fcm.googleapis.com.evil.example/wp','https://notify.windows.com/w','https://wns.notify.windows.com.evil.example/w']){
    await assert.rejects(subscribePersonalPush(root,{endpoint:blocked,keys}),(error:unknown)=>error instanceof Refusal&&error.code==='INVALID_CONTRACT');
   }
