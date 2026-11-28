@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
 import {createHash,randomUUID} from 'node:crypto';
-import {chmod,lstat,mkdir,mkdtemp,readdir,readFile,rm,symlink,writeFile} from 'node:fs/promises';
+import {chmod,link,lstat,mkdir,mkdtemp,readdir,readFile,rm,symlink,unlink,utimes,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
 import {Refusal} from '../src/contracts.ts';
+import {runPersonalRestoreCheck} from '../src/personal-backup.ts';
 import {OffsiteCopyRefusal,RestoreCheckRefusal,RetentionDegradedRefusal,backupRotateStatusFile,retentionDegradedNotice,retentionRepeatedNotice,offsiteFailedNotice,parseOffsiteDestination,personalBackupDefaultDestination,personalBackupRotateStamp,personalOffsiteRsyncPlan,restoreCheckFailedNotice,runPersonalBackupRotate,type RsyncPlan} from '../src/personal-backup-rotate.ts';
 
-async function fixture(){
+async function fixture(extra:Record<string,unknown>={}){
  const root=await mkdtemp(join(tmpdir(),'personal-rotate-'));
  const data=join(root,'data'),repo=join(root,'repo'),id=randomUUID();
  await mkdir(data,{recursive:true,mode:0o700});
@@ -16,7 +17,7 @@ async function fixture(){
  const body={schemaVersion:1,mode:'administration-only',activation:'personal',databaseUrl:'postgresql://ac:s3cret@127.0.0.1:54329/agent_control',dataDirectory:data,
   accountHomesDirectory:join(data,'accounts'),
   project:{id,label:'IspAgent',repo,owner:'owner@example.com'},projects:[],
-  http:{listen:'127.0.0.1',port:8765,publicOrigin:'http://127.0.0.1:8765'}};
+  http:{listen:'127.0.0.1',port:8765,publicOrigin:'http://127.0.0.1:8765'},...extra};
  await writeFile(file,JSON.stringify(body)+'\n',{mode:0o600});
  await chmod(file,0o600);
  await mkdir(join(data,'accounts'),{recursive:true});
@@ -404,4 +405,120 @@ test('backup novo íntegro com falha ao apagar os antigos: estados distintos, av
   assert.equal((await stampDirs(dest)).length,3);
   assert.equal(JSON.parse(await readFile(join(env.data,backupRotateStatusFile),'utf8')).retention,'ok');
  }finally{await chmod(dest,0o700).catch(()=>{});await rm(env.root,{recursive:true,force:true});}
+});
+
+/** The only `agent-control-*` folder inside one dated backup. */
+async function innerOf(dest:string,stamp:string){
+ const name=(await readdir(join(dest,stamp))).find(entry=>entry.startsWith('agent-control-'));
+ assert.ok(name);
+ return join(dest,stamp,name);
+}
+
+async function stableData(data:string){
+ await mkdir(join(data,'accounts','claude'),{recursive:true,mode:0o700});
+ await writeFile(join(data,'accounts','claude','login.json'),'{"login":"estavel"}',{mode:0o600});
+ await mkdir(join(data,'verificacoes'),{recursive:true,mode:0o700});
+ await writeFile(join(data,'verificacoes','relatorio.json'),'{"ok":true}',{mode:0o600});
+}
+
+test('com dedupe os arquivos iguais ao backup anterior são o mesmo inode e o restore-check passa',async()=>{
+ const env=await fixture();
+ const dest=join(env.root,'backups');
+ await stableData(env.data);
+ try{
+  const first=new Date(2026,10,20,3,30,0),second=new Date(2026,10,21,3,30,0);
+  await runPersonalBackupRotate([env.file,dest],{now:first,dump,listDump});
+  await writeFile(join(env.data,'marker.txt'),'mudou',{mode:0o600});
+  const lines=await runPersonalBackupRotate([env.file,dest],{now:second,dump,listDump});
+  assert.ok(lines.some(line=>/^Deduplicação: 3 arquivo\(s\) iguais/.test(line)),lines.join('\n'));
+  const older=await innerOf(dest,personalBackupRotateStamp(first)),newer=await innerOf(dest,personalBackupRotateStamp(second));
+  for(const rel of ['accounts/claude/login.json','verificacoes/relatorio.json']){
+   const a=await lstat(join(older,'data',rel)),b=await lstat(join(newer,'data',rel));
+   assert.equal(b.ino,a.ino,rel);
+   assert.equal(b.nlink,2);
+   assert.equal(b.mode&0o777,0o600);
+  }
+  assert.notEqual((await lstat(join(newer,'data','marker.txt'))).ino,(await lstat(join(older,'data','marker.txt'))).ino,'o arquivo que mudou é cópia nova');
+  assert.equal(await readFile(join(newer,'data','marker.txt'),'utf8'),'mudou');
+  assert.equal(await readFile(join(older,'data','marker.txt'),'utf8'),'s3cret-marker');
+  for(const live of ['accounts/claude/login.json','marker.txt'])assert.equal((await lstat(join(env.data,live))).nlink,1,'o arquivo vivo nunca é ligado');
+  assert.match((await runPersonalRestoreCheck([newer],{listDump})).join(' '),/^MANIFEST.txt confere \(\d+ arquivos\)\. database.dump é legível\.$/);
+  assert.match((await runPersonalRestoreCheck([older],{listDump})).join(' '),/^MANIFEST.txt confere /);
+ }finally{await rm(env.root,{recursive:true,force:true});}
+});
+
+test('dedupe desligado copia tudo, e um backup anterior adulterado nunca liga o arquivo vivo',async()=>{
+ const off=await fixture({storage:{backups:{dedupe:false}}});
+ const on=await fixture();
+ try{
+  await stableData(off.data);
+  const dest=join(off.root,'backups');
+  const first=new Date(2026,10,20,3,30,0),second=new Date(2026,10,21,3,30,0);
+  await runPersonalBackupRotate([off.file,dest],{now:first,dump,listDump});
+  const lines=await runPersonalBackupRotate([off.file,dest],{now:second,dump,listDump});
+  assert.equal(lines.some(line=>line.startsWith('Deduplicação')),false);
+  assert.equal((await lstat(join(await innerOf(dest,personalBackupRotateStamp(second)),'data','accounts','claude','login.json'))).nlink,1);
+
+  await stableData(on.data);
+  const target=join(on.root,'backups');
+  await runPersonalBackupRotate([on.file,target],{now:first,dump,listDump});
+  const older=await innerOf(target,personalBackupRotateStamp(first));
+  // Um diretório do backup anterior trocado por link para os dados vivos, e um arquivo que já é o inode vivo.
+  await rm(join(older,'data','accounts'),{recursive:true});
+  await symlink(join(on.data,'accounts'),join(older,'data','accounts'));
+  await unlink(join(older,'data','verificacoes','relatorio.json'));
+  await link(join(on.data,'verificacoes','relatorio.json'),join(older,'data','verificacoes','relatorio.json'));
+  await runPersonalBackupRotate([on.file,target],{now:second,dump,listDump}).catch(()=>undefined);
+  const newer=await innerOf(target,personalBackupRotateStamp(second));
+  const live=await lstat(join(on.data,'verificacoes','relatorio.json'));
+  assert.notEqual((await lstat(join(newer,'data','verificacoes','relatorio.json'))).ino,live.ino);
+  assert.notEqual((await lstat(join(newer,'data','accounts','claude','login.json'))).ino,(await lstat(join(on.data,'accounts','claude','login.json'))).ino);
+  assert.equal(live.nlink,2,'só o vínculo feito pelo teste');
+  await runPersonalRestoreCheck([newer],{listDump});
+ }finally{
+  await rm(off.root,{recursive:true,force:true});
+  await rm(on.root,{recursive:true,force:true});
+ }
+});
+
+test('avulso velho com o prefixo da instalação sai só depois de um backup datado aprovado; os de outro prefixo ficam',async()=>{
+ const env=await fixture();
+ const defaultRoot=join(env.root,'padrao');
+ const dest=personalBackupDefaultDestination(env.file,defaultRoot);
+ const prefix=dest.slice(defaultRoot.length+1);
+ const now=new Date();
+ const old=new Date(now.getTime()-10*24*60*60*1000),recent=new Date(now.getTime()-2*24*60*60*1000);
+ const loose=async(name:string,when:Date,inner='agent-control-x')=>{
+  const folder=join(defaultRoot,name);
+  await mkdir(join(folder,inner),{recursive:true});
+  await writeFile(join(folder,inner,'database.dump'),'x');
+  await utimes(join(folder,inner,'database.dump'),when,when);
+  await utimes(join(folder,inner),when,when);
+  await utimes(folder,when,when);
+  return folder;
+ };
+ try{
+  await mkdir(dest,{recursive:true});
+  const gone=await loose(`${prefix}-antes-retirada-20261120`,old);
+  const dbOnly=await loose(`${prefix}-db-pre116-abc`,old);
+  const fresh=await loose(`${prefix}-antes-hoje`,recent);
+  const other=await loose('nexo-antes-imagem-20261120',old);
+  const otherInstallation=await loose(`${prefix}-outra`,old,'20261101-030000');
+  const outside=join(env.root,'fora');
+  await mkdir(outside);
+  await utimes(outside,old,old);
+  await symlink(outside,join(defaultRoot,`${prefix}-antes-link`));
+  // Conferência do backup novo falha: nenhum avulso sai.
+  await assert.rejects(runPersonalBackupRotate([env.file],{now,dump,defaultRoot,listDump:async()=>{throw new Error('ilegível');}}),RestoreCheckRefusal);
+  for(const folder of [gone,dbOnly])await lstat(folder);
+  const later=new Date(now.getTime()+1000);
+  const lines=await runPersonalBackupRotate([env.file],{now:later,dump,defaultRoot,listDump});
+  assert.match(lines.join('\n'),/Removidos: 2/);
+  await assert.rejects(lstat(gone));
+  await assert.rejects(lstat(dbOnly));
+  for(const folder of [fresh,other,otherInstallation])assert.equal((await lstat(folder)).isDirectory(),true,folder);
+  assert.equal((await lstat(join(defaultRoot,`${prefix}-antes-link`))).isSymbolicLink(),true);
+  await lstat(outside);
+  assert.equal((await readdir(defaultRoot)).some(name=>name.startsWith('.removendo-')||name.startsWith('.retencao-')),false);
+ }finally{await rm(env.root,{recursive:true,force:true});}
 });
