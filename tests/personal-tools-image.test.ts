@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {test} from 'node:test';
 import {buildCommonImage,builderName,candidateTag,COMMON_TAG,PROVED_COLLECTORS,REPLACED_MODULES} from '../scripts/personal-tools-image.mjs';
 import {buildImages} from '../scripts/personal-images.mjs';
-import {LABEL_INSTALLATION,LABEL_KIND,LABEL_PROJECT,installationName,ownerLabelArgs,ownerLabels} from '../scripts/ac-labels.mjs';
+import {LABEL_INSTALLATION,LABEL_KIND,LABEL_PROJECT,installationName,ownerLabelArgs,ownerLabels,projectLabel} from '../scripts/ac-labels.mjs';
 
 const id=(c:string)=>'sha256:'+c.repeat(64);
 const project='61713a2a-3955-4b28-875a-e906d301a85d';
@@ -81,6 +81,10 @@ test('the common image is built on the dedicated builder, proved, and only then 
   assert.deepEqual(docker(calls,'buildx','prune').map(call=>call.args),[['buildx','prune','--builder',builder,'--all','--force']]);
   assert.ok(!calls.some(call=>['rmi','rm','prune'].includes(call.args[0]!)||(call.args[0]==='image'&&call.args[1]!=='inspect')||call.args[0]==='builder'||call.args[0]==='system'));
   assert.deepEqual(registrations(calls),REPLACED_MODULES.map((module,index)=>[module,id(String(index+1))]));
+  // The dedicated builder does not stay running: it is stopped after the prune, and only it.
+  const stop=docker(calls,'buildx','stop');
+  assert.deepEqual(stop.map(call=>call.args),[['buildx','stop',builder]]);
+  assert.ok(calls.indexOf(stop[0]!)>calls.indexOf(docker(calls,'buildx','prune')[0]!));
  }finally{l.cleanup();}
 });
 
@@ -106,6 +110,7 @@ test('a failed build pins nothing and still prunes only the dedicated builder',(
   assert.equal(existsSync(join(l.data,'simple-tools-image.json')),false);
   assert.equal(docker(calls,'run').length,0);
   assert.deepEqual(docker(calls,'buildx','prune').map(call=>call.args[3]),[builderName(l.file)]);
+  assert.deepEqual(docker(calls,'buildx','stop').map(call=>call.args[2]),[builderName(l.file)]);
  }finally{l.cleanup();}
 });
 
@@ -115,6 +120,7 @@ test('--manter-cache keeps the dedicated cache; a rebuild registers the previous
   writeFileSync(join(l.data,'simple-tools-image.json'),JSON.stringify({image:id('9')}),{mode:0o600});
   assert.equal(buildCommonImage({run,installationFile:l.file,productRoot:l.product,keepCache:true}).pinned,true);
   assert.equal(docker(calls,'buildx','prune').length,0);
+  assert.equal(docker(calls,'buildx','stop').length,1);
   assert.deepEqual(registrations(calls)[0],['simple-tools',id('9')]);
  }finally{l.cleanup();}
 });

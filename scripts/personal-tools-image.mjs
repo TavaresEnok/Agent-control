@@ -103,6 +103,9 @@ export function buildCommonImage({run=defaultRun,installationFile,productRoot=ro
  }finally{
   // The dedicated builder's cache is ours alone; the daemon's cache and the default builder are never touched.
   if(!keepCache)run('docker',['buildx','prune','--builder',builder,'--all','--force'],{stdio:'ignore'});
+  // `buildx create` takes no labels for its BuildKit container and state volume (buildx_buildkit_<builder>0, ..._state):
+  // they are recognised by the reserved builder name. Stopped here, the container does not stay running after the build.
+  run('docker',['buildx','stop',builder],{stdio:'ignore'});
  }
  const registered=[],unregistered=[];
  const register=(module,id)=>{if(!id)return;(projectId&&registerCandidate({run,productRoot,installationFile:file,projectId,module,image:id})?registered:unregistered).push(`${module} ${id.slice(0,19)}`);};
