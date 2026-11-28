@@ -11,7 +11,9 @@ import {loadInstallation, type Installation} from './installation.ts';
 import {assertInstallationMigrations,migrationsPendingText} from './installation-readiness.ts';
 import {Ledger, type VerificationModule} from './ledger.ts';
 import {abortPersonalVerifyForLeaseLoss, keepPersonalVerifyLease, releasePersonalVerifyLease} from './personal-verify-cli.ts';
-import {examRunOptions} from './verify-command.ts';
+import {examRunOptions, trackExamProgress} from './verify-command.ts';
+import {examStopText, isImmediateStop, isInfrastructureFailure} from './exam-breaker.ts';
+import {examDependencyText, installationExamPreflight} from './exam-preflight.ts';
 import {
   authorizeProjectHttpsOrigin,
   probePublishedHttpsOrigins,
@@ -128,9 +130,12 @@ const recheckGuidance: Record<string, string> = {
 export function moduleCliFailureText(error: unknown, module?: VerificationModule): string {
   const code = error instanceof Refusal ? error.code : error instanceof Error ? error.message : '';
   if (code === 'MIGRATIONS_PENDING') return `${code}. ${migrationsPendingText}`;
+  const dependency = examDependencyText(error);
+  if (dependency) return dependency;
   const incomplete = (error as {examIncomplete?: ExamIncomplete} | null)?.examIncomplete;
   if (code === 'MODULE_EXAM_INCOMPLETE' && incomplete) {
-    return `O modelo não examinou ${incomplete.unjudged} de ${incomplete.total} arquivos (código ${incomplete.code}). Relatório parcial em ${incomplete.directory}.`;
+    const stop = isInfrastructureFailure(incomplete.code) || isImmediateStop(incomplete.code) ? `${examStopText(incomplete.code)} ` : '';
+    return `${stop}O modelo não examinou ${incomplete.unjudged} de ${incomplete.total} arquivos (código ${incomplete.code}). Relatório parcial em ${incomplete.directory}.`;
   }
   if (code === 'VERIFY_USAGE' && module) {
     const origin = module === 'prontidao' ? ' [--origem <https://...>]' : '';
@@ -280,6 +285,8 @@ export type PersonalModuleCliDeps = {
   leaseHeartbeatMs?: number;
   onQuotaWait?: (info: {purpose: 'examiner' | 'reviewer'; file: string; delayMs: number}) => void;
   onResult?: (result: VerificationModuleRunResult) => void;
+  /** Dependency check before the run and each examiner batch. Default: the installation's, when the native runtime is active. */
+  preflight?: () => Promise<void>;
 };
 
 export async function runPersonalModuleCli(
@@ -388,6 +395,8 @@ export async function runPersonalModuleCli(
     });
 
     let runningTask: Promise<VerificationModuleRunResult> | undefined;
+    // andamento/<runId>.json with this node's PID: `personal:status` follows the run without pgrep.
+    const tracked = trackExamProgress(config.dataDirectory, project.id, runId, module);
     const waitForClaudeQuota = parsed.kind === 'run' && parsed.waitForQuota === true;
     const execute = async (signal: AbortSignal) => {
       const passiveTlsEvidence: ProntidaoPassiveEvidence | undefined =
@@ -400,6 +409,8 @@ export async function runPersonalModuleCli(
       }) : undefined;
       const commit = measurement?.commit ?? await readHead(project.repo);
       signal.throwIfAborted();
+      const preflight = deps?.preflight ?? (config.nativeBootstrap?.state === 'active' && !deps?.moduleExamRuntime
+        ? installationExamPreflight(config, ledger) : undefined);
       const runExam = measurement ? undefined : createPersonalModuleExam({
         ledger, principal: project.owner, authority: authority!, commit,
         mapEnabled: project.economy?.map,
@@ -411,8 +422,14 @@ export async function runPersonalModuleCli(
         ...(waitForClaudeQuota ? {waitForClaudeQuota: true} : {}),
         ...(deps?.clock ? {clock: deps.clock} : {}),
         ...(deps?.onQuotaWait ? {onQuotaWait: deps.onQuotaWait} : {}),
+        ...(project.economy?.maxModelCalls !== undefined ? {maxModelCalls: project.economy.maxModelCalls} : {}),
+        ...(preflight ? {preflight} : {}),
+        onProgress: ({phase, judged, total, modelCalls, lastFailureCode, failureStreak}) => {
+          void tracked.update({phase, judged, total, modelCalls, failureStreak, ...(lastFailureCode ? {lastFailureCode} : {})});
+        },
       });
       return runVerificationModule({
+        ...(preflight && runExam ? {preflight} : {}),
         isolation:config.isolation??'simple',
         module,
         ledger,
@@ -455,12 +472,19 @@ export async function runPersonalModuleCli(
         },
       );
       deps?.onResult?.(result);
+      const stopCode = result.examIncomplete?.code;
+      await tracked.finish(stopCode && (isInfrastructureFailure(stopCode) || isImmediateStop(stopCode)) ? 'stopped'
+        : result.examIncomplete || result.hasToolFailure || providerLimited ? 'failed' : 'done',
+      stopCode ? {note: examStopText(stopCode), lastFailureCode: stopCode} : {});
       if (providerLimited || result.examIncomplete?.code === 'PROVIDER_USAGE_LIMIT') throw new Refusal('PROVIDER_USAGE_LIMIT', 409);
       if (result.examIncomplete) throw incompleteExam(result, result.examIncomplete);
       if (result.hasToolFailure) {
         throw new Refusal('VERIFY_TOOLS_FAILED', 409);
       }
       return moduleRunLines(result);
+    } catch (error) {
+      await tracked.finish('failed', error instanceof Refusal ? {lastFailureCode: error.code} : {});
+      throw error;
     } finally {
       stopLease();
       // Let the aborted run stop its collector and finish fenced cleanup before

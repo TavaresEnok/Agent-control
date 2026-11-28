@@ -285,6 +285,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
   const retention: ModuleRetention = {dataDirectory: input.dataDirectory, projectId: input.projectId, roundId: runId};
   const createdAt = input.createdAt ?? new Date();
   await assertDiskSpaceForLaunch(launchVolumesOf(input.ledger, input.dataDirectory));
+  await input.preflight?.();
   const preparedDir = join(await requireDataDirectory(input.dataDirectory), 'verificacoes', input.projectId,
     moduleReportDirectoryName(createdAt, runId, input.module));
   const timeoutMs = input.timeoutMs ?? DEFAULT_COLLECTOR_TIMEOUT_MS;

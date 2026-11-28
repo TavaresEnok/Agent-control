@@ -122,6 +122,10 @@ export type DesignModuleInput = {
   createMode?: boolean;
   /** Tokens já em mãos, como o tokens.json que o modo criar gerou. Ganha da chave `tokens` do config. */
   brandTokens?: {path: string; text: string};
+  /** economy.maxModelCalls, a conferência das dependências (antes do exame e de cada chamada do examinador) e o andamento. */
+  maxModelCalls?: number;
+  preflight?: () => Promise<void>;
+  onProgress?: DesignExamineInput['onProgress'];
 };
 
 export type DesignModuleResult = {
@@ -137,6 +141,8 @@ export type DesignModuleResult = {
   visualRequested?: number;
   visualJudged?: number;
   visualMissing?: string[];
+  /** Código que parou o exame (disjuntor, teto de chamadas, disco ou dependência). O relatório é parcial. */
+  stopped: string | null;
 };
 
 /**
@@ -154,6 +160,8 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
   }
   const target = assertDesignTarget(input.targetUrl);
   await assertDiskSpaceForLaunch(launchVolumesOf({launchVolumes: input.launchVolumes}, input.dataDirectory));
+  // Before the image runs or any seat is reserved: a dependency down refuses the exam (EXAM_DEPENDENCY_DOWN).
+  await input.preflight?.();
   const rawDesignConfig = await readRepoDesignConfig(input.repo, input.files);
   const projectConfig = parseDesignProjectConfig(rawDesignConfig);
   const hasProjectConfig = rawDesignConfig !== undefined && rawDesignConfig.trim().length > 0;
@@ -321,6 +329,9 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
       ...(input.scoreVisual === true ? {scoreVisual: true} : {}),
       ...(reference?.note ? {referenceNote: reference.note} : {}),
       ...(staged.references.length > 0 ? {references: staged.references} : {}),
+      ...(input.maxModelCalls !== undefined ? {maxModelCalls: input.maxModelCalls} : {}),
+      ...(input.preflight ? {preflight: input.preflight} : {}),
+      ...(input.onProgress ? {onProgress: input.onProgress} : {}),
     });
     const stageNote = await readDesignCaptureStageNote();
     if (stageNote !== undefined) notes.push(stageNote);
@@ -333,6 +344,11 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     const at = notes.indexOf(EXAM_LOGIN_STALE_TEXT);
     if (at >= 0) notes.splice(at, 1);
     notes.unshift(EXAM_LOGIN_STALE_TEXT);
+  }
+  if (examined.stopped) {
+    // The warning leads the note, so a partial report never reads as a finished exam.
+    const at = notes.findIndex(note => note.startsWith('Exame parado'));
+    if (at > 0) notes.unshift(...notes.splice(at, 1));
   }
   const strip = takeExamStripNote(input.intentId);
   if (strip) notes.push(strip);
@@ -436,6 +452,7 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     coverageMarkdown: read.coverageMarkdown,
     visualLow: examined.visual.some(row => row.examiner.some(score => score.score < 8)),
     loginStale: examined.loginStale,
+    stopped: examined.stopped,
     captureLoginFailed: loginState !== undefined && image?.captureLoginFailed === true,
     visualUnjudged: visualIncomplete,
     ...(input.scoreVisual === true

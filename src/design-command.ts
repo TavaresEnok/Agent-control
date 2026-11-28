@@ -20,6 +20,7 @@ import {Ledger} from './ledger.ts';
 import {composePersonalRuntime} from './personal-runtime.ts';
 import type {DesignWorker} from './design-types.ts';
 import {containFailure} from './failure-log.ts';
+import {installationExamPreflight} from './exam-preflight.ts';
 import {recoverPersonalOrphanedExams} from './personal-orphaned-exams.ts';
 
 const MAX_DESIGN_FILES = 400;
@@ -50,7 +51,9 @@ export type ResolvedPersonalDesign = {
   authority: Authority;
   projectId: string;
   repo: string;
-  economy?: {map: boolean; measurement: boolean; managerDiscipline?: boolean; batch?: boolean; batchTokens?: number; batchFiles?: number};
+  economy?: {map: boolean; measurement: boolean; managerDiscipline?: boolean; batch?: boolean; batchTokens?: number; batchFiles?: number; maxModelCalls?: number};
+  /** Exam dependencies of the installation (egress proxy, database, native worker image) plus `images`; EXAM_DEPENDENCY_DOWN. */
+  preflight?(images?: readonly string[]): Promise<void>;
   dataDirectory: string;
   commit: string;
   intentId: string;
@@ -482,6 +485,7 @@ export async function resolvePersonalDesign(
       projectId: project.id,
       repo: project.repo,
       economy: project.economy,
+      preflight: images => installationExamPreflight(config, ledger, images)(),
       dataDirectory: config.dataDirectory,
       commit,
       intentId,
