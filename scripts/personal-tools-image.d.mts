@@ -1,0 +1,12 @@
+import type {Run} from './personal-images.mjs';
+export const COMMON_TAG:string;
+export const PROVED_COLLECTORS:string[];
+export const REPLACED_MODULES:string[];
+export function builderName(installationFile:string):string;
+export function candidateTag(installationFile:string):string;
+export function ensureBuilder(input:{run?:Run;builder:string}):'existing'|'created';
+export function proveImage(input:{run?:Run;image:string;installation:string}):string[];
+export function readPin(dataDirectory:string):string|undefined;
+export function writePin(input:{dataDirectory:string;image:string;builder:string;now?:Date}):void;
+export function registerCandidate(input:{run?:Run;productRoot?:string;installationFile:string;projectId:string;module:string;image:string}):boolean;
+export function buildCommonImage(input:{run?:Run;installationFile:string;productRoot?:string;keepCache?:boolean;now?:Date}):{pinned:boolean;image:string;builder:string;failures:string[];registered:string[];unregistered:string[]};

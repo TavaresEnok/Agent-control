@@ -6,16 +6,15 @@ import {readPrivateFile} from './installation.ts';
 
 const exec=promisify(execFile);
 export const commonToolTag='agent-control-exam-tools:simple';
+/** The common exam image, only when `personal:tools-image` proved and pinned it. Without the pin, each module uses its own image:
+ * a local tag alone (a manual or failed build) is never trusted. Resolved once per run, so a later pin cannot switch a running collector. */
 export async function availableSimpleToolsImage(dataDirectory:string){
- let reference=commonToolTag;
+ let image:unknown;
  try{
-  const {image}=JSON.parse((await readPrivateFile(join(dataDirectory,'simple-tools-image.json'))).toString());
-  if(typeof image!=='string'||!/^sha256:[a-f0-9]{64}$/.test(image))throw new Refusal('VERIFY_IMAGE_UNPINNED');
-  reference=image;
- }catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
- // An existing single-user installation can use the shared local build.
- // Resolve once per run, so moving the tag cannot switch a running collector.
- return localImageId(reference);
+  ({image}=JSON.parse((await readPrivateFile(join(dataDirectory,'simple-tools-image.json'))).toString()));
+ }catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return undefined;throw error;}
+ if(typeof image!=='string'||!/^sha256:[a-f0-9]{64}$/.test(image))throw new Refusal('VERIFY_IMAGE_UNPINNED');
+ return localImageId(image);
 }
 
 export async function localImageId(reference: string) {

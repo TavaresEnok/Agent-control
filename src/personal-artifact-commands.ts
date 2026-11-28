@@ -23,7 +23,7 @@ type ArtifactCommand=(typeof ARTIFACT_COMMANDS)[number];
 
 export const ARTIFACT_USAGE=[
  '--registrar-worktree --projeto <id> --caminho <dir> --ramo <ramo> --base <ramo> [--adotar]',
- '--registrar-imagem --projeto <id> --modulo <modulo|native-runtime> --imagem <sha256:id>',
+ '--registrar-imagem --projeto <id> --modulo <modulo|native-runtime|simple-tools> --imagem <sha256:id>',
  '--registrar-temporario --projeto <id> --rodada <rodada> --caminho </tmp/ac-...>',
  '--encerrar-rodada --projeto <id> --rodada <rodada>',
  '--retencao-artefatos [--aplicar]',
