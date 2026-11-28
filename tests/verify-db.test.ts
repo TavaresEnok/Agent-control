@@ -19,6 +19,7 @@ import {
   verifyDatabaseStampPresent,
   verifyDatabaseStampsToDiscard,
   repositoryHasJava,
+  verifyDatabaseStampHasJava,
   verifyJavaDatabaseWanted,
 } from '../src/verify-db.ts';
 
@@ -902,6 +903,27 @@ test('a busca só pede a base Java quando javaDb não é false', async () => {
   }
   assert.deepEqual(seen.map((args) => args.includes('AC_VERIFY_JAVA_DB=0')), [true, false, false]);
   assert.equal(seen[0]!.indexOf('AC_VERIFY_JAVA_DB=0') < seen[0]!.indexOf(image), true, 'a variável vai antes da imagem');
+});
+
+test('base Java baixada por imagem antiga é detectada, sem quebrar a publicação', async () => {
+  for (const ignores of [false, true]) {
+    const data = await privateDirectory();
+    try {
+      const plain = publishingSpawn();
+      const spawn = async (args: readonly string[]) => {
+        const code = await plain(args);
+        if (ignores) {
+          await mkdir(join(mountedDatabase(args), 'trivy', 'java-db'), {recursive: true});
+          await writeFile(join(mountedDatabase(args), 'trivy', 'java-db', 'trivy-java.db'), 'java');
+        }
+        return code;
+      };
+      const published = await refreshVerifyDatabases({dataDirectory: data, image, spawn, now, usedDiskPercent: async () => 50, javaDb: false});
+      assert.equal(await verifyDatabaseStampHasJava(published.directory), ignores);
+    } finally {
+      await rm(data, {recursive: true, force: true});
+    }
+  }
 });
 
 test('javaDb auto: só baixa a base Java quando algum projeto tem Java', async () => {

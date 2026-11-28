@@ -321,6 +321,10 @@ async function publishStamp(
     // granted a+rX on those. Listing below is what proves the stamp is readable.
     await runCommand(['chmod', '-R', 'a+rX', stamp], 'ignore', DISCARD_TIMEOUT_MS);
     const files = await listRegularFiles(stamp);
+    if (input.javaDb === false && files.some((file) => file.path === JAVA_DB_FILE)) {
+      // The pinned image predates AC_VERIFY_JAVA_DB: the stamp is complete, only the saving did not happen.
+      console.error(JSON.stringify({event: 'VERIFY_DB_JAVA_SKIP_IGNORED'}));
+    }
     const manifestBytes = Buffer.from(JSON.stringify({fetchedAt, files}, null, 2) + '\n', 'utf8');
     await writeFile(join(stamp, 'manifest.json'), manifestBytes, {mode: 0o644, flag: 'wx'});
     snapshot = {
@@ -342,6 +346,14 @@ async function publishStamp(
   }
   if (!snapshot) throw new Error('VERIFY_DB_FETCH_FAILED');
   return snapshot;
+}
+
+/** The Trivy Java database inside a stamp; verify-entrypoint.sh looks for the same file. */
+const JAVA_DB_FILE = 'trivy/java-db/trivy-java.db';
+
+/** True when the stamp carries the Trivy Java database. */
+export async function verifyDatabaseStampHasJava(stamp: string): Promise<boolean> {
+  return (await lstat(join(stamp, JAVA_DB_FILE)).catch(() => null))?.isFile() === true;
 }
 
 /** What makes a project "Java" for the Trivy Java database: Maven or Gradle builds, or a tracked archive. */

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {lstat, mkdtemp, readFile, rm, symlink, truncate, writeFile} from 'node:fs/promises';
+import {execFile} from 'node:child_process';
+import {chmod, lstat, mkdir, mkdtemp, readFile, rm, symlink, truncate, writeFile} from 'node:fs/promises';
+import {promisify} from 'node:util';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import test from 'node:test';
@@ -206,5 +208,52 @@ test('sem a base Java o trivy-fs segue válido e relata cobertura reduzida para 
     } finally {
       await rm(directory, {recursive: true, force: true});
     }
+  }
+});
+
+/**
+ * Lab proof with the real Trivy: AC_VERIFY_TRIVY_IMAGE is an image with the pinned Trivy (deploy/verify-tools.lock.json)
+ * and AC_VERIFY_TRIVY_DB a stamp's `trivy/db` folder, mounted read-only. The trivy-fs block of verify-entrypoint.sh runs as
+ * written, against a repository with pom.xml and a tracked .jar and with no Java database.
+ */
+test('laboratório: o Trivy real sem a base Java termina com código 0 e deixa o marcador', {
+  skip: !process.env.AC_VERIFY_TRIVY_IMAGE || !process.env.AC_VERIFY_TRIVY_DB ? 'sem AC_VERIFY_TRIVY_IMAGE e AC_VERIFY_TRIVY_DB' : false,
+}, async () => {
+  const entry = await readFile('deploy/verify-entrypoint.sh', 'utf8');
+  const start = entry.indexOf('scanners=secret\n');
+  const end = entry.indexOf('/repository\n', entry.indexOf('record_tool trivy-fs '));
+  assert.ok(start > 0 && end > start, 'o bloco do trivy-fs existe');
+  const root = await mkdtemp(join(tmpdir(), 'verify-trivy-java-'));
+  const run = promisify(execFile);
+  try {
+    const repo = join(root, 'repo'), output = join(root, 'output');
+    await mkdir(join(repo, 'lib'), {recursive: true});
+    await mkdir(output);
+    await chmod(output, 0o777);
+    await writeFile(join(repo, 'pom.xml'), '<project><modelVersion>4.0.0</modelVersion><groupId>x</groupId><artifactId>y</artifactId><version>1</version>'
+      + '<dependencies><dependency><groupId>org.apache.logging.log4j</groupId><artifactId>log4j-core</artifactId><version>2.14.1</version></dependency></dependencies></project>\n');
+    await writeFile(join(repo, 'lib', 'demo.jar'), 'PK');
+    await run('git', ['-C', repo, 'init', '-q']);
+    await run('git', ['-C', repo, 'add', '-A']);
+    const script = 'record_tool() { name=$1; shift 3; code=0; "$@" > /output/$name.stdout 2> /output/$name.stderr || code=$?; echo $code > /output/$name.code; }\n'
+      + entry.slice(start, end + '/repository\n'.length);
+    await writeFile(join(root, 'trivy-fs.sh'), script);
+    await run('docker', ['run', '--rm', '--network', 'none', '--read-only', '--user', '65532:65532', '--cap-drop', 'ALL',
+      '--tmpfs', '/tmp:rw,mode=1777', '--tmpfs', '/databases/trivy:rw,mode=1777',
+      '--mount', `type=bind,src=${process.env.AC_VERIFY_TRIVY_DB},dst=/databases/trivy/db,readonly`,
+      '--mount', `type=bind,src=${repo},dst=/repository,readonly`,
+      '--mount', `type=bind,src=${join(root, 'trivy-fs.sh')},dst=/run/trivy-fs.sh,readonly`,
+      '--mount', `type=bind,src=${output},dst=/output`,
+      '--entrypoint', '/bin/sh', process.env.AC_VERIFY_TRIVY_IMAGE!, '/run/trivy-fs.sh'], {timeout: 20 * 60_000});
+    assert.equal((await readFile(join(output, 'trivy-fs.code'), 'utf8')).trim(), '0', await readFile(join(output, 'trivy-fs.stderr'), 'utf8').catch(() => ''));
+    assert.equal((await lstat(join(output, 'trivy-fs.sem-java-db'))).isFile(), true);
+    const report = JSON.parse(await readFile(join(output, 'trivy-fs.json'), 'utf8')) as {Results?: {Target: string; Vulnerabilities?: unknown[]}[]};
+    const targets = (report.Results ?? []).map(result => result.Target);
+    assert.ok((report.Results ?? []).some(result => result.Target === 'pom.xml' && (result.Vulnerabilities?.length ?? 0) > 0), 'o pom.xml continua examinado contra a base');
+    assert.ok(!targets.some(target => target.endsWith('.jar')), 'o .jar fica fora');
+    const result = await collectToolFindings(output);
+    assert.match(result.tools.find(tool => tool.name === 'trivy-fs')?.reason ?? '', /cobertura reduzida para Java/);
+  } finally {
+    await rm(root, {recursive: true, force: true});
   }
 });

@@ -14,7 +14,7 @@ import {readonlyDesignExam,type NativeModuleExamRecovery,type ModuleExamWorkRele
 import {recoverPersonalOrphanedExams} from './personal-orphaned-exams.ts';
 import {inventoryJobWork,readRetentionCursor,rotateAfter,writeRetentionCursor} from './native-work-retention.ts';
 import {composePersonalExecutionSupervisors} from './personal-runtime.ts';
-import {readCurrentVerifyDatabase,refreshVerifyDatabases,runVerifyDatabaseRetention,verifyJavaDatabaseWanted} from './verify-db.ts';
+import {readCurrentVerifyDatabase,refreshVerifyDatabases,runVerifyDatabaseRetention,verifyDatabaseStampHasJava,verifyJavaDatabaseWanted} from './verify-db.ts';
 import {checkPersonalDockerDependencies} from './personal-docker-dependencies.ts';
 
 const imageId=/^sha256:[a-f0-9]{64}$/;
@@ -31,7 +31,8 @@ export type MaintenanceDeps={
  /** Planning calls not yet finished. Planning rows do not name their image, so any open call keeps every retired planning image. */
  openPlanningJobs?:()=>Promise<number>;
  /** Publishes a new vulnerability database. Failure must leave the previous stamp in place. */
- refreshDatabases?:(dataDirectory:string)=>Promise<void>;
+ /** Lines it returns are added to the stage's report. */
+ refreshDatabases?:(dataDirectory:string)=>Promise<void|string[]>;
  /** Retention of `work/` of terminal jobs. Tests replace it. */
  jobRetention?:(config:Installation,apply:boolean)=>Promise<string[]>;
  /** Retention of old vulnerability database stamps. Tests replace it. */
@@ -118,6 +119,14 @@ export async function verifyDatabaseStorage(config:Installation,deps:{registered
   }))();
  }catch{return {keep,javaDb:true};}
  return {keep,javaDb:await verifyJavaDatabaseWanted(mode,[config.project.repo,...config.projects.map(project=>project.repo),...registered],deps.hasJava)};
+}
+
+/** What the operator reads about the Trivy Java database after a refresh. An image built before AC_VERIFY_JAVA_DB
+ * ignores it and still downloads the base: the setting must not look effective while it is not. */
+export function javaSkipNotes(wanted:boolean,present:boolean):string[]{
+ if(wanted)return [];
+ if(present)return ['Base Java do Trivy baixada mesmo com storage.verifyDb.javaDb desligado: a imagem verify fixada é anterior a essa opção. Reconstrua a imagem verify (e a simple-tools, no modo simples), fixe os digests novos e registre as candidatas com --registrar-imagem para a economia valer.'];
+ return ['Base Java do Trivy não baixada (nenhum projeto com Java): arquivos .jar/.war/.ear ficam fora do exame de vulnerabilidades.'];
 }
 
 /** The AGENTS.md order: `work/` of terminal jobs first (the largest and most urgent under disk pressure), then old
@@ -600,8 +609,12 @@ async function runMaintenanceStages(config:Installation,file:string,deps:Mainten
  });
  await stage('bases',async()=>{
   try{
-   await (deps.refreshDatabases??(async()=>{await refreshVerifyDatabases({dataDirectory:config.dataDirectory,simple:simpleIsolation(config),...await verifyDatabaseStorage(config)});}))(config.dataDirectory);
-   return {outcome:'ok',lines:['Bases de vulnerabilidade atualizadas.']};
+   const notes=await (deps.refreshDatabases??(async()=>{
+    const storage=await verifyDatabaseStorage(config);
+    const published=await refreshVerifyDatabases({dataDirectory:config.dataDirectory,simple:simpleIsolation(config),...storage});
+    return javaSkipNotes(storage.javaDb,await verifyDatabaseStampHasJava(published.directory));
+   }))(config.dataDirectory);
+   return {outcome:'ok',lines:['Bases de vulnerabilidade atualizadas.',...(notes??[])]};
   }catch{return {outcome:'failed',lines:['Bases de vulnerabilidade não atualizadas. A base anterior permanece.']};}
  });
  if(options.retention)await stage('retention',async()=>{
