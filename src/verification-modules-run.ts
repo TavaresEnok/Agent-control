@@ -27,7 +27,7 @@ import {isSecretClassBasename} from './verify-redact.ts';
 import {Achado, CoverageRow, REMEDIATION_ACCEPTANCE, VerifyWorkerCall} from './verify-types.ts';
 import {DEFAULT_COLLECTOR_TIMEOUT_MS, EXCERPT_LIMIT, MAX_COLLECTOR_STDOUT_BYTES, MULTILINE_CONTROL_CHAR, ModuleCollectorOutput, ModuleRawFinding, ModuleToolCoverage, type VerificationModuleRunInput, type VerificationModuleRunResult, assertModuleRepoRelativePath, assertReportOutsideRepo, assertVerificationModule, collectorMeasuredDetailFile, documentationCoverage, isErrno, isProtectedLocation, locateRepoFile, resolveInsideRepo} from './verification-modules-contracts.ts';
 import {parseModuleCollectorOutput, sanitizeText, validateModuleCollectorObject} from './verification-modules-collector.ts';
-import {type ModuleRetention, assertPinnedModuleImage, prepareModuleSnapshot, readOptionalPinnedModuleImage, readPinnedModuleImage, removeModuleSnapshot, runModuleCollectorContainer} from './verification-modules-container.ts';
+import {type ModuleRetention, assertPinnedModuleImage, moduleOwnerLabelArgs, prepareModuleSnapshot, readOptionalPinnedModuleImage, readPinnedModuleImage, removeModuleSnapshot, runModuleCollectorContainer} from './verification-modules-container.ts';
 import {assertNoLiveAccessKey, moduleReportDirectoryName, moduleReviewPromptEvidence, requireDataDirectory, writeModuleReport} from './verification-modules-report.ts';
 import {reconcileReports, recoverModuleContainers} from './verification-modules-persistence.ts';
 
@@ -235,7 +235,8 @@ export async function validateModuleCollectorPublication(snapshot: string, colle
   }
 }
 
-async function selectModuleCollector(input: VerificationModuleRunInput): Promise<{
+/** Exported for tests. In the simple isolation, the pinned common image wins; without its pin, the module's own pinned image. */
+export async function selectModuleCollector(input: VerificationModuleRunInput): Promise<{
   image?: string; commonTools?: boolean; hostCollector?: HostCollector;
 }> {
   const image = input.image === undefined ? undefined : assertPinnedModuleImage(input.image);
@@ -347,7 +348,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       const recoveryDirectory = join(await requireDataDirectory(input.dataDirectory), 'performance-docker');
       await reconcilePerformanceResources({recoveryDirectory, signal: input.signal});
       const {coverage, findings, measurement, comparedExamId} = await runPerformanceModule({
-        snapshotPath: snapshot, imageDigest: image!, sharedCheckout:Boolean(shared), commonPin:commonTools?image:undefined, signal: input.signal, timeoutMs, maxStdoutBytes,
+        snapshotPath: snapshot, imageDigest: image!, sharedCheckout:Boolean(shared), commonPin:commonTools?image:undefined, ownerLabels: moduleOwnerLabelArgs(retention, input.module), signal: input.signal, timeoutMs, maxStdoutBytes,
         recoveryDirectory, previousMeasurements: signal => previousPerformanceMeasurements(input, runId, image!, signal),
       });
       collectorData = validateModuleCollectorObject({coverage, findings}, input.module);

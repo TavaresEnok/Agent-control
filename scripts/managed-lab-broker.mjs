@@ -13,7 +13,7 @@ const probeHostPath=file('sandbox-probe.mjs'),implementationPath=file('synthetic
 const config={hostRoot:`${root}/.state/sandbox/managed-${tag}`,probeHostPath,probeSha256:await sha(probeHostPath),
  implementationPath,implementationSha256:await sha(implementationPath),verificationPath,verificationSha256:await sha(verificationPath),
  verifierPath,verifierSha256:await sha(verifierPath),imageId:'sha256:9914706a4d692f9e87c9c17313efbf3f0544574e1ebc3ddf77512a54eb5cb7b3',
- socketPath:'/run/ac-broker/control.sock',keyPath:'/run/ac-broker/key',databaseUrl};
+ socketPath:'/run/ac-broker/control.sock',keyPath:'/run/ac-broker/key',databaseUrl,installation:'managed-lab-'+tag};
 const instance=await brokerMain(config);
 const stop=()=>void instance.stop().then(()=>process.exit(0)).catch(()=>process.exit(1));
 process.once('SIGTERM',stop);process.once('SIGINT',stop);

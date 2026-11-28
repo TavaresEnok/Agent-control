@@ -34,6 +34,7 @@ import {examLoginNeedsRefresh,postgresAccountLoginLock,prepareClaudeExamAccessTo
 import {nativeReviewMapScope,nativeTaskWithRepoMap} from './native-repo-map.ts';
 import {Id,PreLaunchExamReason,withGrantLaunchLock,UnstartedExamRetirementPending,readonlyDesignExam,NativeExecutionRequest,toolsEntrypoint,moduleExamCompanion,workerEntrypoint,retireNativePrivateNetwork,readonlySecurityExam,readonlyExamIsolation,stageDesignExamCaptures} from './native-execution-shared.ts';
 import {NativeExecutionTerminalWork} from './native-execution-terminal-work.ts';
+import {installationName,ownerLabels} from '../scripts/ac-labels.mjs';
 export {ModuleExamRecoveryPreserved,terminalWorkClass,terminalWorkLockKey,grantLaunchLockKey,openGrantLaunchLockSession,tryGrantLaunchLock,releaseGrantLaunchLock,withGrantLaunchLock,UnstartedExamRetirementPending,readonlyDesignExam,NativeExecutionRequest,retireNativePrivateNetwork,readonlySecurityExam,readonlyExamIsolation,stageDesignExamCaptures} from './native-execution-shared.ts';
 export type {ModuleExamRecoveryReason,NativeModuleExamRecovery,ModuleExamWorkRefusal,ModuleExamWorkRelease,TerminalWorkCategory,TerminalWorkRefusal,TerminalWorkRelease,TerminalWorkObserver,NativeExecutionSupervisorConfig,NativeExecutionOutcome,NativeExecutionRecovery} from './native-execution-shared.ts';
 /** Effect supervisor only. A trusted Cezar stage must already own the grant,
@@ -210,7 +211,9 @@ export class NativeExecutionSupervisor extends NativeExecutionTerminalWork{
   let workerMounts:{source:string;destination:string;writable:boolean}[]=[];
   let toolsMounts:{source:string;destination:string;writable:boolean}[]=[];
   let launchTask=input.task;
-  const labels={'agent-control.contract':'native-execution-v1','agent-control.job':input.jobId,'agent-control.launch':hash};
+  // Ownership labels sit beside the identity labels; the identity checks read only their own keys.
+  const owner=this.config.dataDirectory?ownerLabels({installation:installationName(this.config.dataDirectory),project:String(g.project_id),kind:'native-'+input.role}):{};
+  const labels={...owner,'agent-control.contract':'native-execution-v1','agent-control.job':input.jobId,'agent-control.launch':hash};
   let inClaudePrep=false;
   try{
    if(claudeExam){

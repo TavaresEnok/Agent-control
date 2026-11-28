@@ -24,6 +24,7 @@ import {collectToolFindings} from './verify-collect.ts';
 import {claimVerifyDatabaseStamp, readCurrentVerifyDatabase, releaseVerifyDatabaseStamp, verifyDatabaseStampPresent} from './verify-db.ts';
 import {attachInternalTarget, dynamicScanPlan} from './verify-dynamic.ts';
 import {VERIFY_RUNTIME_BIN, verifyExamArguments} from './verify-image.ts';
+import {installationName, ownerLabelArgs} from '../scripts/ac-labels.mjs';
 import {inheritNativeWorkerCapacityPoll, isCapacityNativeWorker, type SecurityExamSupervisor} from './verify-native-launch.ts';
 import {
   runResolvedPersonalSecurityVerification,
@@ -451,6 +452,7 @@ export async function defaultRunTools(
       image: spec.image,
       repository: spec.staticPersonalExam && !spec.commonTools ? join(snapshot, 'repository') : snapshot,
       commonTools:spec.commonTools,
+      ...(spec.retention?{labels:ownerLabelArgs({installation:installationName(spec.retention.dataDirectory),project:spec.retention.projectId,kind:'exam-verify'})}:{}),
       databases: spec.databases,
       output: spec.output,
       memoryBytes: EXAM_MEMORY_BYTES,

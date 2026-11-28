@@ -5,6 +5,8 @@ export function runPerformanceModule(input: {
   imageDigest: string;
   sharedCheckout?: boolean;
   commonPin?:string;
+  /** `--label key=value` arguments of the installation and project, added to every container this run creates. */
+  ownerLabels?: readonly string[];
   recoveryDirectory: string;
   previousMeasurement?: PreviousPerformanceMeasurement;
   previousMeasurements?: AsyncIterable<PreviousPerformanceMeasurement> | ((signal: AbortSignal) => AsyncIterable<PreviousPerformanceMeasurement>);

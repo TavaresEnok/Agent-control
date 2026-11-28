@@ -40,6 +40,7 @@ type RecordedLaunch = {
   moduleExam: boolean;
   role: string;
   writePaths: string[];
+  labels?: Record<string, string>;
 };
 
 async function startLaunchDocker(
@@ -129,7 +130,7 @@ async function startLaunchDocker(
       if (input && output && c.State.Running && name === key && existsSync(join(input, 'launch.json'))) {
         const launch = JSON.parse(await readFile(join(input, 'launch.json'), 'utf8')).payload as RecordedLaunch;
         const result = answer(launch);
-        launches.push(launch);
+        launches.push({...launch, labels: c.Config.Labels});
         const exitCode = result.failureCode ? 1 : 0;
         await writeFile(join(output, 'execution-result.json'), JSON.stringify({
           schemaVersion: 1,
@@ -331,7 +332,7 @@ test('seleção por módulo exige Sonnet 5.5 medium/high na primeira conta da ca
       id: `routing-${provider}`, provider, workerImage: image, toolsImage: image, hostRoot, accountRoot,
       protectedRepositories: [repo], signingKeyPem, providerNetworkId: 'e'.repeat(64), socketPath: socket,
       accountSubjects: accountIds.map(accountId => ({accountId, subjectDigest: accountSubjects.get(accountId)!})),
-      workerEnv: [], toolsEnv: [],
+      workerEnv: [], toolsEnv: [], dataDirectory,
     });
 
     const fullRuntime: ModuleExamRuntime = [
@@ -360,6 +361,11 @@ test('seleção por módulo exige Sonnet 5.5 medium/high na primeira conta da ca
     assert.equal(qaExam!.effort, 'medium');
     assert.equal(qaExam!.accountId, maxAccount);
     assert.equal(qaExam!.profileId, pSonnetMedMax);
+    // The worker container carries the installation and project ownership labels beside its identity labels.
+    assert.equal(qaExam!.labels?.['com.agent-control.installation'], 'data');
+    assert.equal(qaExam!.labels?.['com.agent-control.project'], project);
+    assert.equal(qaExam!.labels?.['com.agent-control.kind'], 'native-specialist');
+    assert.equal(qaExam!.labels?.['agent-control.contract'], 'native-execution-v1');
 
     assert.equal(qaColHigh!.provider, 'codex');
     assert.equal(qaColHigh!.accountId, codexAccount);
