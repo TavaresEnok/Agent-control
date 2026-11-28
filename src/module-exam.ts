@@ -501,6 +501,8 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
           checkAbort(input.signal);
           seat = await reserveSeat('examiner');
           checkAbort(input.signal);
+          // Again after the seat: a sibling lane may have opened the breaker while this one waited for it.
+          breaker.admit();
           const prepare = await use(seat);
           launched = true;
           breaker.called();
@@ -748,6 +750,7 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
           seat = await reserveSeat('reviewer', lead.examiner!, {severity: worst, source: lead.finding.source, fromExaminer: lead.fromExaminer,
             ...(!high && skippedSeats.length ? {skip: [...skippedSeats]} : {})});
           checkAbort(input.signal);
+          breaker.admit();
           const call = prepare(seat);
           launched = true;
           breaker.called();

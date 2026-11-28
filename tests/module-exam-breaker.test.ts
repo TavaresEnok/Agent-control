@@ -9,12 +9,14 @@ const seat = (): ModuleExamSeat => ({provider: 'claude', model: 'claude-sonnet-5
 const body = (n: number) => `export const v${n} = ${n};\nexport function f${n}() { return v${n}; }\n`;
 const mapOf = (count: number) => ({files: Array.from({length: count}, (_, n) => ({file: `src/m${n}.ts`, code: body(n), reason: null})), routes: []});
 
-function harness(options: {count: number; fail?: string; refuse?: string; batch?: boolean; maxModelCalls?: number; preflight?: () => Promise<void>}) {
+function harness(options: {count: number; fail?: string; refuse?: string; batch?: boolean; maxModelCalls?: number; preflight?: () => Promise<void>; concurrency?: number}) {
   let calls = 0;
   let reservations = 0;
   const progress: Parameters<NonNullable<ModuleExamInput['onProgress']>>[0][] = [];
   const run = async (call: {task: string}) => {
     calls++;
+    // Each call takes a moment, so the lanes overlap as with the live evaluation_limit.
+    await new Promise(done => setTimeout(done, 5));
     // The native supervisor proved the job ended: only the breaker stops the exam, not the launched-and-lost rule.
     if (options.fail) throw examJobExited(new Refusal(options.fail));
     const task = JSON.parse(call.task);
@@ -26,6 +28,7 @@ function harness(options: {count: number; fail?: string; refuse?: string; batch?
     ...(options.batch === false ? {} : {batch: {tokens: 40_000, files: 20}}),
     ...(options.maxModelCalls !== undefined ? {maxModelCalls: options.maxModelCalls} : {}),
     ...(options.preflight ? {preflight: options.preflight} : {}),
+    ...(options.concurrency ? {concurrency: options.concurrency} : {}),
     scope: false,
     onProgress: item => progress.push(item),
     reserve: async () => { reservations++; if (options.refuse) throw new Refusal(options.refuse); return seat(); },
@@ -44,6 +47,14 @@ test('lote de 20 com falha de infraestrutura: no máximo 3 chamadas e exame para
   assert.equal(last.lastFailureCode, 'EXECUTION_TIMEOUT');
   assert.equal(last.failureStreak, 3);
   assert.equal(last.total, 20);
+});
+
+test('quatro vagas ao mesmo tempo: o teto é 3 + vagas - 1 chamadas, e a vaga que espera não chama depois da parada', async () => {
+  const h = harness({count: 20, fail: 'EXECUTION_TIMEOUT', batch: false, concurrency: 4});
+  const result = await examineFunctionalModule(h.input);
+  assert.ok(h.calls >= 3 && h.calls <= 3 + 4 - 1, `chamadas: ${h.calls}`);
+  assert.equal(result.stopped, 'EXECUTION_TIMEOUT');
+  assert.equal(result.coverage.filter(row => row.status === 'lido').length, 0);
 });
 
 test('lote inteiro que falha por infraestrutura não vira metades nem chamadas sozinhas', async () => {
