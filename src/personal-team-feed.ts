@@ -77,11 +77,41 @@ function changedFiles(repo:string,base:string,commit:string):Promise<string>{
  }));
 }
 
+/** The conversation id of a job's message in its current state; running and prepared share one. */
+export function teamMessageId(job:Pick<Job,'id'|'state'>){
+ return 'team-'+job.id+'-'+(job.state==='running'||job.state==='prepared'?'running':job.state);
+}
+
+/** Team message ids already in this conversation. A restart starts from them, so it neither repeats nor rewrites a message
+ * whose text would now read differently (result files, QA logs and work/ change or go away after the fact). */
+export async function publishedTeamMessageIds(pool:Pick<pg.Pool,'query'>,contextId:string):Promise<Set<string>>{
+ const rows=(await pool.query(`SELECT local_id FROM ac_personal_messages WHERE context_id=$1 AND role='manager' AND local_id LIKE 'team-%'`,[contextId])).rows as {local_id:string}[];
+ return new Set(rows.map(row=>String(row.local_id)));
+}
+
+/** One pass of the team feed: each job state is said once, across restarts. `state.published` is filled from the conversation
+ * on the first pass; if that read fails the pass says nothing and the next one tries again. */
+export async function announceTeamJobs(pool:pg.Pool,contextId:string,state:{announced:Map<string,string>;published?:Set<string>},options:TeamFeedOptions,say:(id:string,text:string)=>Promise<void>){
+ state.published??=await publishedTeamMessageIds(pool,contextId);
+ const published=state.published;
+ for(const job of await teamJobs(pool,contextId)){
+  if(state.announced.get('team|'+job.id)===job.state)continue;
+  if(!published.has(teamMessageId(job))){
+   const message=await teamMessage(job,options).catch(containFailure('TEAM_MESSAGE_UNAVAILABLE',null));
+   if(message&&!published.has(message.id)){
+    try{await say(message.id,message.text);published.add(message.id);}
+    catch(error){containFailure('TEAM_MESSAGE_NOT_PUBLISHED',undefined)(error);}
+   }
+  }
+  state.announced.set('team|'+job.id,job.state);
+ }
+}
+
 export async function teamMessage(job:Job,options:TeamFeedOptions):Promise<TeamMessage|null>{
- const id='team-'+job.id+'-'+job.state,name=who(job);
+ const id=teamMessageId(job),name=who(job);
  if(job.state==='running'||job.state==='prepared'){
   const doing={planning:'está montando o plano',programmer:'começou a programar',qa:'está verificando o resultado',reviewer:'está revisando o código',judge:'está avaliando',specialist:'começou'}[job.kind];
-  return {id:'team-'+job.id+'-running',text:`${name} ${doing}.`};
+  return {id,text:`${name} ${doing}.`};
  }
  if(job.state==='uncertain')return {id,text:`${name}: resultado incerto; o gerente vai reconciliar.`};
  if(!['completed','failed'].includes(job.state))return null;
