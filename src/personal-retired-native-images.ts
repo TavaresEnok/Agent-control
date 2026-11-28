@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto';
-import {chmod,readFile,readdir,readlink,realpath,rename,stat,unlink,writeFile} from 'node:fs/promises';
+import {chmod,readFile,readdir,readlink,rename,stat,unlink,writeFile} from 'node:fs/promises';
 import {dirname,join,resolve} from 'node:path';
 import {Installation} from './installation.ts';
 import {Ledger} from './ledger.ts';
@@ -34,24 +34,36 @@ export type RetiredNativeDeps={
  now?:()=>Date;
 };
 
-/** Start of every `server-main.ts serve <installationFile>` process on this host, read from /proc (start in clock ticks after
- * boot, USER_HZ=100 on Linux). A gateway loads installation.json once, when it starts. */
-export async function gatewayStartTimes(installationFile:string):Promise<Date[]>{
- const target=await realpath(installationFile);
- const boot=Number(/^btime (\d+)$/m.exec(await readFile('/proc/stat','utf8'))?.[1]);
+/** Start of every `server-main.ts serve <installationFile>` process, read from `proc` (start in clock ticks after boot, USER_HZ=100
+ * on Linux). A gateway loads installation.json once, when it starts. The served file is looked up inside the process's own root
+ * (`/proc/<pid>/root`), so a gateway in a container (`serve /data/installation.json` on the data volume) is matched by device and
+ * inode. Doubt never means "no gateway": a serve process whose filesystem cannot be seen (another user, a container's root) is
+ * counted, and a /proc mounted with `hidepid`, which hides other users' processes, is an error. */
+export async function gatewayStartTimes(installationFile:string,proc='/proc'):Promise<Date[]>{
+ const target=await stat(installationFile);
+ if(process.getuid?.()!==0&&/ - proc \S+ \S*\bhidepid=(?!0\b|off\b)/m.test(await readFile(join(proc,'self','mountinfo'),'utf8')))throw new Error('PROC_HIDEPID');
+ const boot=Number(/^btime (\d+)$/m.exec(await readFile(join(proc,'stat'),'utf8'))?.[1]);
  if(!Number.isSafeInteger(boot)||boot<=0)throw new Error('PROC_STAT_UNREADABLE');
  const starts:Date[]=[];
- for(const name of await readdir('/proc')){
+ for(const name of await readdir(proc)){
   if(!/^[1-9][0-9]*$/.test(name))continue;
-  let argv:string[],cwd:string,fields:string[];
+  let argv:string[],fields:string[];
   try{
-   argv=(await readFile(`/proc/${name}/cmdline`,'utf8')).split('\0');
+   argv=(await readFile(join(proc,name,'cmdline'),'utf8')).split('\0');
    const at=argv.findIndex(arg=>arg.endsWith('/server-main.ts')||arg==='server-main.ts');
    if(at<0||argv[at+1]!=='serve'||!argv[at+2])continue;
-   cwd=await readlink(`/proc/${name}/cwd`).catch(()=>'/');
-   const served=resolve(cwd,argv[at+2]!);
-   if((await realpath(served).catch(()=>served))!==target)continue;
-   const line=await readFile(`/proc/${name}/stat`,'utf8');
+   const cwd=await readlink(join(proc,name,'cwd')).catch(()=>undefined);
+   const file=argv[at+2]!;
+   if(cwd!==undefined||file.startsWith('/')){
+    try{
+     const served=await stat(join(proc,name,'root',resolve(cwd??'/',file)));
+     if(served.dev!==target.dev||served.ino!==target.ino)continue;
+    }catch(error){
+     // Absent in the process's own view: it serves another file. Any other failure (EACCES) cannot tell: counted.
+     if((error as NodeJS.ErrnoException).code==='ENOENT'||(error as NodeJS.ErrnoException).code==='ENOTDIR')continue;
+    }
+   }
+   const line=await readFile(join(proc,name,'stat'),'utf8');
    fields=line.slice(line.lastIndexOf(')')+2).split(' ');
   }catch{continue;/* the process ended while it was read */}
   const ticks=Number(fields[19]);

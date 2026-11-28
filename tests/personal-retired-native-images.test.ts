@@ -169,6 +169,47 @@ test('the gateway start times come from the processes that serve this exact inst
  }
 });
 
+test('a gateway in another mount namespace is matched by device and inode, and a serve process that cannot be seen into is counted',{skip:process.platform!=='linux'||process.getuid?.()===0},async()=>{
+ const root=await realpath(await mkdtemp(join(tmpdir(),'ac-retired-proc-')));
+ const {chmod,link,symlink}=await import('node:fs/promises');
+ try{
+  const host=join(root,'host','installation.json');
+  await mkdir(join(root,'host'));await writeFile(host,'{}');
+  const proc=join(root,'proc');
+  await mkdir(join(proc,'self'),{recursive:true});
+  await writeFile(join(proc,'stat'),'cpu 0\nbtime 1000000000\n');
+  const mountinfo='25 1 0:5 / /proc rw,nosuid - proc proc rw\n';
+  await writeFile(join(proc,'self','mountinfo'),mountinfo);
+  // A process started `ticks` hundredths of a second after boot, serving `file`, with `cwd` and `root` as given.
+  const pid=async(id:number,ticks:number,file:string,view:'container'|'other'|'hidden'|'absent')=>{
+   const dir=join(proc,String(id));
+   await mkdir(dir);
+   await writeFile(join(dir,'cmdline'),['node','--import','tsx','src/server-main.ts','serve',file,''].join('\0'));
+   await writeFile(join(dir,'stat'),`${id} (node) S `+Array.from({length:19},(_,index)=>index===18?String(ticks):'0').join(' ')+' 0 0');
+   const fs=join(root,'fs-'+id);
+   await mkdir(join(fs,'data'),{recursive:true});
+   await mkdir(join(fs,'workspace'));
+   if(view==='container')await link(host,join(fs,'data','installation.json'));
+   if(view==='other')await writeFile(join(fs,'data','installation.json'),'{}');
+   if(view==='hidden')await chmod(join(fs,'data'),0o000);
+   await symlink(fs,join(dir,'root'));
+   await symlink('/workspace',join(dir,'cwd'));
+  };
+  const {gatewayStartTimes}=await import('../src/personal-retired-native-images.ts');
+  await pid(101,100,'/data/installation.json','container');
+  await pid(102,200,'/data/installation.json','other');
+  await pid(103,300,'/data/installation.json','absent');
+  assert.deepEqual((await gatewayStartTimes(host,proc)).map(date=>date.getTime()),[(1000000000+1)*1000]);
+  await pid(104,400,'/data/installation.json','hidden');
+  try{
+   assert.deepEqual((await gatewayStartTimes(host,proc)).map(date=>date.getTime()).sort(),[(1000000000+1)*1000,(1000000000+4)*1000]);
+  }finally{await chmod(join(root,'fs-104','data'),0o700);}
+  // /proc with hidepid hides other users' processes: an empty list would only mean "cannot see", so it is an error.
+  await writeFile(join(proc,'self','mountinfo'),mountinfo.replace('proc rw\n','proc rw,hidepid=invisible\n'));
+  await assert.rejects(gatewayStartTimes(host,proc),/PROC_HIDEPID/);
+ }finally{await rm(root,{recursive:true,force:true});}
+});
+
 test('the default queries keep exactly the entries an open or recent job or planning call is bound to',{skip:!process.env.AC_TEST_DATABASE_URL,timeout:120000},async()=>{
  const fixture=await isolatedDatabase(process.env.AC_TEST_DATABASE_URL!,'retired_sql');
  const ledger=new Ledger(fixture.url);

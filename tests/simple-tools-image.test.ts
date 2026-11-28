@@ -76,6 +76,13 @@ test('a remeasurement keeps the image of its original run; once the retention re
   // A new exam of the module still runs, on the current common image.
   assert.deepEqual(await selectModuleCollector(input(dirs)),{image:common,commonTools:true});
  });
+ // Strict isolation: the same clear refusal, before any run row, never VERIFY_MODULE_IMAGE_MISSING at container creation.
+ await withDocker({[own]:own,[old]:old},async dirs=>{
+  assert.deepEqual(await selectModuleCollector({...input(dirs),isolation:'strict',image:old,remeasureOf:'5f1d2a8e-3c4b-4d6e-8f9a-0b1c2d3e4f50'}),{image:old});
+ });
+ await withDocker({[own]:own},async dirs=>{
+  await assert.rejects(selectModuleCollector({...input(dirs),isolation:'strict',image:old,remeasureOf:'5f1d2a8e-3c4b-4d6e-8f9a-0b1c2d3e4f50'}),(error:unknown)=>error instanceof Refusal&&error.code==='VERIFY_RECHECK_IMAGE_GONE'&&error.status===409);
+ });
 });
 
 test('a malformed common pin is refused, never replaced by a tag',async()=>{

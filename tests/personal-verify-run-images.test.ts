@@ -23,18 +23,23 @@ test('the verification runs keep the image of every open run and, per project an
    // Only ac_verify_runs is read: its parents (projects, contexts, intents) and the context guard are left out for this session.
    await client.query("SET session_replication_role='replica'");
    let minute=0;
-   const run=async(project:string,module:string,status:string,collector:string|null,pending=false)=>{
+   const run=async(project:string,module:string,status:string,collector:string|null,pending=false,remeasureOf:string|null=null)=>{
     minute+=1;
-    await client.query(`INSERT INTO ac_verify_runs(id,project_id,context_id,intent_id,principal_id,commit_id,status,report_dir,module,collector_image,collector_container_token,collector_container_id,collector_start_pending,created_at)
-     VALUES($1,$2,$3,$4,'owner',$5,$6,'pending',$7,$8,$9,$10,$11,timestamptz '2026-11-01T00:00:00Z'+$12*interval '1 minute')`,
-     [randomUUID(),project,randomUUID(),randomUUID(),'a'.repeat(40),status,module,collector,pending?randomUUID():null,pending?'c'.repeat(64):null,pending,minute]);
+    const id=randomUUID();
+    await client.query(`INSERT INTO ac_verify_runs(id,project_id,context_id,intent_id,principal_id,commit_id,status,report_dir,module,collector_image,collector_container_token,collector_container_id,collector_start_pending,created_at,remeasure_of)
+     VALUES($1,$2,$3,$4,'owner',$5,$6,'pending',$7,$8,$9,$10,$11,timestamptz '2026-11-01T00:00:00Z'+$12*interval '1 minute',$13)`,
+     [id,project,randomUUID(),randomUUID(),'a'.repeat(40),status,module,collector,pending?randomUUID():null,pending?'c'.repeat(64):null,pending,minute,remeasureOf]);
+    return id;
    };
    // Project one, module qa: an open run first, a finished one waiting for its container removal, an older and a newer finished run.
    await run(one,'qa','running',image('qa-open'));
    await run(one,'qa','done',image('qa-container'),true);
-   await run(one,'qa','done',image('qa-older'));
+   const older=await run(one,'qa','done',image('qa-older'));
    await run(one,'qa','failed',image('qa-latest'));
    await run(one,'qa','done',null);
+   // A later remeasurement of the older run, on its image, is not an exam: the latest exam keeps its image, the older one keeps nothing.
+   await run(one,'qa','done',image('qa-older'),false,older);
+   await run(one,'qa','failed',image('qa-older'),false,older);
    // Project one, module 1 (never covered by the common image) and project two, module qa.
    await run(one,'verify','done',image('verify-older'));
    await run(one,'verify','done',image('verify-latest'));

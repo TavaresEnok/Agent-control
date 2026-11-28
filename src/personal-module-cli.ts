@@ -447,6 +447,7 @@ export async function runPersonalModuleCli(
         ...(project.allowedAccountIds ? {allowedAccountIds: project.allowedAccountIds} : {}),
         ...(deps?.clock ? {createdAt: new Date(deps.clock.now())} : {}),
         image: measurement?.image ?? deps?.image,
+        ...(measurement && parsed.kind === 'measure' ? {remeasureOf: parsed.runId} : {}),
         ...(deps?.rootDir !== undefined ? {rootDir: deps.rootDir} : {}),
         ...(deps?.timeoutMs !== undefined ? {timeoutMs: deps.timeoutMs} : {}),
         ...(deps?.maxStdoutBytes !== undefined ? {maxStdoutBytes: deps.maxStdoutBytes} : {}),

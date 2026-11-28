@@ -11,6 +11,7 @@ import {mountPoints,mountedInside,closeRound,registerCandidateImage,registerRoun
  type CommandResult,type RetentionDeps} from '../src/personal-artifact-retention.ts';
 import {RetentionIncomplete,runRetentionStages} from '../src/personal-maintenance.ts';
 import {Refusal} from '../src/contracts.ts';
+import {withInstallationImageLock} from '../src/personal-image-lock.ts';
 
 const HOUR=3600_000;
 const gitEnv={PATH:'/usr/bin:/bin',HOME:'/nonexistent',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_TERMINAL_PROMPT:'0',LC_ALL:'C',
@@ -457,6 +458,25 @@ test('a change between the proof and the removal (a container appears) keeps the
   assert.match(text,/preservado \(mudou durante a retenção: há contêiner usando a imagem\)/);
   assert.ok(l.docker.images.has(image('a')));
   assert.deepEqual(removals(l),[]);
+ }finally{await cleanup(l);}
+});
+
+test('the second judgement and the removal of a candidate image run under the exclusive installation image lock, so no run selects it meanwhile',async()=>{
+ const l=await lab();
+ try{
+  l.docker.images.set(image('a'),{repoDigests:[]});
+  await registerOld(l,image('a'));
+  const original=l.deps.docker!;
+  const selection:string[]=[];
+  l.deps.docker=async args=>{
+   // A run selecting its image takes the shared lock: while the retention removes, it cannot.
+   if(args[0]==='image'&&args[1]==='rm')selection.push(await withInstallationImageLock(l.data,true,async()=>'free',0).catch((error:Error)=>error.message));
+   return original(args);
+  };
+  const text=(await run(l,true)).join('\n');
+  assert.match(text,/imagem sha256:aaaaaaaaaaaa \(qa\): removida/);
+  assert.deepEqual(selection,['MODULE_IMAGE_LOCK_BUSY']);
+  assert.equal(await withInstallationImageLock(l.data,true,async()=>'free',0),'free');
  }finally{await cleanup(l);}
 });
 

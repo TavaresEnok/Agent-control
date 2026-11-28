@@ -159,6 +159,7 @@ async function beginModuleRunTx(input: {
   repoPath: string;
   preparedDir: string;
   image: string | undefined;
+  remeasureOf: string | undefined;
 }): Promise<string> {
   const intentId = randomUUID();
   await input.ledger.tx(async c => {
@@ -214,9 +215,10 @@ async function beginModuleRunTx(input: {
       ],
     );
     await c.query(
-      `INSERT INTO ac_verify_runs (id, project_id, context_id, intent_id, principal_id, commit_id, status, report_dir, module, report_prepared_dir, collector_image)
-       VALUES ($1,$2,$3,$4,$5,$6,'running','pending',$7,$8,$9)`,
-      [input.runId, input.projectId, input.authority.contextId, intentId, input.principal, input.commit, input.module, input.preparedDir, input.image ?? null],
+      `INSERT INTO ac_verify_runs (id, project_id, context_id, intent_id, principal_id, commit_id, status, report_dir, module, report_prepared_dir, collector_image, remeasure_of)
+       VALUES ($1,$2,$3,$4,$5,$6,'running','pending',$7,$8,$9,$10)`,
+      [input.runId, input.projectId, input.authority.contextId, intentId, input.principal, input.commit, input.module, input.preparedDir, input.image ?? null,
+        input.remeasureOf ?? null],
     );
   });
   return intentId;
@@ -248,12 +250,14 @@ export async function selectModuleCollector(input: VerificationModuleRunInput): 
     return {image, hostCollector};
   }
   if (!needCollector) return {image};
+  // A remeasurement must keep its recorded image even if the current pin changed, in either isolation. A measurement taken on
+  // another image would never prove the original finding, so an image that the retention already removed is a clear refusal,
+  // before any run row exists, not a fallback nor a failed run. In the strict isolation an image given for a new exam keeps the
+  // container's own check.
+  if (image && (simple || input.remeasureOf !== undefined) && !await localImageId(image)) throw new Refusal('VERIFY_RECHECK_IMAGE_GONE', 409);
   if (!simple) return {image: image ?? await readPinnedModuleImage(input.module, input.rootDir)};
 
   if (image) {
-    // A remeasurement must keep its recorded image even if the current pin changed. A measurement taken on another image would
-    // never prove the original finding, so an image that the retention already removed is a clear refusal, not a fallback.
-    if (!await localImageId(image)) throw new Refusal('VERIFY_RECHECK_IMAGE_GONE', 409);
     const common = await availableSimpleToolsImage(input.dataDirectory).catch(() => undefined);
     return {image, commonTools: image === common || await isInstalledCommonImage(image)};
   }
@@ -306,6 +310,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       repoPath: input.repoPath,
       preparedDir,
       image: collector.image,
+      remeasureOf: input.remeasureOf,
     });
     return {...collector, intentId};
   });
