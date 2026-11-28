@@ -133,3 +133,114 @@ test('the default queries read the executor bindings of jobs and planning calls 
   }finally{await rm(env.root,{recursive:true,force:true});}
  }finally{await fixture.close();}
 });
+
+test('a gateway started before the last change of installation.json keeps every retired entry; one started after lets them be judged',async()=>{
+ const env=await installation();
+ try{
+  const before=await readFile(env.file,'utf8');
+  const changed=(await stat(env.file)).mtimeMs;
+  const free={executionInUse:async()=>0,planningInUse:async()=>0};
+  const old=await retireNativeImages(env.config,env.file,true,{...free,gatewayStarts:async()=>[new Date(changed+60_000),new Date(changed-1000)]});
+  assert.match(old.lines.join('\n'),/o gateway em execução começou antes da última mudança de installation.json/);
+  assert.equal(old.config,undefined);
+  const unknown=await retireNativeImages(env.config,env.file,true,{...free,gatewayStarts:async()=>{throw new Error('no /proc');}});
+  assert.match(unknown.lines.join('\n'),/não foi possível saber quando o gateway/);
+  assert.equal(await readFile(env.file,'utf8'),before);
+  assert.deepEqual(await backups(env.root),[]);
+  const fresh=await retireNativeImages(env.config,env.file,true,{...free,gatewayStarts:async()=>[new Date(changed+60_000)]});
+  assert.match(fresh.lines.join('\n'),/retiradas da instalação: 2 par\(es\)/);
+ }finally{await rm(env.root,{recursive:true,force:true});}
+});
+
+test('the gateway start times come from the processes that serve this exact installation file',{skip:process.platform!=='linux'},async()=>{
+ const env=await installation();
+ const {spawn}=await import('node:child_process');
+ const serve=(file:string)=>spawn(process.execPath,['-e','setTimeout(()=>{},60000)',join(env.root,'src','server-main.ts'),'serve',file],{stdio:'ignore'});
+ const ours=serve(env.file),other=serve(join(env.root,'other.json'));
+ try{
+  await new Promise(done=>setTimeout(done,300));
+  const {gatewayStartTimes}=await import('../src/personal-retired-native-images.ts');
+  const starts=await gatewayStartTimes(env.file);
+  assert.equal(starts.length,1);
+  assert.ok(Math.abs(starts[0]!.getTime()-Date.now())<10_000,starts[0]!.toISOString());
+ }finally{
+  for(const child of [ours,other]){child.kill();await new Promise(done=>child.once('exit',done));}
+  await rm(env.root,{recursive:true,force:true});
+ }
+});
+
+test('the default queries keep exactly the entries an open or recent job or planning call is bound to',{skip:!process.env.AC_TEST_DATABASE_URL,timeout:120000},async()=>{
+ const fixture=await isolatedDatabase(process.env.AC_TEST_DATABASE_URL!,'retired_sql');
+ const ledger=new Ledger(fixture.url);
+ try{
+  await ledger.migrate();
+  const pair=oldPairs[0]!,other=oldPairs[1]!;
+  const pairDigest=nativeExecutionExecutorDigest(pair.workerImage,pair.toolsImage),otherDigest=nativeExecutionExecutorDigest(other.workerImage,other.toolsImage);
+  const planDigest=nativePlanningExecutorDigest(oldPlanning[0]!),otherPlan=nativePlanningExecutorDigest(oldPlanning[1]!);
+  const old="clock_timestamp()-interval '30 days'",recent='clock_timestamp()';
+  // Journals without their parents: foreign keys and guard triggers are off for this session only; the CHECKs on states stay.
+  const client=await ledger.pool.connect();
+  const hex=()=>hash(randomUUID());
+  type Job={digest:string;state:string;role?:string;created?:string;retired?:boolean};
+  type Call={digest:string;state:string;selected?:boolean;created?:string;job?:string};
+  const seed=async(jobs:Job[],calls:Call[])=>{
+   for(const table of ['ac_native_terminal_retirements','ac_native_execution_jobs','ac_native_planning_jobs','ac_semantic_planning_calls'])await client.query(`DELETE FROM ${table}`);
+   for(const job of jobs){
+    const id=randomUUID();
+    await client.query(`INSERT INTO ac_native_execution_jobs(id,grant_id,intent_id,context_id,manager_epoch,session_id,account_id,profile_id,profile_digest,eligibility_revision,executor_digest,key_fingerprint,input_digest,base_id,role,state,created_at)
+     VALUES($1,$2,$3,$4,1,$5,$6,$7,$8,1,$9,$10,$11,$12,$13,$14,${job.created??old})`,
+     [id,randomUUID(),randomUUID(),randomUUID(),randomUUID(),randomUUID(),randomUUID(),hex(),job.digest,hex(),hex(),'e'.repeat(40),job.role??'programmer',job.state]);
+    if(job.retired)await client.query(`INSERT INTO ac_native_terminal_retirements(job_id,binding,state,proof) VALUES($1,'{}','removed','{}')`,[id]);
+   }
+   for(const call of calls){
+    const id=randomUUID();
+    await client.query(`INSERT INTO ac_semantic_planning_calls(id,context_id,intent_id,principal_id,input_digest,executor_id,executor_digest,expected_revision,attempt_id,session_id,state,selected_executor_id,selected_executor_digest,selected_key_fingerprint,created_at)
+     VALUES($1,$2,$3,'owner',$4,'native-plan',$5,0,$6,$7,$8,$9,$10,$11,${call.created??old})`,
+     [id,randomUUID(),randomUUID(),hex(),call.selected?hex():call.digest,randomUUID(),randomUUID(),call.state,call.selected?'native-plan':null,call.selected?call.digest:null,call.selected?hex():null]);
+    if(call.job)await client.query(`INSERT INTO ac_native_planning_jobs(id,grant_id,context_id,input_digest,launch_digest,container_name,state) VALUES($1,$2,$3,$4,$5,$6,$7)`,
+     [id,randomUUID(),randomUUID(),hex(),hex(),'plan-'+id,call.job]);
+   }
+  };
+  const kept=async(jobs:Job[],calls:Call[])=>{
+   await seed(jobs,calls);
+   const env=await installation(fixture.url);
+   try{
+    await retireNativeImages(env.config,env.file,true,{gatewayStarts:async()=>[]});
+    const boot=JSON.parse(await readFile(env.file,'utf8')).nativeBootstrap;
+    return {pairs:(boot.execution.retiredImages??[]).length as number,pair:JSON.stringify(boot.execution.retiredImages??[]).includes(pair.workerImage),
+     plans:(boot.planning.retiredImageIds??[]) as string[]};
+   }finally{await rm(env.root,{recursive:true,force:true});}
+  };
+  await client.query("SET session_replication_role='replica'");
+  try{
+   // Execution: unfinished, a terminal job whose containers were not removed, or one created in the quiet window keep the pair.
+   for(const job of [{digest:pairDigest,state:'running'},{digest:pairDigest,state:'uncertain'},
+    ...['reviewer','judge','qa'].map(role=>({digest:pairDigest,state:'completed',role})),
+    {digest:pairDigest,state:'failed',created:recent}]){
+    const result=await kept([job],[]);
+    assert.equal(result.pair,true,JSON.stringify(job));
+    assert.equal(result.pairs,1,JSON.stringify(job));
+   }
+   // Finished long ago, a reviewer whose containers were removed, or another executor's open job: the pair goes.
+   for(const jobs of [[{digest:pairDigest,state:'completed'}],[{digest:pairDigest,state:'failed',role:'reviewer',retired:true}],[{digest:hash('unrelated-executor'),state:'running'}]]){
+    assert.equal((await kept(jobs,[])).pairs,0,JSON.stringify(jobs));
+   }
+   // The other retired pair is judged on its own digest.
+   assert.deepEqual(await kept([{digest:otherDigest,state:'running'}],[]).then(result=>[result.pairs,result.pair]),[1,false]);
+   // Planning: an open call (by its selected executor or, before the dispatcher, its own), an unfinished planning job under a
+   // published call, or a call created in the quiet window keep the image; any other leaves.
+   for(const call of [...['registered','ready','uncertain'].map(state=>({digest:planDigest,state,selected:true})),
+    {digest:planDigest,state:'registered'},{digest:planDigest,state:'published',selected:true,job:'running'},
+    {digest:planDigest,state:'published',selected:true,job:'prepared'},{digest:planDigest,state:'rejected',created:recent}]){
+    assert.deepEqual((await kept([],[call])).plans,[oldPlanning[0]],JSON.stringify(call));
+   }
+   for(const calls of [[{digest:planDigest,state:'published',selected:true,job:'completed'}],[{digest:planDigest,state:'rejected'}],[{digest:planDigest,state:'published'}]]){
+    assert.deepEqual((await kept([],calls)).plans,[],JSON.stringify(calls));
+   }
+   assert.deepEqual((await kept([],[{digest:otherPlan,state:'ready',selected:true}])).plans,[oldPlanning[1]]);
+  }finally{
+   await client.query("SET session_replication_role='origin'").catch(()=>undefined);
+   client.release();
+  }
+ }finally{await ledger.close();await fixture.close();}
+});

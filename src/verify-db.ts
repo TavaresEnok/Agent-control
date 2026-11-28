@@ -951,32 +951,95 @@ export async function readStampPack(stamp: string): Promise<StampPack | undefine
   return pack;
 }
 
-/** Streams `source` through `transform` into `target` (created exclusively), returning the digest and size of what was read and written. */
-async function streamThrough(source: string, target: string, transform: NodeJS.ReadWriteStream, mode: number) {
+/** Streams `source` through `transform` (a plain copy when omitted) into `target` (created exclusively), returning the digest
+ * and size of what was read and written. */
+async function streamThrough(source: string, target: string, transform: NodeJS.ReadWriteStream | undefined, mode: number) {
   const {pipeline} = await import('node:stream/promises');
   const {createWriteStream} = await import('node:fs');
+  const {PassThrough} = await import('node:stream');
+  const through = transform ?? new PassThrough();
   const read = createHash('sha256'), written = createHash('sha256');
   let readBytes = 0, writtenBytes = 0;
   const input = createReadStream(source);
   input.on('data', (chunk: Buffer | string) => { const piece = Buffer.from(chunk); readBytes += piece.length; read.update(piece); });
-  transform.on('data', (chunk: Buffer) => { writtenBytes += chunk.length; written.update(chunk); });
-  await pipeline(input, transform, createWriteStream(target, {flags: 'wx', mode}));
+  through.on('data', (chunk: Buffer) => { writtenBytes += chunk.length; written.update(chunk); });
+  await pipeline(input, through, createWriteStream(target, {flags: 'wx', mode}));
   return {readSha256: read.digest('hex'), readBytes, writtenSha256: written.digest('hex'), writtenBytes};
 }
 
-/** Compresses the large files of one stamp under `.compactado/` and writes `pacote.json` last. The originals stay. Idempotent. */
-async function packStamp(stamp: string): Promise<StampPack> {
-  const existing = await readStampPack(stamp);
+/** Disk use (percent) of the volume of `path` once `bytes` more are written there. Tests replace it. */
+type DiskAfter = (path: string, bytes: number) => Promise<number>;
+
+async function usedPercentAfter(path: string, bytes: number): Promise<number> {
+  const {statfs} = await import('node:fs/promises');
+  const info = await statfs(path);
+  const blocks = Math.ceil(bytes / info.bsize);
+  if (blocks > info.bavail) return 100;
+  const used = info.blocks - info.bfree + blocks, capacity = info.blocks - info.bfree + info.bavail;
+  return 100 * used / capacity;
+}
+
+/** Prefix of the expanded copies, and the reservation each one keeps while it is being written. */
+const EXPANDED_PREFIX = 'ac-verify-db-';
+const RESERVATION = '.reserva.json';
+
+function processAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
+}
+
+async function treeBytes(path: string): Promise<number> {
+  let total = 0;
+  for (const entry of await readdir(path, {withFileTypes: true}).catch(() => [])) {
+    const child = join(path, entry.name);
+    if (entry.isDirectory()) total += await treeBytes(child);
+    else if (entry.isFile() && entry.name !== RESERVATION) total += await lstat(child).then(info => info.size, () => 0);
+  }
+  return total;
+}
+
+/** Bytes that the expansions still being written under `tmp` (by a live process) will add: each reserved its whole size up front.
+ * Two exams that check the disk at the same time therefore see each other, and so does a compaction on the same volume. */
+async function reservedExpansionBytes(tmp: string, except?: string): Promise<number> {
+  let total = 0;
+  for (const name of await readdir(tmp).catch(() => [] as string[])) {
+    if (!name.startsWith(EXPANDED_PREFIX)) continue;
+    const directory = join(tmp, name);
+    if (directory === except) continue;
+    let reservation: {bytes?: unknown; pid?: unknown};
+    try { reservation = JSON.parse(await readFile(join(directory, RESERVATION), 'utf8')) as typeof reservation; } catch { continue; /* finished, or not ours */ }
+    const {bytes, pid} = reservation;
+    if (typeof bytes !== 'number' || !Number.isSafeInteger(bytes) || bytes < 0 || typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid < 1 || !processAlive(pid)) continue;
+    total += Math.max(0, bytes - await treeBytes(directory));
+  }
+  return total;
+}
+
+async function sameVolume(a: string, b: string): Promise<boolean> {
+  try { return (await lstat(a)).dev === (await lstat(b)).dev; } catch { return true; /* unknown: count the reservations */ }
+}
+
+/** Compresses the large files of one stamp under `.compactado/` and writes `pacote.json` last. The originals stay. Idempotent.
+ * `replace` starts over from a pack that does not check (its originals were proved present by the caller and are re-read here
+ * against the manifest). Before each file the disk is checked: if the archive, at most as large as its original, plus the
+ * expansions being written could take the volume to {@link DISK_BLOCK_PERCENT}, the pass stops (PERSONAL_DISK_FULL). */
+async function packStamp(stamp: string, options: {replace?: boolean; tmpRoot?: string; freeAfter?: DiskAfter} = {}): Promise<StampPack> {
+  const existing = options.replace ? undefined : await readStampPack(stamp);
   if (existing) return existing;
   const zlib = await import('node:zlib');
+  const {tmpdir} = await import('node:os');
+  const {DISK_BLOCK_PERCENT} = await import('./personal-disk.ts');
   const manifest = await readManifest(stamp);
   const root = join(stamp, PACK_DIR);
-  // A pass that died midway left partial archives: start over.
+  const tmp = options.tmpRoot ?? tmpdir();
+  const freeAfter = options.freeAfter ?? usedPercentAfter;
+  // A pass that died midway left partial archives (or the pack does not check): start over.
   await rm(root, {recursive: true, force: true});
   await mkdir(root, {mode: 0o755});
   const files: PackEntry[] = [];
   try {
     for (const file of manifest.files.filter(item => item.bytes >= PACK_MIN_BYTES)) {
+      const reserved = await sameVolume(tmp, stamp) ? await reservedExpansionBytes(tmp) : 0;
+      if (await freeAfter(stamp, file.bytes + reserved) >= DISK_BLOCK_PERCENT) throw new Refusal('PERSONAL_DISK_FULL', 503);
       const archive = `${PACK_DIR}/${file.path}.zst`;
       await mkdir(dirname(join(stamp, archive)), {recursive: true, mode: 0o755});
       const done = await streamThrough(join(stamp, file.path), join(stamp, archive), zlib.createZstdCompress(), 0o644);
@@ -991,8 +1054,30 @@ async function packStamp(stamp: string): Promise<StampPack> {
     return pack;
   } catch (error) {
     await rm(root, {recursive: true, force: true}).catch(() => undefined /* the error below is what the pass reports */);
+    if ((error as NodeJS.ErrnoException).code === 'ENOSPC') throw new Refusal('PERSONAL_DISK_FULL', 503);
     throw error;
   }
+}
+
+/** Whether every archive of a pack still has the size it was written with (a cheap check at rest; the digests are checked on
+ * every expansion). */
+async function archivesIntact(stamp: string, pack: StampPack): Promise<boolean> {
+  for (const entry of pack.files) {
+    const size = await lstat(join(stamp, entry.archive)).then(info => info.isFile() ? info.size : -1, () => -1);
+    if (size !== entry.archiveBytes) return false;
+  }
+  return true;
+}
+
+/** Whether every file of the manifest is on disk as an original, with its manifest size. */
+async function originalsPresent(stamp: string): Promise<boolean> {
+  const manifest = await readManifest(stamp).catch(() => undefined);
+  if (!manifest) return false;
+  for (const file of manifest.files) {
+    const size = await lstat(join(stamp, file.path)).then(info => info.isFile() ? info.size : -1, () => -1);
+    if (size !== file.bytes) return false;
+  }
+  return true;
 }
 
 /** Removes the originals that the pack holds. The downloader (uid 65532) owns their folders: when the host user cannot unlink,
@@ -1015,18 +1100,32 @@ async function dropPackedOriginals(stamp: string, pack: StampPack, openForHost: 
 }
 
 /** Retention and refresh pass: compresses every stamp not yet compressed and, for those that no live run holds, removes the
- * originals. Runs under the prune lock. `apply:false` only says what would happen. */
-export async function compactVerifyDatabaseStamps(dataDirectory: string, apply: boolean, deps: {image?: string | (() => Promise<string>); spawn?: CommandRunner} = {}): Promise<string[]> {
+ * originals. Runs under the prune lock. `apply:false` only says what would happen. A pack that does not check is rebuilt
+ * from the originals when they are all still there; without them the pass says that module 1 exams on that stamp are refused
+ * until a new stamp is downloaded. */
+export async function compactVerifyDatabaseStamps(dataDirectory: string, apply: boolean,
+  deps: {image?: string | (() => Promise<string>); spawn?: CommandRunner; tmpRoot?: string; freeAfter?: DiskAfter} = {}): Promise<string[]> {
   const root = assertDataDirectory(dataDirectory);
   const parent = join(root, 'verify-db');
   const names = await listStampNames(parent);
   const lines: string[] = [];
   const pending: string[] = [];
+  const rebuild = new Set<string>();
   for (const name of names) {
     const stamp = join(parent, name);
     if (!await verifyDatabaseStampPresent(stamp)) continue;
-    const pack = await readStampPack(stamp).catch(() => null);
-    if (pack === null) { lines.push(`Base ${name}: pacote compactado inválido; preservada como está.`); continue; }
+    let pack = await readStampPack(stamp).catch(() => null);
+    if (pack && !await archivesIntact(stamp, pack)) pack = null;
+    if (pack === null) {
+      if (await originalsPresent(stamp)) {
+        lines.push(`Base ${name}: pacote compactado inválido; os originais estão no disco e ${apply ? 'o pacote é refeito' : 'o pacote seria refeito'}.`);
+        rebuild.add(name);
+        pending.push(name);
+      } else {
+        lines.push(`Base ${name}: pacote compactado inválido e sem os originais; os exames do módulo 1 com esta base são recusados (VERIFY_DB_CORRUPT) até uma base nova. Baixe outra com npm run personal:maintenance -- <instalação>.`);
+      }
+      continue;
+    }
     if (pack && pack.files.every(entry => !existsSyncSafe(join(stamp, entry.path)))) continue;
     // Nothing large enough to be worth it (or a manifest that cannot be read): the stamp stays as it is.
     if (!pack && !(await readManifest(stamp).catch(() => ({files: []}))).files.some(file => file.bytes >= PACK_MIN_BYTES)) continue;
@@ -1041,8 +1140,11 @@ export async function compactVerifyDatabaseStamps(dataDirectory: string, apply: 
     for (const name of pending) {
       const stamp = join(parent, name);
       let pack: StampPack;
-      try { pack = await packStamp(stamp); } catch (error) {
-        lines.push(`Base ${name}: compactação falhou (${error instanceof Refusal ? error.code : 'erro'}); a base segue sem compactar.`);
+      try { pack = await packStamp(stamp, {replace: rebuild.has(name), tmpRoot: deps.tmpRoot, freeAfter: deps.freeAfter}); } catch (error) {
+        const code = error instanceof Refusal ? error.code : 'erro';
+        lines.push(code === 'PERSONAL_DISK_FULL'
+          ? `Base ${name}: compactação adiada; o pacote levaria o disco a 95% ou mais (PERSONAL_DISK_FULL). A base segue sem compactar.`
+          : `Base ${name}: compactação falhou (${code}); a base segue sem compactar.`);
         continue;
       }
       // The pack exists from here on. A run that claims the stamp now expands the pack; one that claimed it before keeps the originals.
@@ -1074,58 +1176,74 @@ async function resolveStampImage(root: string): Promise<string> {
 }
 
 export type ExpandedDatabases = {directory: string; release: () => Promise<void>};
-type ExpandDeps = {tmpRoot?: string; track?: (path: string) => Promise<unknown>; freeAfter?: (path: string, bytes: number) => Promise<number>};
+type ExpandDeps = {tmpRoot?: string; track?: (path: string) => Promise<unknown>; freeAfter?: DiskAfter};
 
-/** Disk use (percent) of the volume of `path` once `bytes` more are written there. */
-async function usedPercentAfter(path: string, bytes: number): Promise<number> {
-  const {statfs} = await import('node:fs/promises');
-  const info = await statfs(path);
-  const blocks = Math.ceil(bytes / info.bsize);
-  if (blocks > info.bavail) return 100;
-  const used = info.blocks - info.bfree + blocks, capacity = info.blocks - info.bfree + info.bavail;
-  return 100 * used / capacity;
+/** A pack that does not check is not the end of the exam when the originals are all still on the stamp (it was held by a run
+ * during the compaction, or the pack broke later): each one is read against the manifest digest and the stamp is mounted as it
+ * is. Otherwise the original refusal stands. */
+async function verifiedOriginals(stamp: string, refusal: unknown): Promise<ExpandedDatabases> {
+  const manifest = await readManifest(stamp).catch(() => undefined);
+  if (!manifest || !await originalsPresent(stamp)) throw refusal;
+  for (const file of manifest.files) {
+    const hash = createHash('sha256');
+    let bytes = 0;
+    try {
+      for await (const chunk of createReadStream(join(stamp, file.path))) { const piece = chunk as Buffer; bytes += piece.length; hash.update(piece); }
+    } catch { throw refusal; }
+    if (bytes !== file.bytes || hash.digest('hex') !== file.sha256) throw refusal;
+  }
+  console.error(JSON.stringify({event: 'VERIFY_DB_PACK_CORRUPT', fallback: 'originals'}));
+  return {directory: stamp, release: async () => undefined};
 }
 
 /** The directory an exam mounts as `/databases`. An uncompressed stamp is mounted as it is. A compressed one is expanded into a
- * private temporary (`ac-verify-db-*`, registered by `track` as a round temporary) that `release` removes; every expanded file is
- * checked against the manifest digest. Refuses with PERSONAL_DISK_FULL when the expansion would take the disk to 95% or more. */
+ * private temporary (`ac-verify-db-*`, registered by `track` as a round temporary) that `release` removes; every expanded or
+ * copied file is checked against the manifest digest and size. The expansion reserves its whole size while it is written, and
+ * refuses with PERSONAL_DISK_FULL when it plus the other expansions in progress would take the disk to 95% or more. A pack that
+ * does not check falls back to the originals when they are all there and match the manifest (see {@link verifiedOriginals}). */
 export async function expandVerifyDatabaseStamp(stamp: string, deps: ExpandDeps = {}): Promise<ExpandedDatabases> {
-  const pack = await readStampPack(stamp);
+  let pack: StampPack | undefined;
+  try { pack = await readStampPack(stamp); } catch (error) { return verifiedOriginals(stamp, error); }
   if (!pack?.files.length) return {directory: stamp, release: async () => undefined};
   const zlib = await import('node:zlib');
-  const {copyFile, mkdtemp, realpath} = await import('node:fs/promises');
+  const {mkdtemp, realpath} = await import('node:fs/promises');
   const {tmpdir} = await import('node:os');
   const {DISK_BLOCK_PERCENT} = await import('./personal-disk.ts');
   const manifest = await readManifest(stamp);
   const tmp = await realpath(deps.tmpRoot ?? tmpdir());
   const needed = manifest.files.reduce((sum, file) => sum + file.bytes, 0);
-  if (await (deps.freeAfter ?? usedPercentAfter)(tmp, needed) >= DISK_BLOCK_PERCENT) throw new Refusal('PERSONAL_DISK_FULL', 503);
-  const directory = await mkdtemp(join(tmp, 'ac-verify-db-'));
+  const directory = await mkdtemp(join(tmp, EXPANDED_PREFIX));
   const release = () => rm(directory, {recursive: true, force: true});
   try {
     await chmod(directory, 0o755);
     await deps.track?.(directory);
+    // The reservation goes first, then the check: two exams that start together each count the other one.
+    await writeFile(join(directory, RESERVATION), JSON.stringify({bytes: needed, pid: process.pid}) + '\n', {mode: 0o600, flag: 'wx'});
+    const others = await reservedExpansionBytes(tmp, directory);
+    if (await (deps.freeAfter ?? usedPercentAfter)(tmp, needed + others) >= DISK_BLOCK_PERCENT) throw new Refusal('PERSONAL_DISK_FULL', 503);
     const packed = new Map(pack.files.map(entry => [entry.path, entry]));
     for (const file of manifest.files) {
       const target = join(directory, file.path);
       await mkdir(dirname(target), {recursive: true, mode: 0o755});
       const entry = packed.get(file.path);
-      if (!entry) {
-        await copyFile(join(stamp, file.path), target, constants.COPYFILE_EXCL);
-        await chmod(target, 0o644);
-        continue;
-      }
-      const done = await streamThrough(join(stamp, entry.archive), target, zlib.createZstdDecompress(), 0o644);
-      if (done.readSha256 !== entry.archiveSha256 || done.writtenSha256 !== file.sha256 || done.writtenBytes !== file.bytes) throw new Refusal('VERIFY_DB_CORRUPT', 503);
+      const done = entry
+        ? await streamThrough(join(stamp, entry.archive), target, zlib.createZstdDecompress(), 0o644)
+        : await streamThrough(join(stamp, file.path), target, undefined, 0o644);
+      if ((entry && done.readSha256 !== entry.archiveSha256) || done.writtenSha256 !== file.sha256 || done.writtenBytes !== file.bytes) throw new Refusal('VERIFY_DB_CORRUPT', 503);
+      await chmod(target, 0o644);
     }
+    const {copyFile} = await import('node:fs/promises');
     await copyFile(join(stamp, 'manifest.json'), join(directory, 'manifest.json'), constants.COPYFILE_EXCL);
     await chmod(join(directory, 'manifest.json'), 0o644);
+    await unlink(join(directory, RESERVATION));
     return {directory, release};
   } catch (error) {
     await release().catch(() => undefined /* the refusal below is what the exam reports */);
-    if (error instanceof Refusal) throw error;
-    if ((error as NodeJS.ErrnoException).code === 'ENOSPC') throw new Refusal('PERSONAL_DISK_FULL', 503);
-    // A damaged archive fails inside zstd: it is a corrupt base, never a silent gap.
-    throw new Refusal('VERIFY_DB_CORRUPT', 503);
+    const refusal = error instanceof Refusal ? error
+      : (error as NodeJS.ErrnoException).code === 'ENOSPC' ? new Refusal('PERSONAL_DISK_FULL', 503)
+      // A damaged archive fails inside zstd: it is a corrupt base, never a silent gap.
+      : new Refusal('VERIFY_DB_CORRUPT', 503);
+    if (refusal.code === 'VERIFY_DB_CORRUPT') return verifiedOriginals(stamp, refusal);
+    throw refusal;
   }
 }

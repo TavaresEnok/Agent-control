@@ -251,7 +251,9 @@ export async function selectModuleCollector(input: VerificationModuleRunInput): 
   if (!simple) return {image: image ?? await readPinnedModuleImage(input.module, input.rootDir)};
 
   if (image) {
-    // A remeasurement must keep its recorded image even if the current pin changed.
+    // A remeasurement must keep its recorded image even if the current pin changed. A measurement taken on another image would
+    // never prove the original finding, so an image that the retention already removed is a clear refusal, not a fallback.
+    if (!await localImageId(image)) throw new Refusal('VERIFY_RECHECK_IMAGE_GONE', 409);
     const common = await availableSimpleToolsImage(input.dataDirectory).catch(() => undefined);
     return {image, commonTools: image === common || await isInstalledCommonImage(image)};
   }
