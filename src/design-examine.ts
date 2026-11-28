@@ -1113,8 +1113,11 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
             verifier: {model: reviewed.seat.model, provider: reviewed.seat.provider},
           });
         } catch (error) {
-          if (finding.severity === 'alta' || rethrowReviewer(error)) throw error;
+          if (rethrowReviewer(error)) throw error;
           const code = error instanceof Refusal ? safeFailureCode(error.code) : 'EXECUTION_NATIVE_FAILED';
+          // A high point without its confirmation leaves no valid report; when the cause is infrastructure the exam stops
+          // with the partial report it has, instead of failing without one.
+          if (finding.severity === 'alta') throw isInfrastructureFailure(code) ? new ExamStop(code) : error;
           noteFailure('reviewer', code);
           notes.push(`O revisor falhou em ${screen.file} com ${code}.`);
         }

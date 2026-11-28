@@ -4,9 +4,10 @@ import {test} from 'node:test';
 import {designBenchWorker} from '../src/design-bench.ts';
 import {loadDesignChecklist} from '../src/design-checklist.ts';
 import {examineDesignScreens, type DesignSeat} from '../src/design-examine.ts';
-import type {DesignWorker} from '../src/design-types.ts';
+
 import {Refusal} from '../src/contracts.ts';
 import {ExamDependencyDown} from '../src/exam-preflight.ts';
+import {designRawFinding, type DesignWorker} from '../src/design-types.ts';
 
 const base = {repo: '/tmp/repo-design', checklist: loadDesignChecklist(), rawFindings: []};
 
@@ -129,4 +130,27 @@ test('andamento: cada tela informa julgados, total, chamadas e o último código
   assert.equal(last.modelCalls, 3);
   assert.equal(last.lastFailureCode, 'EXECUTION_TIMEOUT');
   assert.equal(last.failureStreak, 3);
+});
+
+test('ponto alto sem confirmação por falha de infraestrutura: exame parado com relatório, sem exceção', async () => {
+  const k = kit();
+  const bench = designBenchWorker();
+  let reviewerCalls = 0;
+  const [one] = screens(1, false);
+  const worker: DesignWorker = {async run(call) {
+    if (call.designPurpose === 'reviewer') { reviewerCalls++; throw new Refusal('EXECUTION_TIMEOUT'); }
+    // The examiner marks the first of three points as high: it is confirmed alone, the other two go in one batch.
+    const exam = JSON.parse(await bench.run(call)) as {findings: {severity: string; line: number | null; title: string}[]};
+    const first = exam.findings[0];
+    if (!first) return JSON.stringify(exam);
+    exam.findings = [{...first, severity: 'alta'}, {...first, line: 2, title: 'Segundo ponto'}, {...first, line: 3, title: 'Terceiro ponto'}];
+    return JSON.stringify(exam);
+  }};
+  const rawFindings = [designRawFinding({tool: 'html', rule: 'PONTO-1', file: one!.file, line: 2, severity: 'media', snippet: 'ponto 2'})];
+  const result = await examineDesignScreens({...base, intentId: randomUUID(), screens: [one!], batch: {tokens: 40_000, files: 8},
+    rawFindings, worker, reserve: k.reserve, release: k.release});
+  assert.equal(result.stopped, 'EXECUTION_TIMEOUT');
+  assert.ok(reviewerCalls >= 1 && reviewerCalls <= 3, `chamadas do revisor: ${reviewerCalls}`);
+  assert.ok(result.notes.some(note => note.includes('O relatório é parcial')));
+  assert.equal(result.modelCoverage.reviewer.failure, 'EXECUTION_TIMEOUT');
 });
