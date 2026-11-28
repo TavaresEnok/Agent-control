@@ -18,7 +18,7 @@ Só regras vigentes. Regra nova do titular substitui a antiga no mesmo lugar, se
 - A fila padrão é Claude Code no login dedicado da conta Max (`CLAUDE_CONFIG_DIR=/home/app/.claude-trabalhadores/enok`):
   - correções comuns: Sonnet 5.5 `high`;
   - correções graves (segurança, banco, arquitetura): Opus 5.5 `medium`.
-- Os modelos do Antigravity (`agy`) entram antes do Claude quando a conta tiver cota. Codex e Grok ficam desligados até o titular reativar.
+- Os modelos do Antigravity (`agy`) entram antes do Claude quando a conta tiver cota. O Codex fica desligado até o titular reativar. O Grok foi retirado e não volta para a fila.
 - **Front-end:** qualquer `web/`, `upstream/cezar/packages/web` e telas são escritos só por Claude Opus 5.5 ou Fable 5.2.
   - Antes de integrar um ramo, confira `git diff --name-only` nessas pastas.
   - Front-end escrito por outro modelo é desfeito e refeito.
