@@ -5,7 +5,8 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
-import {dockerLogText,teamMessage,teamStatus} from '../src/personal-team-feed.ts';
+import {announceTeamJobs,dockerLogText,teamMessage,teamMessageId,teamStatus} from '../src/personal-team-feed.ts';
+import {Refusal} from '../src/contracts.ts';
 import {personalComboRequest,personalControlWord} from '../src/personal-conversation.ts';
 import {builtinCombos,describeAppliedCombo} from '../src/personal-combos.ts';
 
@@ -150,4 +151,51 @@ test('failure facts carry the failed QA tail and the rejecting review, and skip 
  } finally {
   await rm(root, {recursive: true, force: true});
  }
+});
+
+test('a restart resumes the team feed from the stored messages, without repeating or conflicting',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'team-restart-')),context=randomUUID();
+ const done=randomUUID(),running=randomUUID();
+ const job=(id:string,state:string)=>({id,kind:'programmer',state,provider:'claude',model:'claude-sonnet-5-5',effort:'high',receipt:{payload:{artifact:null}},base:null,intentId:null,created_at:new Date()});
+ let jobs=[job(done,'completed'),job(running,'running')];
+ // The conversation table: the same id with other text is CHAT_MESSAGE_CONFLICT, as in src/conversation-transport.ts.
+ const stored=new Map<string,string>();
+ const conflicts:string[]=[],said:string[]=[];
+ const pool={query:async(sql:string,params:unknown[])=>{
+  if(sql.includes('ac_personal_messages')){assert.equal(params[0],context);return {rows:[...stored.keys()].filter(id=>id.startsWith('team-')).map(local_id=>({local_id}))};}
+  if(sql.includes('ac_native_planning_jobs'))return {rows:[...jobs].reverse()};
+  return {rows:[]};
+ }} as never;
+ const say=async(id:string,text:string)=>{
+  const prior=stored.get(id);
+  if(prior!==undefined&&prior!==text){conflicts.push(id);throw new Refusal('CHAT_MESSAGE_CONFLICT');}
+  stored.set(id,text);said.push(id);
+ };
+ try{
+  await mkdir(join(root,done,'output'),{recursive:true});
+  await writeFile(join(root,done,'output','execution-result.json'),JSON.stringify({output:'Primeira versão.'}));
+  await announceTeamJobs(pool,context,{announced:new Map()},{executionHost:root},say);
+  assert.deepEqual(said,[teamMessageId(job(done,'completed')),'team-'+running+'-running']);
+  // After the fact the result file changes (or work/ is retired), so the text would read differently now.
+  await writeFile(join(root,done,'output','execution-result.json'),JSON.stringify({output:'Texto que mudou depois.'}));
+  said.length=0;
+  // A new process: empty memory. Nothing is said again and nothing conflicts.
+  const restarted={announced:new Map<string,string>()};
+  await announceTeamJobs(pool,context,restarted,{executionHost:root},say);
+  assert.deepEqual(said,[]);
+  assert.deepEqual(conflicts,[]);
+  // A state that changed after the restart is still told, once.
+  jobs=[job(done,'completed'),job(running,'completed')];
+  await writeFile(join(root,running,'output','execution-result.json'),'{}').catch(async()=>{await mkdir(join(root,running,'output'),{recursive:true});await writeFile(join(root,running,'output','execution-result.json'),'{}');});
+  await announceTeamJobs(pool,context,restarted,{executionHost:root},say);
+  await announceTeamJobs(pool,context,restarted,{executionHost:root},say);
+  assert.deepEqual(said,['team-'+running+'-completed']);
+  assert.deepEqual(conflicts,[]);
+  // If the stored ids cannot be read, the pass fails before saying anything; the next pass reads them again.
+  const broken={query:async()=>{throw new Error('pool closed');}} as never;
+  const fresh={announced:new Map<string,string>()} as {announced:Map<string,string>;published?:Set<string>};
+  await assert.rejects(announceTeamJobs(broken,context,fresh,{executionHost:root},say),/pool closed/);
+  assert.equal(fresh.published,undefined);
+  assert.equal(said.length,1);
+ }finally{await rm(root,{recursive:true,force:true});}
 });

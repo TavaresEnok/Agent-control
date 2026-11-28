@@ -77,7 +77,7 @@ test('watch alerts on an unavailable dependency before any rebuild and maintenan
  };
  const status=await runPersonalWatch([file],{
   dockerDependencies,images:()=>['sha256:'+id],inspectImage:async()=>{throw Error('unexpected image inspection');},
-  diskUsedPercent:async()=>20,logins:async()=>[],recentLog:async()=>'',retention:async()=>{},
+  diskUsedPercent:async()=>20,logins:async()=>[],recentLog:async()=>'',retention:async()=>{},retentionTimerEnabled:async()=>true,
   probe:async()=>{assert.equal(checks,1);return true;},
   notify:async(_dir,body)=>{assert.match(body,/ac-test-postgres.*fora do ar/);notifications++;},
  });

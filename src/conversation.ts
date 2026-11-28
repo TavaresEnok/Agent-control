@@ -14,7 +14,7 @@ import {applyPersonalCombo,describeAppliedCombo} from './personal-combos.ts';
 import {isRepeatablePersonalNotice,recentPersonalNotices,suppressRepeatedPersonalNotice} from './personal-notice.ts';
 import {personalPushBody,type PersonalPushNotice} from './personal-push.ts';
 import type {PanelPage} from './personal-panel-conversation.ts';
-import {failureFacts,reserveAssumptionNotices,teamJobs,teamMessage,teamStatus} from './personal-team-feed.ts';
+import {announceTeamJobs,failureFacts,reserveAssumptionNotices,teamStatus} from './personal-team-feed.ts';
 import {personalRepositoryContext} from './personal-runtime.ts';
 import {HISTORY_READ_TIMEOUT_MS,historyBeforeCurrent,managerEconomyOf,managerRepositoryContext,withinMs} from './manager-discipline.ts';
 import {markRemotePushNotice,remotePushNotices,syncRemoteBeforeRequest} from './personal-ssh.ts';
@@ -46,6 +46,8 @@ export class ConversationEndpoint {
   private readonly conversation: ConversationTransport;
   private lastPendingAt = 0;
   private readonly announced=new Map<string,string>();
+  /** Team message ids already in the conversation, read once per process (src/personal-team-feed.ts). */
+  private readonly teamFeed:{announced:Map<string,string>;published?:Set<string>}={announced:this.announced};
   private teamModelsAt=0;
   private readonly titled=new Set<string>();
   private readonly replanned=new Set<string>();
@@ -104,6 +106,8 @@ export class ConversationEndpoint {
           {entityId:this.options.authority.contextId,source:'manager',planRevision:0,seq:0,status:'recovered'});
         this.lastError = undefined;
       }).catch(async error => {
+        // Stopping: the tick was cut by close() (lease released, then the pool closed), not a blocker to audit or tell the owner.
+        if (this.lifecycle.signal.aborted) return;
         const code = error instanceof Refusal ? error.code : error instanceof z.ZodError
           ? 'CONTRACT_ERROR:' + error.issues.map(issue => issue.path.join('.')).join(',') : error instanceof Error ? error.name+httpFailureSuffix(error) : 'UNKNOWN_ERROR';
         if (code !== this.lastError) void this.ledger.pool.query(
@@ -510,12 +514,8 @@ export class ConversationEndpoint {
      // Once per process, retried at most once a minute; the profile list rarely changes.
      if(this.teamModelsAt>=0&&Date.now()-this.teamModelsAt>60000){this.teamModelsAt=Date.now();await this.conversation.publishTeamModels().then(()=>{this.teamModelsAt=-1;},error=>{console.error(JSON.stringify({event:"TEAM_MODELS_NOT_PUBLISHED",error:String(error?.code??error?.message??error)}));});}
      // Each role's own report: who ran it (provider, model, effort), what it said, changed or found.
-     for(const job of await teamJobs(this.ledger.pool,this.options.authority.contextId)){
-      if(this.announced.get('team|'+job.id)===job.state)continue;
-      const message=await teamMessage(job,{executionHost:this.options.teamFeedRoot,pool:this.ledger.pool}).catch(containFailure('TEAM_MESSAGE_UNAVAILABLE',null));
-      if(message)await this.say(message.id,message.text).catch(containFailure('TEAM_MESSAGE_NOT_PUBLISHED',undefined));
-      this.announced.set('team|'+job.id,job.state);
-     }
+     // A restart resumes from the messages already written, so it neither repeats one nor conflicts with its stored text.
+     await announceTeamJobs(this.ledger.pool,this.options.authority.contextId,this.teamFeed,{executionHost:this.options.teamFeedRoot,pool:this.ledger.pool},(id,text)=>this.say(id,text));
     }
     if(this.options.personalConversation){
      for(const notice of await remotePushNotices(this.runtime.projectId)){

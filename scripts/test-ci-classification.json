@@ -115,6 +115,7 @@
   "ledger.test.ts",
   "local-compositor-capacity.test.ts",
   "local-transport.test.ts",
+  "conversation-shutdown.test.ts",
   "managed-cancellation.test.ts",
   "managed-core-negative.test.ts",
   "managed-corrections.test.ts",
