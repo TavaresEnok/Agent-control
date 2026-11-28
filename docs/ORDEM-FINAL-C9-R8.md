@@ -1,5 +1,0 @@
-# Conformidade — ordem de avaliação e cobertura parcial
-
-A revisão /tmp/ac-retomada-8f5dddf3-JZR4mNOc/parecer-C9-R7.txt mostra cinco combinações em que o analisador estático perde a origem de uma leitura ou atribui a operação ao destino errado. Preserve o valor no ponto de leitura dos argumentos, respeite a reatribuição e a execução posterior de funções e declare escopo parcial onde a análise não consegue determinar o efeito. Evite ampliar o analisador para tentar executar o programa; a conclusão precisa ser verificável dentro do subconjunto analisado. Casos sintéticos, sem dados reais. Responsabilidade pelo coletor e os testes de conformidade.
-
-Você trabalha em paralelo com outros colaboradores. Preserve as mudanças deles e trabalhe só neste worktree. Rode npx tsc --noEmit --skipLibCheck e só os testes dos arquivos alterados com dados sintéticos. Não rode a suíte completa nem o laboratório, não reconstrua imagens nem toque na instalação viva ou em qualquer login real. Escreva docs/RELATORIO-FINAL-C9-R8.md. Commite tudo da ordem com git -c user.name="Enok Tavares" -c user.email="migration@localhost" e trailer Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>.

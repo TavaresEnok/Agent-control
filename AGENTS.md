@@ -1,217 +1,88 @@
-## Orquestração multiagente
+# Regras do Agent Control
 
-- Utilizar exclusivamente subagentes nativos do Codex.
-- Não usar Paseo para delegar ou executar agentes.
-- Gerente/revisor principal: GPT-6.1 Sol (`gpt-6.1-sol`), com esforço Médio.
-- Subagentes: GPT-6.1 Terra (`gpt-6.1-terra`), com esforço Médio.
-- Não substituir os modelos silenciosamente; informar se o modelo solicitado não estiver disponível.
-- Permitir no máximo 5 subagentes simultâneos, além do principal, incluindo revisores e quaisquer descendentes. Não criar gerentes adicionais.
-- Esta equipe, autorizada em 05/11/2026, substitui as instruções anteriores de Astra e subagentes Sol e os papéis históricos do Paseo para o desenvolvimento deste projeto via Codex nativo.
-- Não elevar modelo ou esforço automaticamente. Usar menos subagentes quando não houver trabalho independente; não duplicar investigação, implementação ou testes.
-- Distribuir trabalho dinamicamente.
-- Aguardar, revisar e integrar os resultados.
-- Se as ferramentas nativas não estiverem disponíveis,
-  informar o bloqueio, sem usar alternativas.
+Só regras vigentes. Regra nova do titular substitui a antiga no mesmo lugar, sem empilhar seção nem histórico. Ordens, relatórios e progresso de rodadas encerradas ficam fora do repositório, em `/home/app/arquivo-agent-control/`, e no histórico do git. O teste `tests/agents-rules.test.ts` confere este arquivo.
 
-## Revisão independente com Claude
+## Papéis (valem para qualquer projeto)
 
-- Autorizada pelo titular em 09/11/2026, enquanto o Codex estiver sem cota. Não substitui as regras acima para desenvolvimento via Codex.
-- Revisores: subagentes Claude Sonnet 5.5 (`claude-sonnet-5-5`), com esforço Médio, somente leitura, no máximo 5 simultâneos.
-- O revisor recebe o código e as evidências, nunca a conclusão do autor.
-- Registrar na matriz o modelo e a versão revisada, como "revisão independente por modelo Claude distinto". Não equivale a revisão humana ou de outro provedor; produção real continua exigindo revisão externa de segurança.
+- **Gerente:** uma sessão só. Escreve as ordens, distribui o trabalho e junta os ramos. Roda a suíte completa (`node scripts/test-ci.mjs`) e as provas Docker localmente, aplica na instalação viva com backup e mantém o progresso do projeto. Não cria outros gerentes.
+- **Trabalhadores:** escrevem código, cada um no seu worktree, com itens que não tocam os mesmos arquivos. Por padrão, um trabalhador por vez, com esforço `medium`. Mais trabalhadores ou esforço `high` só a pedido do titular.
+- **Revisor:** só leitura. Recebe a ordem e o diff, nunca a conclusão do autor, e roda só os testes do diff. No máximo 2 rodadas de revisão por item. Depois disso, o gerente julga e registra o que sobrar como ressalva.
+- **Examinador dos módulos:** sempre pelo caminho do produto (`personal:verify`, `personal:design`).
+  - Esforço `high` nos módulos 1 (segurança), 5 (banco) e 9 (LGPD e licenças); `medium` nos demais.
+  - Achado alto ganha segunda opinião do Opus 5.5 `medium`, em outra sessão.
+  - Design (módulo 10): Opus 5.5, com `economy.designEffort` por projeto (padrão `high`). O modo `criar` usa `high`.
 
-## Desenvolvimento com Grok supervisionado
+## Modelos
 
-- Autorizado pelo titular em 11/11/2026, enquanto o Codex estiver sem cota, para executar `docs/PLANO-PAINEL-E-PROJETOS.md`.
-- Programador: Grok CLI com `grok-4.7`, esforço médio; alto só nas Fases 2 e 4 do plano (centro do runtime e SSH). Aberto pelo titular na pasta do projeto, um passo por vez, com a ordem em `docs/ORDEM-GROK.md`.
-- Gerente e revisor: Claude (sessão Claude Code), que escreve as ordens, revisa cada commit e faz a prova de cada fase.
-- Revisões independentes extras seguem a seção "Revisão independente com Claude".
-- Autorizado pelo titular em 16/11/2026, para construir os módulos de `docs/MODULOS-DE-VERIFICACAO.md`: Grok CLI com `grok-4.7`, esforço alto, até 8 subagentes simultâneos (subagentes do próprio Grok, um nível só), sem tela, iniciado pelo Claude num worktree próprio. A ordem fica em `docs/ORDEM-GROK-VALIDADOR.md`. Claude continua gerente e revisor.
+- Use só modelos com cota, do mais barato ao mais caro. Erro de cota (429, limite de uso, 402) passa para o próximo da fila.
+- A fila padrão é Claude Code no login dedicado da conta Max (`CLAUDE_CONFIG_DIR=/home/app/.claude-trabalhadores/enok`):
+  - correções comuns: Sonnet 5.5 `high`;
+  - correções graves (segurança, banco, arquitetura): Opus 5.5 `medium`.
+- Os modelos do Antigravity (`agy`) entram antes do Claude quando a conta tiver cota. Codex e Grok ficam desligados até o titular reativar.
+- **Front-end:** qualquer `web/`, `upstream/cezar/packages/web` e telas são escritos só por Claude Opus 5.5 ou Fable 5.2.
+  - Antes de integrar um ramo, confira `git diff --name-only` nessas pastas.
+  - Front-end escrito por outro modelo é desfeito e refeito.
+- Não troque de modelo em silêncio.
+- Os logins dos trabalhadores ficam só em `/home/app/.claude-trabalhadores/<conta>` e em `HOME=/home/app/.agy-<conta>`. Nunca use as contas da instalação viva.
+- O trailer do commit segue o modelo que escreveu, por exemplo `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 
-## Desenvolvimento com Gemini supervisionado
+## Execução sem loops nem esperas cegas
 
-- Autorizado pelo titular em 18/11/2026, depois que a cota do Grok acabou, para terminar a reconstrução do módulo de design (`docs/ORDEM-GROK-DESIGN-RECONSTRUCAO-5.md` em diante).
-- Programador: Antigravity CLI (`agy`) com `gemini-4-hydrogen-high`, sem tela, até 3 trabalhadores, cada um no seu worktree e com itens que não tocam os mesmos arquivos.
-- Gerente e revisor: Claude, que escreve as ordens, junta os ramos, roda a suíte completa e o laboratório e faz a prova.
-- Trailer dos commits do Gemini: `Co-Authored-By: Gemini 4 Hydrogen <noreply@google.com>`.
+- **Espera:** use `npm run personal:status -- <instalação> <exame> --esperar`, ou espere pelo PID gravado no andamento do exame. Nunca use laços com `pgrep -f`, que casam com o próprio laço.
+- **Logs:** leia só o fim (`tail -n 40`).
+- **Progresso real:** confira os jobs longos pelos códigos de falha. Sem progresso em 30 minutos, pare e investigue. O disjuntor do produto para o exame depois de 3 falhas iguais de infraestrutura.
+- **Queda do Docker:** depois dela, confira `ac-provider-egress`, `ac-personal-pg` e `ac-design-registry`. Todos têm `restart unless-stopped`.
+- **Mudança mínima:** reaproveite o que o projeto e a biblioteca padrão já oferecem. Não acrescente dependência nem abstração que a tarefa não peça, e não retire validação, segurança nem teste.
+- **Projeto encerrado não é reaberto.** Se uma aprovação for ambígua sobre o projeto, pergunte ou aplique ao projeto atual.
 
-## Equipe final (Astra, Sol e Gemini)
+## Cota
 
-- Autorizada pelo titular em 18/11/2026 para terminar o projeto: o módulo 10 (design), as 20 telas do app do assinante e os módulos 2 a 9 de `docs/MODULOS-DE-VERIFICACAO.md`. Substitui, para esse trabalho, as seções de Codex nativo, Grok e Gemini acima.
-- **Gerente:** Codex CLI com `gpt-6.2-astra`, esforço `medium`, sem tela, a partir deste repositório. Escreve as ordens, distribui, junta os ramos, roda a suíte e os laboratórios, aplica na instalação viva e mantém `docs/PROGRESSO-FINAL.md`.
-- **Revisor:** Codex CLI com `gpt-6.2-sol`, esforço `high`, só leitura (`--sandbox read-only`), uma revisão independente depois de cada rodada; recebe o código e a ordem, nunca a conclusão do autor.
-- **Trabalhadores:** Antigravity CLI (`agy`), até 7 ao mesmo tempo: 3 com `gemini-4-argon-high` e 4 com `gemini-4-hydrogen-high`, cada um no seu worktree, com itens que não tocam os mesmos arquivos. Trailers: `Co-Authored-By: Gemini 4 Argon <noreply@google.com>` ou `Co-Authored-By: Gemini 4 Hydrogen <noreply@google.com>`.
-- **Telas:** geradas pelo próprio produto (`npm run personal:design -- criar`), que usa Claude Opus 5.5 médio. Nenhum outro modelo desenha telas.
-- **Supervisão:** Claude (sessão Claude Code) acompanha, confere e informa o titular.
-- Não substituir modelos em silêncio. Se um modelo ficar sem cota, esperar e tentar de novo; nunca comprar créditos.
-- **Modo rápido (titular, 19/11/2026):** todo uso do Codex roda no modo fast, com `-c service_tier="fast"` (gerente e revisores). Pode haver **até 2 revisores Sol** (`gpt-6.2-sol`, `high`, fast) ao mesmo tempo. Se precisar, o gerente pode subir para `gpt-6.2-astra` com esforço `high`, também fast.
-- **Equipe a partir de 19/11/2026 (titular), substitui os itens acima sobre trabalhadores, revisores e modo:** a cota do Gemini 4 Argon acabou (429, renovação estimada em ~167 h).
-  - **Gerente:** `gpt-6.2-astra`, esforço `high`, modo **fast** (`-c service_tier="fast"`).
-  - **Trabalhadores:** até **8** Codex `gpt-6.2-sol`, esforço `medium`, modo **normal** (sem `service_tier`), cada um no seu worktree, com itens que não tocam os mesmos arquivos. Trailer: `Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>`.
-  - **Revisores:** até **2** `gpt-6.2-sol`, esforço `high`, modo **normal**, só leitura; recebem a ordem e o diff, nunca a conclusão do autor.
-  - Os Gemini (Argon e Hydrogen) deixam de ser acionados; o trabalho parcial deles nos worktrees é aproveitado pelos trabalhadores Sol.
-  - Erro de cota de qualquer modelo é registrado na hora em `docs/PROGRESSO-FINAL.md` com a palavra `COTA`.
-- **Equipe a partir de 19/11/2026, 01:2x UTC (titular), substitui a anterior:**
-  - **Gerente:** `gpt-6.2-astra`, esforço `ultra`, modo fast.
-  - **Revisores:** até **2** `gpt-6.2-sol`, esforço `ultra`, modo normal, só leitura.
-  - **Trabalhadores:** até **4** `gpt-6.1-terra`, esforço `ultra`, modo normal. Trailer: `Co-Authored-By: GPT-6.1 Terra <noreply@openai.com>`.
-  - Trabalhadores Sol que já estão rodando terminam a ordem atual. Não lance outro Sol. Ordens novas só para Terra, e no máximo 4 trabalhadores ativos depois que os Sol terminarem.
-- **Equipe a partir de 19/11/2026 ~02:05 UTC (titular), substitui a anterior.** Todos em modo **normal**, sem `service_tier`:
-  - **Gerente:** `gpt-6.2-astra`, esforço `high`.
-  - **Revisor:** 1 `gpt-6.2-sol`, esforço `high`, só leitura.
-  - **Trabalhadores:** até 3 `gpt-6.2-sol`, esforço `high`. Trailer `Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>`.
-  - Os Terra que já estão rodando terminam a ordem atual. Não lance outros Terra.
-- **Cota do Codex:** quando a cota acabar para os modelos da equipe (erro de limite de uso ou 429), pare todo o trabalho, escreva o relatório e encerre. Não volte a trabalhar até o titular pedir.
-- **Equipe a partir de 19/11/2026 ~11:10 UTC (titular), substitui a anterior.** Todos em modo **normal**, sem `service_tier`:
-  - **Gerente:** `gpt-6.2-astra`, esforço `high`.
-  - **Revisor:** 1 `gpt-6.2-sol`, esforço `high`, só leitura.
-  - **Trabalhadores:** até 4 `gpt-6.2-sol`, sendo 2 com esforço `high` e 2 com esforço `medium`. Os itens mais difíceis vão para os `high`.
-- **Trabalhadores a partir de 19/11/2026 ~20:30 UTC (titular):** a cota do Gemini 4 Argon voltou. Os trabalhadores passam a ser até **6** `agy` com `gemini-4-argon-high`, cada um no seu worktree. Trailer: `Co-Authored-By: Gemini 4 Argon <noreply@google.com>`. Acionamento: `setsid nohup agy -p "<ordem>" --model gemini-4-argon-high --dangerously-skip-permissions --print-timeout 0 > <log> 2>&1 < /dev/null &`. Os trabalhadores Sol que estão rodando terminam a ordem atual. O gerente (Astra high) e o revisor (1 Sol high) continuam. Se o Argon devolver 429, volte para os trabalhadores Sol (2 high e 2 medium), sem parar o trabalho.
-- **Trabalhadores a partir de 19/11/2026 ~21:15 UTC (titular):** o Argon está sem cota de novo (429, reposição em ~146 h). Os trabalhadores passam a ser até **4** `agy` com `gemini-4-hydrogen-high`. Trailer: `Co-Authored-By: Gemini 4 Hydrogen <noreply@google.com>`. Acionamento: `setsid nohup agy -p "<ordem>" --model gemini-4-hydrogen-high --dangerously-skip-permissions --print-timeout 0 > <log> 2>&1 < /dev/null &`. Se o Hydrogen devolver 429, volte para os trabalhadores Sol, sem parar. Registre qualquer cota esgotada com a palavra `COTA`.
-- **Reserva dos trabalhadores (titular, 19/11/2026):** se o Hydrogen também ficar sem cota, os trabalhadores passam a ser até 4 Codex `gpt-6.1-terra`, esforço `high`, modo normal: `codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -m gpt-6.1-terra -c model_reasoning_effort=high -C <worktree> "..."`. Trailer `Co-Authored-By: GPT-6.1 Terra <noreply@openai.com>`. Os Sol entram só se o Terra também falhar.
-- **Equipe para o NexoISP (titular, 20/11/2026), substitui as regras de trabalhadores acima.**
-  - **Gerente:** Astra 6.2 `high`, modo normal.
-  - **Revisor:** 1 Sol 6.2 `high`, modo normal, só leitura.
-  - **Trabalhadores:** até **3** ao mesmo tempo, sempre na ordem abaixo, passando ao seguinte quando a cota do anterior acabar (429 ou limite de uso):
-    1. `agy` com `gemini-4-hydrogen-high`;
-    2. `agy` com `gemini-4-argon-high`;
-    3. Claude Code com `claude-sonnet-5-5` esforço `high`, login dedicado da conta ajustconsulting (plano Pro):
-       ```
-       CLAUDE_CONFIG_DIR=/home/app/.claude-trabalhadores/ajust claude -p "<ordem>" --model claude-sonnet-5-5 --effort high --dangerously-skip-permissions
-       ```
-    4. o mesmo com o login dedicado da conta Enok (plano Max): `CLAUDE_CONFIG_DIR=/home/app/.claude-trabalhadores/enok`.
-  - **Logins dos trabalhadores:** usam só as pastas de `/home/app/.claude-trabalhadores/`, nunca as contas da instalação viva, para não disputar a renovação do login.
-  - **Trailers:** Gemini `Co-Authored-By: Gemini 4 Hydrogen|Argon <noreply@google.com>`; Claude `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
-  - **Examinador dos módulos:** Claude Sonnet 5.5, esforço **high**, com examinador e revisor em contas diferentes (Enok Max e ajustconsulting).
-  - **Cota do Max apertada:** quando a cota da conta Enok Max ficar apertada, a prioridade é do examinador, não dos trabalhadores.
-- **Cota do examinador (titular, 20/11/2026).** Quando o examinador Claude parar por limite de uso (`PROVIDER_USAGE_LIMIT`) no meio de um módulo, o módulo não está concluído. Espere a cota voltar, com uma tentativa a cada 15 min, e rode de novo o exame dos arquivos que ficaram sem julgamento, continuando de onde parou. Enquanto espera, adiante outro trabalho que não dependa disso. A mesma regra vale para os trabalhadores: se todos estiverem sem cota, espere e retome de onde parou. Só a cota do **Codex** encerra o trabalho, com o relatório de pausa e sem retomar sozinho.
-- **Modelos do exame e das correções (titular, 20/11/2026), substitui o esforço do examinador definido acima.**
-  - **Examinador:** Claude Sonnet 5.5, esforço `medium` nos módulos 2 (QA), 3 (arquitetura), 4 (dependências), 6 (prontidão), 7 (desempenho), 8 (documentação) e 10 (design); esforço `high` nos módulos 1 (segurança), 5 (banco) e 9 (LGPD e licenças). Hoje o produto define o esforço por perfil, não por módulo. Faça o ajuste para escolher o esforço por módulo pelo caminho do produto, com teste. Se o ajuste ficar caro, use `medium` em todos os módulos.
-  - **Revisor dos achados altos:** Claude Opus 5.5, esforço `medium`, na conta Enok Max, sempre que o examinador marcar um achado alto, em qualquer módulo. É a segunda opinião, em conta ou sessão diferente da do examinador.
-  - **Trabalhadores:** as correções de gravidade alta (segurança, banco, arquitetura) vão para Claude Opus 5.5 esforço `medium`, no login dedicado da conta Enok: `CLAUDE_CONFIG_DIR=/home/app/.claude-trabalhadores/enok claude -p "<ordem>" --model claude-opus-5-5 --effort medium --dangerously-skip-permissions`, com trailer `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. As correções comuns seguem a ordem Gemini Hydrogen → Gemini Argon → Sonnet alto (ajust Pro) → Sonnet alto (Enok Max).
-  - **Prioridade da cota do Max:** primeiro o examinador, depois o revisor Opus dos altos, depois os trabalhadores.
-- **Design, módulo 10 (titular, 20/11/2026), substitui o que está acima para esse módulo.** O examinador, a crítica visual e o modo `criar` usam **Claude Opus 5.5, esforço `high`**, na conta Enok Max. O modo `criar` hoje força `claude-opus-5-5` com esforço `medium` (supervisor e `design-create`); mude para `high` pelo caminho do produto, com teste, e aplique na instalação viva com backup. Os outros módulos seguem a regra anterior.
-- **URGENTE — disco (supervisor, 20/11/2026 06:50 UTC):** o disco chegou a 98% (cerca de 10 GB livres). O crescimento vem de `/home/app/.agent-control/ispagent/native/execution-host`: 611 diretórios de job, 23 GB, cada um com uma cópia `work/` do projeto examinado, e de `/tmp/ac-retomada-8f5dddf3-JZR4mNOc/oci` (11 GB). Antes de lançar novos exames, aplique pelo caminho do produto a retirada dos jobs terminados (remover `work/` de job concluído e já reconciliado) e apague os arquivos OCI temporários que não são mais prova aceita. Se o disco passar de 97%, não lance novos exames até liberar espaço.
-- **URGENTE 2 — disco a 99% (supervisor, 20/11/2026 07:42 UTC):** restam menos de 4 GB. **Não lance novos exames nem novos trabalhadores** até o disco ficar abaixo de 90%. Primeiro libere espaço pelo caminho do produto: retire e reconcilie os jobs nativos concluídos e remova o `work/` dos jobs já terminados em `/home/app/.agent-control/ispagent/native/execution-host` (são 23 GB). Se o produto não tiver esse caminho, implemente agora a limpeza dos `work/` de jobs terminais, com teste, como prioridade máxima. O banco da instalação viva fica em risco se o disco encher.
-- **Esforço e cota do Antigravity (titular, 20/11/2026), substitui os itens correspondentes acima.**
-  - **Gerente:** Astra 6.2, esforço **`medium`**, modo normal.
-  - **Revisor:** Sol 6.2, esforço **`medium`**, modo normal, só leitura.
-  - **Trabalhadores das correções comuns**, até 3, nesta ordem, passando ao seguinte quando a cota acabar:
-    1. `agy --model gemini-4-hydrogen-high`;
-    2. `agy --model gemini-4-argon-high`;
-    3. **`agy --model claude-sonnet-5-5-high`**, que é o Claude pela cota do Antigravity e vem antes das contas Claude próprias;
-    4. Claude Code `claude-sonnet-5-5` esforço `high` no login `/home/app/.claude-trabalhadores/ajust` (Pro);
-    5. o mesmo no login `/home/app/.claude-trabalhadores/enok` (Max).
-  - **Trabalhadores das correções de gravidade alta:**
-    1. **`agy --model claude-opus-5-5-medium`**, pela cota do Antigravity;
-    2. depois Claude Code `claude-opus-5-5` esforço `medium` no login Enok (Max).
-  - **Acionamento pelo Antigravity:** `setsid nohup agy -p "<ordem>" --model <modelo> --dangerously-skip-permissions --print-timeout 0 > <log> 2>&1 < /dev/null &`. Trailer conforme o modelo: `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>` ou `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
-  - O examinador dos módulos continua nas contas Claude da instalação (Enok Max e ajustconsulting), com os esforços já definidos. O Antigravity serve só aos trabalhadores.
-- **Retenção automática de disco (titular, 20/11/2026).** Implemente no produto, com teste e pelo caminho do produto (`personal:maintenance` e o vigia), e aplique na instalação viva com backup:
-  1. **Cópias de job:** o `work/` de todo job nativo terminado, reconciliado e já provado é retirado automaticamente, usando o mesmo mecanismo seguro que você criou hoje (`4ec9fd9c`). Recibos, resultados e relatórios ficam.
-  2. **Backups:** `personal:backup` mantém os **3 backups mais recentes** de cada instalação no destino padrão e apaga os mais antigos depois que o novo passar no `restore-check`. Backups não incluem as bases de vulnerabilidades (`verify-db`, Grype e Trivy), que podem ser baixadas de novo.
-  3. **Worktrees:** worktrees de trabalhadores cujo ramo já foi integrado e que estão sem mudanças há mais de 2 horas são removidos com `git worktree remove`. O ramo continua.
-  4. **Imagens e temporários:** imagens candidatas de módulo que não são o digest fixado nem estão em uso, e pastas temporárias de rodadas encerradas (`/tmp/ac-*`) com mais de 24 horas, são removidas.
-  5. **Alerta:** o vigia avisa a partir de 90% de disco e bloqueia novos exames e trabalhadores a partir de 95%.
-- **Fila de trabalhadores (titular, 20/11/2026 ~14:40 UTC), substitui a fila anterior.** O objetivo é esgotar a conta do Antigravity antes das contas Claude próprias.
-  - **Correções comuns**, nesta ordem:
-    1. `agy --model gemini-4-hydrogen-high`;
-    2. `agy --model gemini-4-argon-high`;
-    3. `agy --model claude-sonnet-5-5-high`;
-    4. **`agy --model gemini-3.8-flash-high`**, só para tarefas simples: gravidade baixa ou média, poucos arquivos, formatação, testes de algo já definido, documentação, ajustes mecânicos;
-    5. Claude Sonnet alto, conta ajustconsulting (Pro);
-    6. Claude Sonnet alto, conta Enok (Max).
+- Registre o erro de cota na hora, no progresso do projeto, com a palavra `COTA`.
+- Nunca compre créditos. Se todos os modelos estiverem sem cota, espere e tente de novo a cada 15 minutos, adiantando o que não depende disso.
+- Prioridade da conta Max: examinador, depois gerente, depois revisor, depois trabalhadores.
 
-    Tarefas complexas pulam o Flash e vão direto para o item 5.
-  - **Correções graves:** `agy --model claude-opus-5-5-medium` e depois Opus médio na conta Enok (Max). O Flash nunca recebe correção grave.
-  - **Trailer do Flash:** `Co-Authored-By: Gemini 3.8 Flash <noreply@google.com>`.
-- **Economia do gerente (titular, 20/11/2026).** O gerente fazia cerca de 435 chamadas por hora, cada uma relendo cerca de 134 mil tokens de contexto, para acompanhar os trabalhadores passo a passo. A partir de agora:
-  - Espere trabalhadores, exames e revisões com **um único comando bloqueante**, por exemplo `while pgrep -f ...; do sleep 120; done`, ou esperando o arquivo de saída. Não consulte várias vezes seguidas.
-  - Junte as verificações num só comando e leia só as últimas linhas dos logs (`tail -n 40`), nunca logs inteiros.
-  - Delegue aos trabalhadores a leitura e a investigação longas, e receba só a conclusão no relatório deles.
-  - Mantenha o histórico curto: o progresso fica em `docs/PROGRESSO-FINAL.md` e `docs/RELATORIO-NEXOISP.md`, não na memória da sessão.
-- **Segunda conta do Antigravity (titular, 20/11/2026 ~14:45 UTC).** A conta tavares.enok@gmail.com fica logada em `HOME=/home/app/.agy-enok`. Acionamento:
-  ```
-  HOME=/home/app/.agy-enok setsid nohup /home/app/.local/bin/agy -p "<ordem>" --model <modelo> --dangerously-skip-permissions --print-timeout 0 > <log> 2>&1 < /dev/null &
-  ```
-  Ela tem `gemini-3.8-flash-high`, `claude-sonnet-4-6` e `claude-opus-4-6-thinking`. Os Gemini 4 e os Claude 5.5 não estão nessa conta. **A fila passa a ser esta**, substituindo a anterior:
-  - **Correções comuns:**
-    1. Hydrogen (ajust);
-    2. Argon (ajust);
-    3. Sonnet 5.5 alto (ajust, Antigravity);
-    4. **Sonnet 4.6 (enok, Antigravity)**;
-    5. Gemini 3.8 Flash alto, só para tarefas simples: primeiro na conta ajust, depois na conta enok;
-    6. Sonnet 5.5 alto na conta Claude Pro;
-    7. Sonnet 5.5 alto na conta Claude Max.
-  - **Correções graves:**
-    1. Opus 5.5 médio (ajust, Antigravity);
-    2. **Opus 4.6 Thinking (enok, Antigravity)**;
-    3. Opus 5.5 médio na conta Claude Max.
-  - **Trailers:** `Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>` e `Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>`.
-- **Economia de tokens como padrão do produto (titular, 20/11/2026).** Vale para todo fluxo: criação de sistemas novos, verificação pelos módulos e melhoria de sistemas existentes.
-  - **Ligado por padrão:**
-    - medição de tokens por modelo, papel e módulo (`personal:tokens`);
-    - mapa compacto do projeto no pedido dos jobs (`personal:mapa`);
-    - exame em lotes;
-    - retenção automática de disco;
-    - fila de modelos do mais barato ao mais caro;
-    - disciplina do gerente: limite e resumo automático de contexto, espera sem consulta repetida, leitura só do fim dos logs.
-  - **Opção por projeto:** cada otimização tem uma opção para desligar naquele projeto.
-  - **Desligado até nova prova:** compressão geral da saída de comandos (T4 reprovou: escondeu informação) e grafo ou índice de código como resposta autônoma (T5 reprovou: 1 acerto em 5).
-  - **Critério para entrar no padrão:** só entra o que provar economia sem perda de qualidade, medido antes e depois.
-  - **T6:** levar a disciplina do gerente para dentro do produto, no gerente semântico do painel e no examinador.
-- **Registro de imagens candidatas (titular, 20/11/2026).** Toda imagem candidata de módulo que for construída deve ser registrada logo depois do build com `npm run personal:maintenance -- <instalação.json> --registrar-imagem --projeto <id> --modulo <módulo> --imagem <sha256:id>`, para a retenção automática (agora em `apply`) poder removê-la depois de 24 h se não for o digest fixado nem estiver em uso. Imagem não registrada nunca é removida.
+## Disco
 
-## Equipe ChatISP (titular, 22/11/2026 ~02:00 UTC)
+- **Orçamento:** o Agent Control sem projetos usa no máximo `storage.budgetGB` (20 GB). Isso inclui:
+  - repositório e worktrees;
+  - dados da instalação e temporários;
+  - backups;
+  - imagens e volumes Docker do AC;
+  - logins dos trabalhadores.
+- **Medição:** `npm run personal:espaco -- <instalação>`. Acima do orçamento, novos exames e trabalhadores são recusados (`PERSONAL_SPACE_BUDGET_EXCEEDED`).
+- **Disco inteiro:** alerta a partir de 90% e bloqueio a partir de 95%.
+- **Retenção:** é automática (`retention.automatic`), por timer próprio, e remove:
+  - pastas de job terminadas;
+  - worktrees integrados e parados (o ramo fica);
+  - temporários `/tmp/ac-*` antigos;
+  - imagens sem pin nem uso;
+  - contêineres e volumes rotulados do AC;
+  - versões antigas das bases de vulnerabilidade;
+  - backups além dos 3 mais recentes.
+- **Imagens:** só saem por ID, depois de conferir os pins (`deploy/modules/*/digest.txt`, `deploy/design-image-digest.txt` e `nativeBootstrap`). Volume sem rótulo do AC nunca é removido.
+- **Imagem candidata:** registre logo depois do build, com `personal:maintenance -- <instalação> --registrar-imagem --projeto <id> --modulo <módulo> --imagem <sha256:id>`.
+- **Projeto encerrado:** retire com `npm run personal:project -- --remover <instalação> <id> --apagar-dados --sim`. O repositório do projeto nunca é apagado.
 
-Substitui, para a auditoria e a melhoria do ChatISP, as seções de equipe acima. A ordem está em `docs/ORDEM-CHATISP.md` e o andamento em `docs/PROGRESSO-CHATISP.md`.
+## Instalação viva
 
-- **Conta Claude:** só a Claude Max da Enok. A conta ajustconsulting (Pro) não é usada, nem como examinador nem como trabalhador.
-- **Gerente:** Claude Code `claude-opus-5-5`, esforço `high`, login `CLAUDE_CONFIG_DIR=/home/app/.claude-trabalhadores/enok`, sem tela. Iniciado e reiniciado pelo vigia `ac-gerente-chatisp.timer`.
-- **Revisor:** Claude Code `claude-opus-5-5`, esforço `medium`, mesmo login, só leitura. Recebe a ordem e o diff, nunca a conclusão do autor.
-- **Examinador dos módulos:** pelo caminho do produto, só na conta Enok Max da instalação, com os modelos e esforços por módulo já definidos acima.
-- **Trabalhadores**, no máximo 2 ao mesmo tempo de cada um:
-  1. `agy --model gemini-4-argon-high` (conta ajust, `HOME` padrão). Trailer `Co-Authored-By: Gemini 4 Argon <noreply@google.com>`.
-  2. `agy --model claude-sonnet-5-5-medium` (conta ajust). Trailer `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
-  3. `agy --model claude-sonnet-4-6` (conta enok, `HOME=/home/app/.agy-enok`). Trailer `Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>`.
-  4. `agy --model gemini-3.8-flash-high` (conta enok), só para tarefas simples: gravidade baixa ou média, poucos arquivos, testes de algo definido, documentação, ajustes mecânicos. Trailer `Co-Authored-By: Gemini 3.8 Flash <noreply@google.com>`.
-  5. Codex `gpt-6.2-sol`, esforço `medium`, modo normal, login `~/.codex` (ajustconsulting). Trailer `Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>`.
-- **Reserva:** quando todos os trabalhadores acima estiverem sem cota, até 4 Claude Code `claude-opus-5-5` esforço `medium` no login Enok, ao mesmo tempo. Trailer `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
-- **Prioridade da cota do Max:** examinador, depois gerente, depois revisor, depois trabalhadores Opus.
-- **Cota:** erro de cota é registrado na hora em `docs/PROGRESSO-CHATISP.md` com a palavra `COTA`. Ninguém para de vez por cota: espera e tenta de novo a cada 15 min, adiantando o que não depende daquilo. Nunca comprar créditos.
-- **ChatISP:** o servidor de origem (`enok@177.104.156.25`) e a instalação publicada `chatisp.tokstiloesporte.com` não são alterados. Nada é enviado (push) sem o sim do titular. O trabalho fica num clone central em `/home/app/projetos-externos/chatisp`, em ramo próprio.
+- Faça backup antes de qualquer mudança (`personal:backup`, que já roda o restore-check).
+- **Atualização:** `npm run personal:update -- <instalação>`. Ela aplica as migrações (`initialize`) antes de reiniciar o gateway. Com migração pendente, o gateway sai com o código 78 e não reinicia em ciclo.
+- **Painel:** construa só com `npm run personal:painel`. Faça primeiro numa pasta temporária, confira as páginas e guarde a cópia do `dist` anterior fora do repositório.
 
-## Equipe ChatISP só com o Claude Max (titular, 22/11/2026 ~17:30 UTC)
+## Git
 
-Substitui a seção anterior na escolha de modelos e trabalhadores. Hoje só a conta Claude Max da Enok tem cota, e todos os papéis dividem essa cota. As outras regras da seção anterior continuam valendo: conta, cota, ChatISP e prioridade.
+- Nada de push sem o sim do titular. Servidores de origem e instalações publicadas de projetos externos não são alterados.
+- Commits locais usam a identidade local configurada pelo titular (e-mail `migration@localhost`).
+- Testes não escrevem em arquivos versionados. A guarda de `scripts/test-ci.mjs` falha se a suíte sujar o repositório ou deixar temporários.
 
-- **Login:** todos usam `CLAUDE_CONFIG_DIR=/home/app/.claude-trabalhadores/enok`, sem tela. Os Gemini, os Sonnet pelo Antigravity e o Codex não são acionados.
-- **Gerente:** Claude Code `claude-sonnet-5-5`, esforço `high`.
-  - Acordado pelo vigia `ac-gerente-chatisp.timer` só quando um processo termina ou aparece log novo.
-  - Sessões de até 30 turnos (`--max-turns 30`), sem esperar dentro da sessão.
-- **Revisor:** Claude Code `claude-opus-5-5`, esforço `medium`, só leitura, `--max-turns 25`. Recebe a ordem e o diff.
-- **Examinador:** pelo caminho do produto, com os esforços por módulo já definidos:
-  - Sonnet 5.5 `high` nos módulos 1, 5 e 9 e `medium` nos demais;
-  - Opus 5.5 `medium` para os achados altos;
-  - Opus 5.5 `high` no design;
-  - até 4 vagas de exame (`evaluation_limit` 4).
-- **Trabalhadores:**
-  - correções comuns: até 2 Claude Code `claude-sonnet-5-5`, esforço `high`. Trailer `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`;
-  - correções graves (segurança, banco, arquitetura): até 2 Claude Code `claude-opus-5-5`, esforço `medium`. Trailer `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
-- **Fases separadas:** com uma conta só, as fases não se misturam.
-  - Exame: só o exame e o gerente. Nenhum trabalhador roda.
-  - Correção: até 4 trabalhadores ao todo, mais o revisor.
-  - No máximo 6 sessões ao mesmo tempo na conta.
-- **Medição:** antes de abrir cada fase, o gerente roda `npm run personal:tokens -- <instalação> --desde <início da fase anterior>` e registra no progresso. Gerente mais revisor não podem passar do que gastam os trabalhadores e o examinador somados.
-- **Regra de mudança mínima:** todo trabalhador segue a regra de `docs/ORDEM-CHATISP.md`. Antes de escrever, reaproveita o que o projeto, a biblioteca padrão e os recursos nativos já oferecem, sem criar dependência nem abstração que a tarefa não peça, e sem retirar validação, segurança ou testes.
-- **Design com Opus médio (titular, 23/11/2026).** No ChatISP, o exame e a crítica visual do módulo 10 usam Claude Opus 5.5 com esforço `medium`, por experiência e para economizar cota. Isso substitui, para esse projeto, o esforço `high` da regra de 20/11. A opção do produto é `economy.designEffort` por projeto, com padrão `high`. A criação (`criar`) continua em `high`.
-- **Conferência dos achados dos módulos 2 a 9 com o Grok (titular, 24/11/2026 ~21:30 UTC).** Os achados "prováveis" de gravidade alta, média e baixa dos módulos 2 a 9 do ChatISP são conferidos pelo Grok CLI `grok-4.7` como revisor de outro provedor:
-  - esforço `high` nos achados altos e `medium` nos demais;
-  - até **6** ao mesmo tempo, numa fila única agrupada por arquivo;
-  - só leitura, numa cópia sem escrita do commit examinado, sem rede além do provedor;
-  - o revisor recebe o código e o achado, nunca a conclusão do examinador;
-  - cada resposta é gravada num diário assim que chega;
-  - o registro é "revisão independente por outro provedor (Grok 4.7)", por fora do produto e sem recibo assinado.
+## Autonomia
 
-- **Trabalhadores Grok para as correções do ChatISP (titular, 24/11/2026 ~23:00 UTC).** Até **4** Grok CLI `grok-4.7`, esforço `medium` (ou outro arranjo que o supervisor julgar melhor), cada um no seu worktree do clone do ChatISP, com itens que não tocam os mesmos arquivos. Trailer: `Co-Authored-By: Grok 4.7 <noreply@x.ai>`. Revisão independente por Claude Opus 5.5 médio, só leitura. Nada é enviado sem o sim do titular.
-- **Front-end só por Opus ou Fable (titular, 25/11/2026 ~01:00 UTC).** Código de front-end (por exemplo `web/` do ChatISP e `upstream/cezar/packages/web` do Agent Control) só é escrito por Claude Opus 5.5 ou Claude Fable 5.2. Grok, Sonnet, Gemini e Codex não escrevem front-end; quando um deles tocar nisso, a parte de front-end é desfeita e refeita por Opus ou Fable.
+- Decida as dúvidas com um padrão razoável e informe o que decidiu.
+- Um plano aprovado vai até a aplicação na instalação viva, na mesma execução.
+- Pare só para o que exige o titular: sudo, créditos ou credencial real.
+
+## Documentação viva
+
+- Raiz e `docs/`: `README.md`, `docs/USO-PESSOAL.md`, `docs/MODULOS-DE-VERIFICACAO.md`, `docs/RETENCAO-ARTEFATOS.md`, `docs/REVISAO-SEGURANCA-EXTERNA.md` e `docs/ESTADO.md`.
+- Subpastas de `docs/`: `normative/`, `operations/`, `architecture/`, `contracts/`, `economia/` e `validation/`.
+- **Projeto em andamento:** o progresso fica em `docs/projetos/<projeto>/PROGRESSO.md`. Ao encerrar o projeto, ele vai para o arquivo histórico.

@@ -1,5 +1,0 @@
-# C5 — atribuição de falhas de migração a arquivos e linhas
-
-Trate os quatro pontos de atribuição do PostgreSQL descritos em /tmp/ac-final-3aDgqp8I/parecer-high-C5-R7.txt. Corrija o reconhecimento de identificadores cotados e limites de quadros SQL, inclusive comentários, nomes repetidos e erro sem posição confiável. Mantenha origem indeterminada quando só se conhece a instrução que disparou uma checagem diferida. Responsabilidade exclusiva por deploy/modules/banco/collector.rb e testes de banco. Use somente migrações funcionais de fixture com dados descartáveis, sem alterar bancos ou arquivos do titular. Preserve o vínculo SHA-256 das consultas.
-
-Você trabalha em paralelo com outros colaboradores. Preserve as mudanças deles e trabalhe só neste worktree. Rode npx tsc --noEmit --skipLibCheck e só os testes dos arquivos alterados com dados sintéticos. Não rode a suíte completa nem o laboratório, não reconstrua imagens nem toque na instalação viva ou em qualquer login real. Escreva docs/RELATORIO-FINAL-C5-R8.md. Commite tudo da ordem com git -c user.name="Enok Tavares" -c user.email="migration@localhost" e trailer Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>.

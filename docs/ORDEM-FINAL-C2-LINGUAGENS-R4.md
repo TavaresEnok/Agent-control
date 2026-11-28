@@ -1,5 +1,0 @@
-# QA — origem de casos Go e escopo de Python
-
-Corrija a cópia e as classificações de teste Python e Go confirmadas na revisão C2-LINGUAGENS-R3. Preserve a medição parcial de um pacote mesmo quando o caso não tem origem individual. Diferencie erros operacionais e de compilação pelo diagnóstico estruturado, e cubra os executáveis Go reais, incluindo a versão incompatível se disponível. O gerente já disponibilizou as dependências de propriedades ao unittest no ramo de integração em 866c4580. Mantenha essa mudança ao integrar. Somente adaptadores de linguagem, testes focados e seu relatório.
-
-Você trabalha em paralelo com outros colaboradores. Preserve as mudanças deles e trabalhe só neste worktree. Rode npx tsc --noEmit --skipLibCheck e só os testes dos arquivos alterados com dados sintéticos. Não rode a suíte completa nem o laboratório, não reconstrua imagens nem toque na instalação viva ou em qualquer login real. Escreva docs/RELATORIO-FINAL-C2-LINGUAGENS-R4.md. Commite tudo da ordem com git -c user.name="Enok Tavares" -c user.email="migration@localhost" e trailer Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>.

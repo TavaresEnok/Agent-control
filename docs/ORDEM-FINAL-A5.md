@@ -1,5 +1,0 @@
-# Parte A — conceitos da mesma tela
-
-Gemini 4 Argon High. Implemente a parte A.5 em src/design-create.ts e testes de criação próprios. Quando o briefing pedir variedade da mesma tela, preserve a intenção, ações, rótulos e todas as direções por lote nas rodadas de criação e retrabalho. O briefing em /home/app/design-briefings/tela-inicial-assinante.md ultrapassa o corte atual. Cubra briefing longo, modo normal de telas distintas e retrabalho. Respeite os limites do runtime com falha explícita quando necessário. Nenhum modelo além do próprio produto desenha telas.
-
-Trabalhe só no worktree atribuído. Há outros colaboradores. Preserve as mudanças deles. Rode npx tsc --noEmit --skipLibCheck e só os testes dos arquivos que mudou. Não rode a suíte completa, o laboratório nem reconstrua imagens. Proibido tocar a instalação viva e qualquer login real. Escreva docs/RELATORIO-FINAL-A5-ARGON.md. Commite tudo com git -c user.name="Enok Tavares" -c user.email="migration@localhost" e trailer Co-Authored-By: Gemini 4 Argon <noreply@google.com>.

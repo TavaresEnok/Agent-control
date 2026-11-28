@@ -1,5 +1,0 @@
-# Banco — origem conservadora para diagnósticos internos
-
-O parecer /tmp/ac-retomada-8f5dddf3-JZR4mNOc/parecer-C5-R9.txt mostrou dois casos ainda imprecisos. Preserve separadamente a presença de PG_DIAG_INTERNAL_QUERY e da posição interna. Se o cursor ou quadro textual não for confiável, registre evidência parcial e a referência inicial como tal. Use os campos estruturados do PostgreSQL; evite ampliar um reconhecedor textual para presumir posições. Provas com erro funcional comum e dados estruturados sintéticos, sem exploração. Sua responsabilidade é o coletor de banco e testes de atribuição.
-
-Você trabalha em paralelo com outros colaboradores. Preserve as mudanças deles e trabalhe só neste worktree. Rode npx tsc --noEmit --skipLibCheck e só os testes dos arquivos alterados com dados sintéticos. Não rode a suíte completa nem o laboratório, não reconstrua imagens nem toque na instalação viva ou em qualquer login real. Escreva docs/RELATORIO-FINAL-C5-R10.md. Commite tudo da ordem com git -c user.name="Enok Tavares" -c user.email="migration@localhost" e trailer Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>.

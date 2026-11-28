@@ -1,5 +1,0 @@
-# Desempenho — delimitação dos documentos servidos
-
-Corrija a classificação de páginas com base HTML sem destino aplicável e documentos embutidos. Para formas que o servidor de homologação não interpreta, deixe explícito o escopo parcial e retire a página da medição. Provas com HTML e arquivos estáticos benignos; confirme que só o snapshot declarado chega ao servidor local. Não produza exploração, navegação externa, reprodução de vulnerabilidades nem provas de intrusão. Seu escopo é o módulo de desempenho e seus testes.
-
-Você trabalha em paralelo com outros colaboradores. Preserve as mudanças deles e trabalhe só neste worktree. Rode npx tsc --noEmit --skipLibCheck e só os testes dos arquivos alterados com dados sintéticos. Não rode a suíte completa nem o laboratório, não reconstrua imagens nem toque na instalação viva ou em qualquer login real. Escreva docs/RELATORIO-FINAL-C7-R9.md. Commite tudo da ordem com git -c user.name="Enok Tavares" -c user.email="migration@localhost" e trailer Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>.

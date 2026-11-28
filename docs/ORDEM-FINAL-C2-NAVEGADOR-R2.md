@@ -1,5 +1,0 @@
-# C2 — fidelidade da renderização e cobertura do navegador
-
-Responsabilidade exclusiva por deploy/modules/qa/browser-qa.mjs e testes de navegador. Compare somente ambientes de render equivalentes. Preserve scripts inertes, ordem DOM, codificações de HTML/CSS e track de recursos inválidos. Registre páginas além do limite e identifique corretamente a origem de contrastes quando identificável. Consulte o parecer C2-NAVEGADOR em /tmp/ac-final-3aDgqp8I/parecer-high-C2-NAVEGADOR.txt. Use só páginas sintéticas locais, offline, sem execução de scripts de projeto.
-
-Você trabalha em paralelo com outros colaboradores. Preserve as mudanças deles e trabalhe só neste worktree. Rode npx tsc --noEmit --skipLibCheck e só os testes dos arquivos alterados com dados sintéticos. Não rode a suíte completa nem o laboratório, não reconstrua imagens nem toque na instalação viva ou em qualquer login real. Escreva docs/RELATORIO-FINAL-C2-NAVEGADOR-R2.md. Commite tudo da ordem com git -c user.name="Enok Tavares" -c user.email="migration@localhost" e trailer Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>.

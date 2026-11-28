@@ -1,5 +1,0 @@
-# Prontidão — estados indeterminados de Nginx e Compose
-
-Corrija os três itens em /tmp/ac-retomada-8f5dddf3-JZR4mNOc/parecer-C6-R11.txt por leitura defensiva e passiva de arquivos. Variável em redirecionamento e YAML incompleto devem permanecer indeterminados. Para delimitadores Bash que dependam de expansões fora do subconjunto suportado, encerre a análise do script com cobertura parcial antes de atribuir comandos. Use casos sintéticos funcionais e mantenha as sondagens passivas e a política de rede existentes.
-
-Você trabalha em paralelo com outros colaboradores. Preserve as mudanças deles e trabalhe só neste worktree. Rode npx tsc --noEmit --skipLibCheck e só os testes dos arquivos alterados com dados sintéticos. Não rode a suíte completa nem o laboratório, não reconstrua imagens nem toque na instalação viva ou em qualquer login real. Escreva docs/RELATORIO-FINAL-C6-R12.md. Commite tudo da ordem com git -c user.name="Enok Tavares" -c user.email="migration@localhost" e trailer Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>.

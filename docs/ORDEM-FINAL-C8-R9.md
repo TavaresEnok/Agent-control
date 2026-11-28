@@ -1,5 +1,0 @@
-# C8 — localização dos avisos de documentação
-
-Resolva os cinco casos do parecer /tmp/ac-final-3aDgqp8I/parecer-high-C8-R8.txt nos coletores de documentação e nos seus testes. Valide a origem de diagnósticos TypeDoc e Mermaid, a resolução inequívoca de arquivo, os limites lexicais dos comentários e o comportamento para tipos de diagramas não compatíveis. Mantenha a localização indeterminada quando não houver correspondência. Só fixtures locais, sem executar scripts do projeto.
-
-Você trabalha em paralelo com outros colaboradores. Preserve as mudanças deles e trabalhe só neste worktree. Rode npx tsc --noEmit --skipLibCheck e só os testes dos arquivos alterados com dados sintéticos. Não rode a suíte completa nem o laboratório, não reconstrua imagens nem toque na instalação viva ou em qualquer login real. Escreva docs/RELATORIO-FINAL-C8-R9.md. Commite tudo da ordem com git -c user.name="Enok Tavares" -c user.email="migration@localhost" e trailer Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>.

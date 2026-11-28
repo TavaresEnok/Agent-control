@@ -1,5 +1,0 @@
-# Prova da seleção da arquitetura no QA
-
-O parecer de 2b5ab810 confirmou as duas etapas, mas demonstrou que o teste não percebe uma restrição extra a amd64. Complete apenas o teste focado do empacotamento para verificar o conjunto de instruções executadas pelo estágio comum para as duas plataformas. Demonstre que rejeita uma trava amd64. Preserve o Dockerfile e os checksums já usados. Não é necessário substituir os binários nem executar a arquitetura arm64. Revise somente os requisitos acima se acionado como revisor somente leitura.
-
-Você trabalha em paralelo com outros colaboradores. Preserve as mudanças deles e trabalhe só neste worktree. Rode npx tsc --noEmit --skipLibCheck e só os testes dos arquivos alterados com dados sintéticos. Não rode a suíte completa nem o laboratório, não reconstrua imagens nem toque na instalação viva ou em qualquer login real. Escreva docs/RELATORIO-FINAL-C2-CARGA-REGRESSAO.md. Commite tudo da ordem com git -c user.name="Enok Tavares" -c user.email="migration@localhost" e trailer Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>.

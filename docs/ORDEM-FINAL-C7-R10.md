@@ -1,5 +1,0 @@
-# Desempenho — recursos estáticos e escopo do Lighthouse
-
-Em /tmp/ac-retomada-8f5dddf3-JZR4mNOc/parecer-C7-R9.txt foi confirmado que recursos de imagem em object também estão sendo omitidos. Reconheça recursos de imagem efetivamente suportados pelo servidor e restrinja a omissão a documentos ou conteúdo indeterminado. Cubra simultaneamente a rota estática permitida e a resposta 404 da rota não declarada usando fixtures normais. Trabalhe somente no classificador do módulo de desempenho e nos seus testes. Não crie clientes para destinos externos nem reproduza ataques.
-
-Você trabalha em paralelo com outros colaboradores. Preserve as mudanças deles e trabalhe só neste worktree. Rode npx tsc --noEmit --skipLibCheck e só os testes dos arquivos alterados com dados sintéticos. Não rode a suíte completa nem o laboratório, não reconstrua imagens nem toque na instalação viva ou em qualquer login real. Escreva docs/RELATORIO-FINAL-C7-R10.md. Commite tudo da ordem com git -c user.name="Enok Tavares" -c user.email="migration@localhost" e trailer Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>.

@@ -1,5 +1,0 @@
-# Aplique uma regra conservadora para aspas aninhadas
-
-No mesmo coletor de matriz, proteja o caso Retornar a mensagem “Falhou. Motivo: “sem rede”. Calcular com `OK` de `a.mjs`.”. Faça validação de delimitadores aninhados antes de dividir as cláusulas ou classifique o requisito como parcial nas formas aninhadas/ambíguas; o texto não pode servir de operação. Considere pares curvos, angulares, mistos, delimitador sem par e preservação de positivos claros, incluindo REQ-186 e REQ-188. Preserve os recibos e a gramática explícita. Mantenha o patch pequeno e inclua o controle físico do coletor.
-
-Você trabalha em paralelo com outros colaboradores. Preserve as mudanças deles e trabalhe só neste worktree. Rode npx tsc --noEmit --skipLibCheck e só os testes dos arquivos alterados com dados sintéticos. Não rode a suíte completa nem o laboratório, não reconstrua imagens nem toque na instalação viva ou em qualquer login real. Escreva docs/RELATORIO-FINAL-C2-MATRIZ-ASPAS-ANINHADAS.md. Commite tudo da ordem com git -c user.name="Enok Tavares" -c user.email="migration@localhost" e trailer Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>.
