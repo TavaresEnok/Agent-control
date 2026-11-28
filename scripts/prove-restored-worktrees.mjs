@@ -21,7 +21,7 @@ let count=0;for(const item of manifest.files){
 }return count;}
 verified=await verifyOriginal();
 const smoke=JSON.parse(execFileSync('docker',['compose','-f','deploy/compose.lab.yml','run','--rm','--no-deps','-T',
- '-v',root+':'+root,'-e','AC_TEST_DATABASE_URL=postgresql://ac_lab:synthetic-lab-only@db:5432/'+imported.database,
+ '-v',root+':'+root,'-e','AC_TEST_DATABASE_URL=postgresql://ac_lab:synthetic-lab-only@db:5432/'+imported.database,'-e','AC_WRITE_EVIDENCE=1',
  'runtime','node','--import','tsx','tests/fixtures/restored-runtime-smoke.ts',restored],{cwd:root,encoding:'utf8',maxBuffer:1048576}));
 assert.equal(smoke.result,'passed');
 assert.equal(await verifyOriginal(),verified);

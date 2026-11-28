@@ -12,6 +12,7 @@ import {CezarRuntime} from '../src/cezar.ts';
 import {Capacity} from '../src/capacity.ts';
 import {Templates} from '../src/templates.ts';
 import {provisionEngineering} from './fixtures/provision-engineering.ts';
+import {projectRepository} from './fixtures/project-repository.ts';
 
 for(const finish of ['resume','cancel','approve'] as const)test(`human pause holds the next native node, then ${finish} preserves implementation identity`,{timeout:30000},async()=>{
  const url=process.env.AC_TEST_DATABASE_URL;if(!url?.endsWith('/ac_implementation_test'))throw Error('ISOLATED_DATABASE_REQUIRED');
@@ -20,7 +21,7 @@ for(const finish of ['resume','cancel','approve'] as const)test(`human pause hol
   const principal='boundary-'+randomUUID(),project=randomUUID();
   await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,'Native pause fixture']);
   await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project,principal]);
-  await mkdir('.state/projects',{recursive:true});const repo=await mkdtemp(resolve('.state/projects/ac-pause-'));
+  const repo=await projectRepository('ac-pause-');
   const git=(...args:string[])=>execFileSync('git',['-C',repo,...args],{encoding:'utf8'}).trim();
   git('init','-q','-b','main');git('config','user.email','fixture@example.invalid');git('config','user.name','Synthetic fixture');
   await writeFile(join(repo,'README.md'),'Pause fixture only\n');git('add','.');git('commit','-qm','base');git('branch','protected');

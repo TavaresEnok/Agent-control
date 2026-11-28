@@ -5,6 +5,7 @@ import {readFile,writeFile,realpath} from 'node:fs/promises';
 import {resolve,join,sep} from 'node:path';
 import {Ledger} from '../../src/ledger.ts';
 import {CezarRuntime} from '../../src/cezar.ts';
+import {writeEvidence} from './evidence.ts';
 const url=process.env.AC_TEST_DATABASE_URL;
 if(!url||!/^ac_restore_[a-f0-9]{16}$/.test(new URL(url).pathname.slice(1)))throw Error('NEW_RESTORE_DATABASE_REQUIRED');
 const restored=await realpath(process.argv[2]),fixture=JSON.parse(await readFile(join(restored,'.state/browser-fixture.json'),'utf8'));
@@ -29,6 +30,6 @@ try{
  const result={result:'passed',synthetic:true,admissionClosed:true,runsPreserved:ids.length,
   operationsAndGrantsUnchanged:true,noHttpListener:true,noConversationEndpoint:true,noWorkerDispatched:true,
   limitation:'Managed runtime only; conversation UI, live physical effects, provider accounts and full disaster recovery are not exercised.'};
- await writeFile(resolve('docs/validation/evidence/restored-runtime-smoke.json'),JSON.stringify(result,null,2)+'\n');
+ await writeEvidence('restored-runtime-smoke.json',JSON.stringify(result,null,2)+'\n');
  console.log(JSON.stringify(result));
 }finally{await runtime?.close();await ledger.close();}

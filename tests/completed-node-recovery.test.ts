@@ -12,6 +12,7 @@ import {CezarRuntime} from '../src/cezar.ts';
 import {Capacity} from '../src/capacity.ts';
 import {Templates} from '../src/templates.ts';
 import {provisionEngineering} from './fixtures/provision-engineering.ts';
+import {projectRepository} from './fixtures/project-repository.ts';
 
 const markerTimeoutMs=30_000;
 
@@ -107,7 +108,7 @@ for(const stopNode of ['qa','review','judge','integrate','integrate-after-cas','
   const project=randomUUID(),principal='completed-recovery-'+randomUUID();
   await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,'Completed node recovery']);
   await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project,principal]);
-  await mkdir('.state/projects',{recursive:true});const repo=await mkdtemp(resolve('.state/projects/ac-completed-recovery-'));
+  const repo=await projectRepository('ac-completed-recovery-');
   const git=(...args:string[])=>execFileSync('git',['-C',repo,...args],{encoding:'utf8'}).trim();
   git('init','-q','-b','main');git('config','user.email','fixture@example.invalid');git('config','user.name','Synthetic fixture');
   await writeFile(join(repo,'README.md'),'Recovery fixture only\n');git('add','.');git('commit','-qm','base');git('branch','protected');

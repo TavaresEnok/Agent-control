@@ -364,7 +364,8 @@ function run(mode: string, relative?: string) {
   const script=join(directory, 'proof.rb');
   writeFileSync(script, proof);
   try {
-    return spawnSync(ruby ?? 'ruby', [script, safeGit, mode, ...(relative ? [relative] : [])], {encoding: 'utf8', timeout: 120000});
+    // As pastas do Dir.mktmpdir (prova e AcSafeGit) ficam dentro desta, apagada no finally mesmo se o Ruby for morto no timeout.
+    return spawnSync(ruby ?? 'ruby', [script, safeGit, mode, ...(relative ? [relative] : [])], {encoding: 'utf8', timeout: 120000, env: {...process.env, TMPDIR: directory}});
   } finally {
     rmSync(directory, {recursive: true, force: true});
   }

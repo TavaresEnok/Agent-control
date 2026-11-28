@@ -184,6 +184,75 @@ test('captura e ferramentas usam sessão em todas as rotas e descartam a tela de
   }
 });
 
+test('a tela de login e a rota declarada pública são capturadas sem sessão, também nas auditorias', {skip: !image}, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'design-auth-public-'));
+  const name = `ac-design-test-${randomUUID()}`;
+  const origin = `http://${name}.local:8080`;
+  let state: string | undefined;
+  try {
+    // O login continua na tela mesmo com a sessão aberta, como no ChatISP. O servidor anota o cookie de cada pedido.
+    await writeFile(join(directory, 'serve.mjs'), `
+      import {createServer} from 'node:http';
+      import {appendFileSync} from 'node:fs';
+      const form = '<form method="post" action="/entrar"><input id="user" name="user"><input id="pass" name="pass" type="password"><button>Entrar</button></form>';
+      const send = (res, body) => {
+        res.writeHead(200, {'content-type': 'text/html', 'cache-control': 'no-store'});
+        res.end('<!doctype html><html lang="pt-BR"><title>Laboratório</title><main>' + body + '</main></html>');
+      };
+      createServer(async (req, res) => {
+        appendFileSync('/tmp/visitas.log', JSON.stringify({url: req.url, cookie: req.headers.cookie ?? ''}) + '\\n');
+        if (req.url === '/entrar' && req.method === 'POST') {
+          let body = '';
+          for await (const chunk of req) body += chunk;
+          if (new URLSearchParams(body).get('pass') !== ${JSON.stringify(password)}) return send(res, form);
+          res.writeHead(303, {'set-cookie': 'lab=aberta; Path=/; HttpOnly', location: '/painel'});
+          return res.end();
+        }
+        if (req.url?.startsWith('/entrar') || req.url === '/sobre') return send(res, req.url === '/sobre' ? '<h1>Sobre</h1>' + form : form);
+        if (req.headers.cookie !== 'lab=aberta') { res.writeHead(303, {location: '/entrar'}); return res.end(); }
+        return send(res, '<h1>Painel</h1>');
+      }).listen(8080, '0.0.0.0');
+    `);
+    const repository = join(directory, 'repo');
+    await mkdir(repository);
+    await exec('docker', ['run', '-d', '--rm', '--pull', 'never', '--name', name, '--tmpfs', '/tmp',
+      '--network', 'design-homologation', '--network-alias', `${name}.local`,
+      '--mount', `type=bind,source=${directory}/serve.mjs,destination=/serve.mjs,readonly`,
+      '--entrypoint', 'node', image!, '/serve.mjs']);
+    const url = origin + '/entrar';
+    state = await writeDesignLoginState(url, {
+      username: 'laboratorio', password, usernameSelector: '#user', passwordSelector: '#pass', submitSelector: 'text=Entrar',
+    }, image);
+    const exam = await executeDesignImage({
+      image: image!, targetUrl: url, repository, loginState: state,
+      plan: {routes: [{route: '/entrar/'}, {route: '/sobre', publica: true}, {route: '/painel'}], viewports: [375]},
+    });
+    assert.equal(exam.ok, true, exam.notes.join(' '));
+    const doc = exam.document as {screenshots: {route: string}[]; unavailable: unknown[]; auditLoginFailures: unknown[];
+      reports: Record<'pa11y' | 'lighthouse', {route: string}[]>};
+    assert.deepEqual(doc.screenshots.map(row => row.route), ['/entrar/', '/sobre', '/painel']);
+    assert.deepEqual(doc.unavailable, []);
+    assert.deepEqual(doc.auditLoginFailures, []);
+    for (const tool of ['pa11y', 'lighthouse'] as const) {
+      assert.deepEqual([...new Set(doc.reports[tool].map(row => row.route))].sort(), ['/entrar/', '/painel', '/sobre'], tool);
+    }
+    const {stdout} = await exec('docker', ['exec', name, 'cat', '/tmp/visitas.log']);
+    const visits = stdout.trim().split('\n').map(line => JSON.parse(line) as {url: string; cookie: string});
+    for (const route of ['/entrar/', '/sobre']) {
+      const seen = visits.filter(row => row.url === route);
+      assert.ok(seen.length > 0, route);
+      assert.ok(seen.every(row => row.cookie === ''), `${route} foi pedida com a sessão`);
+    }
+    assert.ok(visits.some(row => row.url === '/painel' && row.cookie === 'lab=aberta'));
+    assert.equal(designExamStatus(exam).code, 0);
+  } finally {
+    await exec('docker', ['rm', '-f', name]).catch(() => {});
+    const scratch = state && await designScratchRoot(state);
+    if (scratch) await removeDesignScratch(scratch);
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
 test('Chromium no host reconhece a perda de sessão e o UID da imagem lê seu estado', {skip: !image}, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'design-auth-host-'));
   const visits = new Set<string>();

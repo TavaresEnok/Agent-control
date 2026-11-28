@@ -9,7 +9,7 @@ import {existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, 
 import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {prepareTrust} from './trust.mjs';
-import {pageShowsLogin, watchNavigationFailure} from './login-decision.mjs';
+import {pageShowsLogin, publicRoute, watchNavigationFailure} from './login-decision.mjs';
 
 const HOST = /^(?:127\.0\.0\.1|localhost|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+local)$/;
 const AXE_TAGS = ['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa', 'best-practice'];
@@ -860,6 +860,8 @@ async function openAuthenticatedExam(chromium, chrome, origin, login) {
     const endpoint = `http://127.0.0.1:${session.port}`;
     const browser = await chromium.connectOverCDP(endpoint);
     const context = await browser.newContext({serviceWorkers: 'block', storageState: login.storageState});
+    // A tela de login e as rotas públicas declaradas abrem sem cookie nem storage da sessão.
+    const publicContext = await browser.newContext({serviceWorkers: 'block'});
     const auditBrowser = await puppeteer.connect({browserURL: endpoint});
     const seed = new URL('/.ac-design-storage', origin).href;
     let sessionStorage = login.designLogin.sessionStorage ?? [];
@@ -885,22 +887,23 @@ async function openAuthenticatedExam(chromium, chrome, origin, login) {
       },
       auditBrowser,
       port: session.port,
-      async withPage(requestedUrl, run, audit = false) {
-        const page = await context.newPage();
+      async withPage(requestedUrl, run, audit = false, isPublic = false) {
+        const page = await (isPublic ? publicContext : context).newPage();
         let navigation;
         try {
-          if (audit || sessionStorage.length > 0) {
+          if (audit || (!isPublic && sessionStorage.length > 0)) {
             await page.route(seed, route => route.fulfill({contentType: 'text/html', body: '<!doctype html>'}), {times: 1});
             await page.goto(seed, {waitUntil: 'domcontentloaded', timeout: 20000});
             await page.evaluate(entries => {
               for (const [key, value] of entries) window.sessionStorage.setItem(key, value);
-            }, sessionStorage);
+            }, isPublic ? [] : sessionStorage);
           }
           const current = audit ? (await auditBrowser.pages()).find(candidate => candidate.url() === seed) : page;
           if (!current) throw new Error('DESIGN_CAPTURE_LOGIN_FAILED');
           if (audit) await current.setBypassServiceWorker(true);
+          if (isPublic) return await run(current, async () => false);
           navigation = watchNavigationFailure(current);
-          const unauthorized = async () => navigation.failed() || await pageShowsLogin(page, requestedUrl, login.designLogin);
+          const unauthorized = async () => navigation.failed() || await pageShowsLogin(page, requestedUrl, login.designLogin, true);
           const result = await run(current, unauthorized);
           // Uma passagem que caiu no login não substitui o estado de sessão da última aba válida.
           if (!await unauthorized()) {
@@ -948,6 +951,8 @@ function readPlan(origin) {
       route,
       themes: themes.length > 0 ? [...new Set(themes)] : ['claro'],
       states: normalized.states,
+      // Rota declarada pública no pedido: abre sem sessão mesmo com login configurado.
+      public: item.publica === true,
     });
     if (routes.length >= 40) break;
   }
@@ -1156,6 +1161,9 @@ async function main() {
   const loginRequested = plan.routes.some(route => route.states.some(state => state.auth));
   if (loginRequested && login === null) note('logado não capturado');
 
+  // Com login configurado, a tela de login e as rotas declaradas públicas são capturadas sem sessão.
+  const openWithoutSession = route => login !== null
+    && publicRoute(routeUrl(target.origin, route.route), login.designLogin, route.public);
   const routeCells = [];
   for (const route of plan.routes) {
     const list = [];
@@ -1170,11 +1178,12 @@ async function main() {
             viewport,
             href: state.href,
             actions: state.actions,
+            auth: state.auth,
           });
         }
       }
     }
-    routeCells.push({route: route.route, cells: list});
+    routeCells.push({route: route.route, public: openWithoutSession(route), cells: list});
   }
 
   const pageStyles = [];
@@ -1462,9 +1471,10 @@ async function main() {
       const publicPage = await publicContext?.newPage();
       for (const group of routeCells) {
         const url = routeUrl(target.origin, group.route);
-        const withPage = (run, requested = url) => publicPage ? run(publicPage) : authenticated.withPage(requested, run);
+        const withPage = (run, requested = url, isPublic = group.public) => publicPage
+          ? run(publicPage) : authenticated.withPage(requested, run, false, isPublic);
         for (const cell of group.cells) {
-          const capture = () => withPage((page, unauthorized) => runCell(page, cell, unauthorized), cell.href ?? url);
+          const capture = () => withPage((page, unauthorized) => runCell(page, cell, unauthorized), cell.href ?? url, group.public && !cell.auth);
           if (await capture() !== 'login') continue;
           if (await authenticated.renew() && await capture() !== 'login') continue;
           markUnavailable(cell, 401, 'sessão não confirmada na rota', 'DESIGN_CAPTURE_LOGIN_FAILED');
@@ -1498,7 +1508,7 @@ async function main() {
   const pa11yFailures = [];
   const pa11yBin = '/opt/design-tools/node_modules/.bin/pa11y';
   const pa11yConfig = '/tmp/pa11y.json';
-  const runAuthenticatedPa11y = (route, url, viewport, runner) => authenticated.withPage(url, async (page, unauthorized) => {
+  const runAuthenticatedPa11y = (route, url, viewport, runner, isPublic) => authenticated.withPage(url, async (page, unauthorized) => {
     const size = {width: viewport, height: viewportHeight(viewport)};
     await page.setViewport(size);
     const response = await page.goto(url, {waitUntil: 'load', timeout: 20000}).catch(() => null);
@@ -1509,7 +1519,7 @@ async function main() {
       browser: authenticated.auditBrowser, page, viewport: size, ignoreUrl: true, runners: [runner], timeout: 25000,
     }), 25000).catch(() => null);
     return await loginFailed() ? null : result?.issues ?? null;
-  }, true);
+  }, true, isPublic);
   for (const route of plan.routes) {
     for (const viewport of plan.viewports) {
       let cellDone = true;
@@ -1518,7 +1528,7 @@ async function main() {
         try {
           const url = routeUrl(target.origin, route.route);
           if (login !== null) {
-            const issues = await runAuthenticatedPa11y(route.route, url, viewport, runner);
+            const issues = await runAuthenticatedPa11y(route.route, url, viewport, runner, openWithoutSession(route));
             if (issues === null) {
               cellDone = false;
               pa11yFailures.push(`DESIGN_PA11Y_FAILED ${label} rota indisponível com sessão`);
@@ -1600,7 +1610,7 @@ async function main() {
               chromeFlags: ['--headless=new', '--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
             });
           }
-          const result = authenticated ? await authenticated.withPage(url, measure, true) : await measure();
+          const result = authenticated ? await authenticated.withPage(url, measure, true, openWithoutSession(route)) : await measure();
           const lhr = slimLighthouse(result?.lhr ?? null);
           if (!lhr || (login !== null && result?.lhr?.runtimeError)) {
             lhFailures.push(`DESIGN_LIGHTHOUSE_FAILED ${route.route} ${formFactor} sem LHR`);

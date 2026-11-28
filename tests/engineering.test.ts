@@ -12,6 +12,8 @@ import {provisionEngineering} from './fixtures/provision-engineering.ts';
 import {Templates} from '../src/templates.ts';
 import {IsolatedImplementation} from '../src/isolated-implementation.ts';
 import {SandboxClient} from '../src/sandbox-client.ts';
+import {writeEvidence} from './fixtures/evidence.ts';
+import {projectRepository} from './fixtures/project-repository.ts';
 
 class LostStartAckClient extends SandboxClient {
  starts=0;
@@ -31,7 +33,7 @@ test('engineering DAG records independent verification before conditional integr
  const project=randomUUID(),principal='engineering-'+randomUUID();
  await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,'Engineering fixture']);
  await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project,principal]);
- await mkdir('.state/projects',{recursive:true});const repo=await mkdtemp(resolve('.state/projects/ac-engineering-'));
+ const repo=await projectRepository('ac-engineering-');
  const git=(...args:string[])=>execFileSync('git',['-C',repo,...args],{encoding:'utf8'}).trim();
  git('init','-q','-b','main');git('config','user.email','fixture@example.invalid');git('config','user.name','Synthetic fixture');
  await writeFile(join(repo,'README.md'),'Fixture only\n');git('add','.');git('commit','-qm','base');git('branch','protected');
@@ -94,7 +96,7 @@ test('engineering DAG records independent verification before conditional integr
   git('update-ref','refs/heads/protected',base,operation.receipt.commit);
   const replay=await new Integrator(db,options.quality,options.git,project,'refs/heads/protected').integrate(principal,integration.id,authority);
   assert.equal(replay.status,'integrated');assert.equal(git('rev-parse','refs/heads/protected'),base);
-  await writeFile(isolated?'docs/validation/evidence/engineering-dag-isolated.json':'docs/validation/evidence/engineering-dag-real-components.json',JSON.stringify({result:'passed',synthetic:true,
+  await writeEvidence(isolated?'engineering-dag-isolated.json':'engineering-dag-real-components.json',JSON.stringify({result:'passed',synthetic:true,
    actualComponents:['PostgreSQL','Cezar RunManager','Git','Ruby helper','OS processes'],
    independentVerifierSessions:5,reviewers:3,judge:1,maxSimultaneousReviews:Number(overlap),stages:stages.map(s=>s.node_id),verifiedTree:operation.receipt.tree,
    denied:['changed artifact','implementation session reused','invalid signature','moved base'],replayDoesNotRewriteRef:true,

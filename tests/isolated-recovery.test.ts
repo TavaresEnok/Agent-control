@@ -10,6 +10,7 @@ import {SandboxClient} from '../src/sandbox-client.ts';
 import {IsolatedImplementation} from '../src/isolated-implementation.ts';
 import {digest,type Command} from '../src/contracts.ts';
 import {provisionCapacity} from './fixtures/provision-capacity.ts';
+import {projectRepository} from './fixtures/project-repository.ts';
 
 test('successor reconciles completed isolated effect without launching a second worker',
  {timeout:20000,skip:!process.env.AC_SANDBOX_DATABASE_URL},async()=>{
@@ -27,7 +28,7 @@ test('successor reconciles completed isolated effect without launching a second 
  const intent=await db.accept(principal,command,first,'api');
  const attempt=(await db.pool.query('SELECT execution_attempt_id FROM ac_operations WHERE id=$1',[intent.operation_id])).rows[0].execution_attempt_id;
  const grant=await capacity.service.reserve(principal,{attemptId:attempt,intentId:intent.id,contextId:context,role:'programmer'},first);
- await mkdir('.state/projects',{recursive:true});const cwd=await mkdtemp(resolve('.state/projects/ac-recovery-'));
+ const cwd=await projectRepository('ac-recovery-');
  const git=(...args:string[])=>execFileSync('git',['-C',cwd,...args],{encoding:'utf8'}).trim();
  git('init','-q','-b','main');git('config','user.name','Synthetic fixture');git('config','user.email','fixture@example.invalid');
  await writeFile(join(cwd,'README.md'),'Recovery fixture\n');git('add','.');git('commit','-qm','base');

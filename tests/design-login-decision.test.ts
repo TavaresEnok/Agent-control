@@ -4,7 +4,8 @@ import {Refusal} from '../src/contracts.ts';
 import {assertInternalDesignNetwork} from '../src/design-trust.ts';
 import {claimDesignContainer, closeDesignContainers, releaseDesignContainer, resetDesignContainersForTest, setDesignContainerRemoverForTest} from '../src/design-containers.ts';
 // @ts-expect-error módulo da imagem, em JavaScript puro
-import {bodyLeaksPassword, cookieChanged, cookieMap, loginOpened, pageShowsLogin, samePage} from '../deploy/design-tools/login-decision.mjs';
+import {bodyLeaksPassword, cookieChanged, cookieMap, loginOpened, pageShowsLogin, publicRoute, samePage} from '../deploy/design-tools/login-decision.mjs';
+import {existsSync} from 'node:fs';
 
 const base = {hiddenReads: 0, left: false, changed: false, secondStep: false, successRequired: false, successVisible: false};
 
@@ -54,7 +55,7 @@ test('a decisão da captura usa os caminhos sem query e o marcador apenas nas ro
     successSelector: '#painel-pronto', successRoutes: ['/painel']};
   const shown = new Set<string>();
   const frame = {
-    locator: (selector: string) => ({filter: () => ({count: () => Number(shown.has(selector))})}),
+    locator: (selector: string) => ({filter: () => ({count: () => Number(shown.has(selector)), nth: () => ({evaluate: async () => true})})}),
     childFrames: () => [],
   };
   const check = (requested: string, final: string, successRoutes = login.successRoutes) => pageShowsLogin(
@@ -74,6 +75,80 @@ test('a decisão da captura usa os caminhos sem query e o marcador apenas nas ro
   shown.add('#entrar');
   shown.add('#senha');
   assert.equal(await check('/painel', '/painel'), true);
+});
+
+test('a tela de login fora da raiz e as rotas declaradas públicas abrem sem sessão', () => {
+  const login = {path: '/entrar/'};
+  assert.equal(publicRoute('https://a.local/entrar', login), true, 'login.path com barra final');
+  assert.equal(publicRoute('https://a.local/entrar/?volta=%2Fpainel', login), true);
+  assert.equal(publicRoute('https://a.local/painel', login), false);
+  assert.equal(publicRoute('https://a.local/entrar-agora', login), false);
+  assert.equal(publicRoute('https://a.local/#/entrar?x=1', {path: '/#/entrar/'}), true);
+  assert.equal(publicRoute('https://a.local/', {path: '/'}), false, 'a raiz pode ser login e painel ao mesmo tempo');
+  assert.equal(publicRoute('https://a.local/', {path: '/'}, true), true, 'a raiz só abre sem sessão se for declarada');
+  assert.equal(publicRoute('https://a.local/sobre', login, true), true);
+  assert.equal(publicRoute('https://a.local/sobre', {}), false, 'sem login.path nada é público por omissão');
+});
+
+test('login.path com barra final ainda reconhece a perda de sessão; a própria tela de login não conta', async () => {
+  const origin = 'https://a.local';
+  const login = {path: '/entrar/', usernameSelector: '#email', passwordSelector: '#senha', submitSelector: '#entrar'};
+  const shown = new Set<string>();
+  const frame = {
+    locator: (selector: string) => ({filter: () => ({count: () => Number(shown.has(selector)), nth: () => ({evaluate: async () => true})})}),
+    childFrames: () => [],
+  };
+  const check = (requested: string, final: string, sessionRequired = false) => pageShowsLogin(
+    {...frame, mainFrame: () => frame, url: () => origin + final}, origin + requested, login, sessionRequired);
+  assert.equal(await check('/painel', '/entrar'), true, 'redirecionado ao login sem formulário visível');
+  assert.equal(await check('/painel', '/entrar/?volta=painel'), true);
+  assert.equal(await check('/painel', '/painel'), false);
+  shown.add('#email').add('#senha').add('#entrar');
+  assert.equal(await check('/entrar', '/entrar'), false, 'a tela de login pedida mostra o formulário');
+  assert.equal(await check('/entrar/', '/entrar'), false);
+  assert.equal(await check('/painel', '/painel'), true, 'o formulário numa rota protegida continua sendo login');
+  // Célula com sessão na própria rota de login: o atalho não vale, a sessão perdida aparece.
+  assert.equal(await check('/entrar', '/entrar', true), true, 'com sessão exigida, o formulário na tela de login é sessão perdida');
+  shown.clear();
+  assert.equal(await check('/entrar', '/entrar', true), false, 'com sessão exigida e sem formulário, a sessão continua');
+});
+
+const playwrightCore = new URL('../upstream/cezar/node_modules/playwright-core/index.mjs', import.meta.url);
+const hostChrome = '/usr/bin/google-chrome';
+test('formulário com opacity:0 num ancestral ou dentro de [inert] não conta como visível', {
+  skip: !existsSync(playwrightCore) || !existsSync(hostChrome),
+}, async () => {
+  const {chromium} = await import(playwrightCore.href) as {chromium: {launch(options: object): Promise<{
+    newPage(): Promise<{route(url: string, handler: (route: {fulfill(options: object): Promise<void>}) => Promise<void>): Promise<void>;
+      goto(url: string): Promise<unknown>; url(): string; mainFrame(): unknown}>; close(): Promise<void>}>}};
+  const browser = await chromium.launch({executablePath: hostChrome, args: ['--no-sandbox', '--disable-dev-shm-usage']});
+  try {
+    const page = await browser.newPage();
+    const form = '<form><input id="email"><input id="senha" type="password"><button id="entrar">Entrar</button></form>';
+    const pages: Record<string, string> = {
+      '/claro': form,
+      '/transparente': `<div style="opacity:0"><section>${form}</section></div>`,
+      '/inerte': `<div inert>${form}</div>`,
+      '/sombra': `<div id="host" style="opacity:0"></div><script>host.attachShadow({mode:"open"}).innerHTML = ${JSON.stringify(form)}</script>`,
+      '/meio': `<div style="opacity:0.5">${form}</div>`,
+    };
+    await page.route('https://a.local/**', async route => {
+      const path = new URL((route as unknown as {request(): {url(): string}}).request().url()).pathname;
+      await route.fulfill({contentType: 'text/html', body: `<!doctype html><html><body>${pages[path] ?? ''}</body></html>`});
+    });
+    const login = {path: '/entrar', usernameSelector: '#email', passwordSelector: '#senha', submitSelector: '#entrar'};
+    const showsLogin = async (path: string) => {
+      await page.goto(`https://a.local${path}`);
+      return pageShowsLogin(page, `https://a.local${path}`, login);
+    };
+    assert.equal(await showsLogin('/claro'), true);
+    assert.equal(await showsLogin('/meio'), true, 'opacidade parcial continua visível');
+    assert.equal(await showsLogin('/transparente'), false);
+    assert.equal(await showsLogin('/inerte'), false);
+    assert.equal(await showsLogin('/sombra'), false, 'o ancestral fora do Shadow DOM também conta');
+  } finally {
+    await browser.close();
+  }
 });
 
 test('a senha é achada crua, curta, escapada no JSON, codificada e em base64', () => {

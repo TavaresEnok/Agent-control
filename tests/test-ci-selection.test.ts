@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-import {copyFileSync,mkdirSync,mkdtempSync,rmSync,symlinkSync,writeFileSync} from 'node:fs';
+import {copyFileSync,existsSync,mkdirSync,mkdtempSync,readdirSync,rmSync,symlinkSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import test from 'node:test';
 import {fileVerdict,listTestFiles,planSelection,selectTests,selectionReport,tapSummary,unknownOnlyNames} from '../scripts/test-ci-selection.mjs';
+// @ts-expect-error script em JavaScript puro
+import {leakDiff,leakLocations,leakSnapshot} from '../scripts/test-ci.mjs';
 
 const root=resolve(import.meta.dirname,'..');
 const cleanEnv=()=>{const env={...process.env};delete env.AC_CI_ONLY;delete env.AC_CI_INCLUDE_HOST;return env;};
@@ -116,4 +118,78 @@ test('the report sums skipped tests and names the empty files',()=>{
  const report=selectionReport(plan,{ran:2,failed:['b.test.ts'],empty:['b.test.ts'],skippedTests:3,skippedFiles:['a.test.ts']});
  assert.match(report,/Testes pulados dentro dos arquivos executados: 3 \(a\.test\.ts\)/);
  assert.match(report,/Sem nenhum teste aprovado \(VAZIO\): b\.test\.ts/);
+});
+
+test('the leak guard flags only new ac-* temp entries, new projects, new docker refs and changed repository files',()=>{
+  const sandbox=mkdtempSync(join(tmpdir(),'ac-ci-guard-'));
+  try{
+    const repo=join(sandbox,'repo'),temporary=join(sandbox,'tmp'),refs=join(sandbox,'refs');
+    for(const directory of [repo,temporary,join(refs,'daemon')])mkdirSync(directory,{recursive:true});
+    const git=(...args:string[])=>spawnSync('git',['-C',repo,...args],{encoding:'utf8'});
+    git('init','-q');writeFileSync(join(repo,'versionado.txt'),'a');git('add','.');
+    git('-c','user.name=t','-c','user.email=t@example.invalid','commit','-qm','base');
+    mkdirSync(join(temporary,'ac-antigo'));writeFileSync(join(refs,'daemon','antigo.json'),'{}');
+    writeFileSync(join(repo,'sujo-antes.txt'),'x');
+    const locations={...leakLocations(repo,{AC_DOCKER_REFS_DIR:refs}),temporary:[temporary]};
+    const before=leakSnapshot(locations);
+    assert.deepEqual(leakDiff(before,leakSnapshot(locations)),[],'nada mudou');
+    mkdirSync(join(temporary,'ac-novo'));mkdirSync(join(temporary,'outro-projeto'));
+    mkdirSync(join(repo,'.state','projects','ac-repo'),{recursive:true});
+    writeFileSync(join(refs,'daemon','novo.json'),'{}');
+    writeFileSync(join(repo,'versionado.txt'),'mudou');
+    assert.deepEqual(leakDiff(before,leakSnapshot(locations)),[
+      `git versionado.txt`,
+      `projeto ${join(repo,'.state','projects','ac-repo')}`,
+      `referencia ${join(refs,'daemon','novo.json')}`,
+      `tmp ${join(temporary,'ac-novo')}`,
+    ],'o que já existia antes (ac-antigo, antigo.json, sujo-antes.txt) e o que não é ac-* ficam de fora');
+    // .state é ignorado pelo git do produto; aqui não, mas o diretório só entra como projeto, nunca apagado pela guarda.
+    assert.ok(existsSync(join(temporary,'ac-antigo')));
+  }finally{rmSync(sandbox,{recursive:true,force:true});}
+});
+
+test('the runner fails when a test file leaves residue and names the file; AC_CI_LEAK_GUARD=0 only warns',()=>{
+  const sandbox=mkdtempSync(join(tmpdir(),'ac-ci-guard-run-'));
+  try{
+    mkdirSync(join(sandbox,'scripts'));mkdirSync(join(sandbox,'tests'));
+    for(const file of ['test-ci.mjs','test-ci-selection.mjs'])copyFileSync(join(root,'scripts',file),join(sandbox,'scripts',file));
+    symlinkSync(join(root,'node_modules'),join(sandbox,'node_modules'));
+    writeFileSync(join(sandbox,'.gitignore'),'node_modules\nbase\ntmp\nrefs\n');
+    writeFileSync(join(sandbox,'scripts','test-ci-classification.json'),JSON.stringify({executar:['limpo.test.ts','sujo.test.ts'],laboratorio:{},excluido:{}}));
+    // O limpo faz o papel de outro processo do host: cria ac-* direto no /tmp global, fora do TMPDIR isolado.
+    writeFileSync(join(sandbox,'tests','limpo.test.ts'),"import test from 'node:test';import {mkdirSync} from 'node:fs';"+
+      "test('limpo',()=>{mkdirSync(process.env.AC_CI_LEAK_TMP_DIRS+'/ac-de-fora',{recursive:true});});\n");
+    writeFileSync(join(sandbox,'tests','sujo.test.ts'),"import test from 'node:test';import {mkdirSync,writeFileSync} from 'node:fs';import {tmpdir} from 'node:os';"+
+      "test('sujo',()=>{mkdirSync('.state/projects/ac-sobra',{recursive:true});writeFileSync('versionado.txt','mudou');"+
+      "mkdirSync(tmpdir()+'/ac-sobra-tmp');mkdirSync(process.env.AC_DOCKER_REFS_DIR+'/daemon',{recursive:true});writeFileSync(process.env.AC_DOCKER_REFS_DIR+'/daemon/ref.json','{}');});\n");
+    writeFileSync(join(sandbox,'versionado.txt'),'original');
+    const git=(...args:string[])=>spawnSync('git',['-C',sandbox,...args],{encoding:'utf8'});
+    git('init','-q');git('add','.');git('-c','user.name=t','-c','user.email=t@example.invalid','commit','-qm','base');
+    mkdirSync(join(sandbox,'tmp'));mkdirSync(join(sandbox,'base'));
+    const env:Record<string,string|undefined>={...cleanEnv(),AC_TEST_DATABASE_URL:'postgresql://unused@127.0.0.1:1/ac_unused',
+      AC_DOCKER_REFS_DIR:join(sandbox,'refs'),AC_CI_LEAK_TMP_DIRS:join(sandbox,'tmp'),TMPDIR:join(sandbox,'base')};
+    // Rodando dentro de node --test, o filho herdaria o contexto do executor e não imprimiria o TAP.
+    delete env.NODE_TEST_CONTEXT;
+    const run=(extra:Record<string,string>={})=>spawnSync(process.execPath,[join(sandbox,'scripts','test-ci.mjs')],{cwd:sandbox,encoding:'utf8',env:{...env,...extra}});
+    const dirty=run();
+    assert.equal(dirty.status,1,dirty.stdout+dirty.stderr);
+    assert.match(dirty.stderr,/sujo\.test\.ts: projeto .*ac-sobra/);
+    assert.match(dirty.stderr,/sujo\.test\.ts: git versionado\.txt/);
+    assert.match(dirty.stderr,/sujo\.test\.ts: tmp .*\/ac-sobra-tmp/,'o TMPDIR isolado é só deste arquivo');
+    assert.match(dirty.stderr,/sujo\.test\.ts: referencia .*\/daemon\/ref\.json/);
+    assert.doesNotMatch(dirty.stderr,/limpo\.test\.ts:/,'o /tmp global não reprova: outro processo pode ter criado');
+    assert.match(dirty.stdout,/AVISO apareceram itens[^]*limpo\.test\.ts: tmp .*ac-de-fora/);
+    assert.deepEqual(readdirSync(join(sandbox,'base')).filter(name=>name.startsWith('c-')),[],'os TMPDIR isolados são apagados no fim');
+    rmSync(join(sandbox,'tmp','ac-de-fora'),{recursive:true});
+    const off=run({AC_CI_LEAK_GUARD:'0'});
+    assert.equal(off.status,0,off.stdout+off.stderr);
+    assert.match(off.stdout,/guarda de resíduos desligada/);
+    // O resíduo que já estava lá antes da suíte não é culpa dela.
+    git('checkout','--','versionado.txt');
+    writeFileSync(join(sandbox,'tests','sujo.test.ts'),"import test from 'node:test';test('agora limpo',()=>{});\n");
+    git('-c','user.name=t','-c','user.email=t@example.invalid','commit','-qam','limpo');
+    const clean=run();
+    assert.equal(clean.status,0,clean.stdout+clean.stderr);
+    assert.doesNotMatch(clean.stderr,/sujo\.test\.ts:/);
+  }finally{rmSync(sandbox,{recursive:true,force:true});}
 });
