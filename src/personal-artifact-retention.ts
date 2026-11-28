@@ -127,9 +127,10 @@ export async function defaultProcessInside(path:string){
  return false;
 }
 
-async function defaultVerifyRunImages(config:Installation){
+/** `excludeProject`: the runs of a project being removed no longer pin anything; every other project's runs still do. */
+async function defaultVerifyRunImages(config:Installation,excludeProject?:string){
  const pool=new pg.Pool({connectionString:config.databaseUrl,max:1,connectionTimeoutMillis:5000});
- try{return (await pool.query<{collector_image:string}>('SELECT DISTINCT collector_image FROM ac_verify_runs WHERE collector_image IS NOT NULL')).rows.map(row=>row.collector_image);}
+ try{return (await pool.query<{collector_image:string}>('SELECT DISTINCT collector_image FROM ac_verify_runs WHERE collector_image IS NOT NULL AND ($1::uuid IS NULL OR project_id<>$1::uuid)',[excludeProject??null])).rows.map(row=>row.collector_image);}
  finally{await pool.end();}
 }
 
@@ -433,7 +434,7 @@ export async function protectedDigests(config:Installation,deps:RetentionDeps,do
   if(typeof text!=='string'||!digestsIn(text).size)throw new Refusal('RETENTION_IMAGE_PIN_INVALID');
   for(const digest of digestsIn(text))pinned.add(digest);
  }
- for(const image of await (deps.verifyRunImages??defaultVerifyRunImages)(config))for(const digest of digestsIn(image))pinned.add(digest);
+ for(const image of await (deps.verifyRunImages??(current=>defaultVerifyRunImages(current,releasedProject)))(config))for(const digest of digestsIn(image))pinned.add(digest);
  let foreign:Set<string>;
  try{foreign=await shareDaemonReferences(config,deps,docker,[...pinned],[...retired]);}catch{throw new SharedReferencesUnreadable();}
  return {pinned,retired,foreign};
