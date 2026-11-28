@@ -245,12 +245,13 @@ test('a registered path that was replaced, moved to another branch or left to an
   assert.match(lines,/swapped: preservado/);
   assert.ok(existsSync(switched.path));
   assert.ok(existsSync(swapped.path));
-  // An entry whose project is not in this installation is left alone.
+  // An entry of a project retired from this installation is judged against the repository the worktree belongs to, with every proof.
   const registryPath=join(l.data,'artifact-retention','registry.json');
   const registry=JSON.parse(await readFile(registryPath,'utf8'));
   registry.worktrees[0].projectId=randomUUID();
   await writeFile(registryPath,JSON.stringify(registry),{mode:0o600});
-  assert.match((await run(l,true)).join('\n'),/projeto fora desta instalação/);
+  assert.match((await run(l,true)).join('\n'),/switched: preservado \(o worktree não está no ramo registrado\)/);
+  assert.ok(existsSync(switched.path));
  }finally{await cleanup(l);}
 });
 
@@ -984,7 +985,7 @@ test('interruption after worktree move leaves a durable reported quarantine',asy
 
 // ---- Findings 6a, 6b, 6c: shared daemon pins, transient inspection errors, nominal and effective size ----
 
-const otherInstallation=(l:Lab,name:string,pinned:string[])=>({...l.config,dataDirectory:join(l.base,name),nativeBootstrap:{planning:{imageId:pinned[0]},execution:{workerImage:pinned[1]??pinned[0]}}}) as unknown as Installation;
+const otherInstallation=(l:Lab,name:string,pinned:string[])=>(mkdirSync(join(l.base,name),{recursive:true}),{...l.config,dataDirectory:join(l.base,name),nativeBootstrap:{planning:{imageId:pinned[0]},execution:{workerImage:pinned[1]??pinned[0]}}}) as unknown as Installation;
 
 test('an image pinned by another installation on the same Docker daemon is never removed by this one',async()=>{
  const l=await lab();
@@ -1081,5 +1082,59 @@ test('runtime pins in verify-image.json and simple-tools-image.json protect even
   await rm(join(l.data,'simple-tools-image.json'));
   await run(l,true);
   assert.deepEqual([...l.docker.images.keys()],ids);
+ }finally{await cleanup(l);}
+});
+
+// ---- Retired projects and expired shared references ----
+
+test('a project retired from the installation does not stall retention: its registered image, worktree and temporaries leave',async()=>{
+ const l=await lab();
+ try{
+  l.docker.images.set(image('a'),{repoDigests:[],size:1_000_000_000});
+  await registerOld(l,image('a'));
+  const w=makeWorktree(l,'retired-wt');await register(l,w);
+  const temp=makeTemp(l,'ac-retired-round');await registerTemp(l,temp,'round-r');
+  const old=new Date(Date.now()-72*HOUR);await utimes(temp,old,old);
+  // The project leaves installation.json; another one takes its place.
+  l.config={...l.config,project:{...l.config.project,id:randomUUID()}} as Installation;
+  const first=(await run(l,true)).join('\n');
+  assert.doesNotMatch(first,/falha ao verificar/);
+  assert.match(first,/imagem sha256:aaaaaaaaaaaa \(qa\): removida/);
+  assert.match(first,/retired-wt: removido \(projeto retirado\) \(ramo task\/retired-wt preservado\)/);
+  assert.equal(branchTip(l,w.branch).length,40);
+  assert.match(first,/rodada round-r: encerramento registrado \(projeto retirado\)/);
+  assert.ok(existsSync(temp),'the round was only closed now: its temporaries still wait 24 h');
+  l.clock.now+=25*HOUR;
+  assert.match((await run(l,true)).join('\n'),/ac-retired-round: removido/);
+  assert.equal(existsSync(temp),false);
+  const registry=JSON.parse(await readFile(registryPath(l),'utf8'));
+  assert.deepEqual([registry.images.length,registry.worktrees.length,registry.temps.length],[0,0,0]);
+  // Registration still refuses a project that is not configured.
+  await assert.rejects(registerCandidateImage(l.config,{projectId:l.projectId,module:'qa',imageId:image('b')},l.deps),{code:'RETENTION_PROJECT_UNKNOWN'});
+ }finally{await cleanup(l);}
+});
+
+test('a shared reference whose installation directory is gone, or not republished for 7 days, stops pinning and is removed on apply',async()=>{
+ const l=await lab();
+ try{
+  for(const c of ['a','b','c'])l.docker.images.set(image(c),{repoDigests:[],size:1});
+  for(const c of ['a','b','c'])await registerOld(l,image(c));
+  const directory=join(l.base,'shared-refs','daemon-test-1');mkdirSync(directory,{recursive:true});
+  const live=join(l.base,'data-live');mkdirSync(live);
+  const write=(name:string,dataDirectory:string,publishedAt:number,pinned:string[])=>writeFileSync(join(directory,name+'.json'),JSON.stringify({schemaVersion:1,dataDirectory,publishedAt,pinned}));
+  write('gone',join(l.base,'removed-test-installation'),l.clock.now,[image('a')]);
+  write('stale',live,l.clock.now-8*DAY,[image('b')]);
+  write('fresh',live,l.clock.now-HOUR,[image('c')]);
+  const preview=(await run(l,false)).join('\n');
+  assert.match(preview,/sha256:aaaaaaaaaaaa \(qa\): elegível/);
+  assert.match(preview,/sha256:bbbbbbbbbbbb \(qa\): elegível/);
+  assert.match(preview,/sha256:cccccccccccc \(qa\): preservado \(digest fixado por outra instalação neste daemon\)/);
+  assert.ok(existsSync(join(directory,'gone.json'))&&existsSync(join(directory,'stale.json')),'a preview changes nothing');
+  await run(l,true);
+  assert.deepEqual(removals(l).map(args=>args.at(-1)).sort(),[image('a'),image('b')]);
+  assert.ok(l.docker.images.has(image('c')));
+  assert.equal(existsSync(join(directory,'gone.json')),false);
+  assert.equal(existsSync(join(directory,'stale.json')),false);
+  assert.ok(existsSync(join(directory,'fresh.json')));
  }finally{await cleanup(l);}
 });

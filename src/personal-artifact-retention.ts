@@ -100,7 +100,7 @@ function run(command:string,args:string[],options:{cwd?:string;env:NodeJS.Proces
  });
 }
 /** Git never runs hooks, a file-system monitor or any user/system configuration, and never refreshes the index. */
-const defaultGit=(cwd:string,args:string[])=>run('git',['-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false',...args],{cwd,timeout:120_000,
+export const defaultGit=(cwd:string,args:string[])=>run('git',['-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false',...args],{cwd,timeout:120_000,
  env:{PATH:'/usr/bin:/bin',HOME:'/nonexistent',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_OPTIONAL_LOCKS:'0',GIT_TERMINAL_PROMPT:'0',GIT_NO_REPLACE_OBJECTS:'1',LC_ALL:'C'}});
 const defaultDocker=(args:string[])=>run('docker',args,{timeout:10*60*1000,env:process.env});
 
@@ -198,8 +198,8 @@ const remember=(registry:ArtifactRegistry,kind:'worktree'|'image'|'temp',id:stri
 
 // ---- Git helpers ---------------------------------------------------------------------------------------------
 
-type Listed={path:string;head?:string;branch?:string;detached:boolean;bare:boolean;locked:boolean;prunable:boolean;main:boolean};
-async function listWorktrees(git:NonNullable<RetentionDeps['git']>,repo:string):Promise<Listed[]>{
+export type Listed={path:string;head?:string;branch?:string;detached:boolean;bare:boolean;locked:boolean;prunable:boolean;main:boolean};
+export async function listWorktrees(git:NonNullable<RetentionDeps['git']>,repo:string):Promise<Listed[]>{
  const out=await git(repo,['worktree','list','--porcelain']);
  if(out.code!==0)throw new Error('git worktree list failed');
  return out.stdout.split('\n\n').filter(block=>block.trim()).map((block,index)=>{
@@ -256,12 +256,19 @@ export function mountPoints(text:string):string[]{
 export const mountedInside=(text:string,path:string)=>mountPoints(text).some(point=>point===path||point.startsWith(path.endsWith('/')?path:path+'/'));
 const defaultMountInfo=()=>readFile('/proc/self/mountinfo','utf8');
 
-type WorktreeFacts={tip:string;idleHours:number};
+type WorktreeFacts={tip:string;idleHours:number;repo:string;retired:boolean};
+/** Repository that owns a registered worktree of a project no longer in the installation, read from the worktree itself. */
+async function retiredWorktreeRepo(git:NonNullable<RetentionDeps['git']>,path:string){
+ const common=await git(path,['rev-parse','--path-format=absolute','--git-common-dir']).catch(()=>undefined/* unreadable: cannot prove */);
+ const dir=common?.code===0?common.stdout.trim():'';
+ return isAbsolute(dir)&&basename(dir)==='.git'?dirname(dir):undefined;
+}
 /** Everything that must hold, in order, before `git worktree remove` may run. */
 async function proveWorktree(config:Installation,entry:WorktreeEntry,deps:Required<Pick<RetentionDeps,'git'|'now'|'processInside'|'mountInfo'|'docker'>>):Promise<Verdict<WorktreeFacts>|{ok:false;reason:string;absent:true}>{
  const owner=projectsOf(config).find(item=>item.id===entry.projectId);
- if(!owner)return no('projeto fora desta instalação');
- const repo=owner.repo;
+ // A project removed from the installation is retired: its registered worktree is judged against the repository it belongs to.
+ const repo=owner?.repo??await retiredWorktreeRepo(deps.git,entry.path);
+ if(!repo)return no('projeto retirado e repositório do worktree ilegível');
  const main=await deps.git(repo,['symbolic-ref','--quiet','--short','HEAD']);
  if(main.code!==0||main.stdout.trim()!==entry.base)return no('base não corresponde ao ramo do checkout da instalação');
  let listed:Listed[];
@@ -305,7 +312,7 @@ async function proveWorktree(config:Installation,entry:WorktreeEntry,deps:Requir
  try{if(await deps.processInside(entry.path))return no('há processo usando o diretório');}catch{return no('não foi possível provar que nenhum processo usa o diretório');}
  try{if(await mountedByContainer(deps.docker,entry.path))return no('há contêiner com este diretório montado');}catch{return no('não foi possível provar que nenhum contêiner monta o diretório');}
  try{if(mountedInside(await deps.mountInfo(),entry.path))return no('há montagem (inclusive bind mount) dentro do diretório');}catch{return no('não foi possível ler as montagens do sistema');}
- return {ok:true,facts:{tip:tipId,idleHours:hours(idle)}};
+ return {ok:true,facts:{tip:tipId,idleHours:hours(idle),repo,retired:!owner}};
 }
 
 // ---- Registration --------------------------------------------------------------------------------------------
@@ -383,8 +390,12 @@ export async function registerRoundTemp(config:Installation,input:{projectId:str
 
 /** Marks a round as finished. The first end time wins; temporaries of the round become removable 24 h later. */
 export async function closeRound(config:Installation,input:{projectId:string;roundId:string},deps:RetentionDeps={}){
- if(!token.safeParse(input.roundId).success)throw new Refusal('RETENTION_REGISTRATION_INVALID',400);
  project(config,input.projectId);
+ return recordRoundEnd(config,input,deps);
+}
+/** Records the end of a round without requiring the project to be configured (retention of a retired project). */
+async function recordRoundEnd(config:Installation,input:{projectId:string;roundId:string},deps:RetentionDeps){
+ if(!token.safeParse(input.roundId).success)throw new Refusal('RETENTION_REGISTRATION_INVALID',400);
  const now=(deps.now??Date.now)();
  return mutateRegistry(config,registry=>{
   const same=registry.rounds.find(item=>item.projectId===input.projectId&&item.roundId===input.roundId);
@@ -403,7 +414,7 @@ const here=resolve(dirname(fileURLToPath(import.meta.url)),'..');
  * `retired`: images the native bootstrap still lists as retired (`execution.retiredImages`, `planning.retiredImageIds`) because a job may still need them.
  * `foreign`: digests pinned by OTHER installations on the same Docker daemon, read from the per-daemon reference registry.
  * Any read failure other than a missing file throws, including an unreadable reference file of another installation. */
-export async function protectedDigests(config:Installation,deps:RetentionDeps,docker:NonNullable<RetentionDeps['docker']>){
+export async function protectedDigests(config:Installation,deps:RetentionDeps,docker:NonNullable<RetentionDeps['docker']>,options:{apply?:boolean}={}){
  const pinned=new Set<string>(digestsIn(JSON.stringify(config)));
  const retired=new Set<string>();
  const boot=config.nativeBootstrap as {planning?:{retiredImageIds?:string[]};execution?:{retiredImages?:{workerImage?:string;toolsImage?:string}[]}}|undefined;
@@ -411,7 +422,8 @@ export async function protectedDigests(config:Installation,deps:RetentionDeps,do
  const owners=projectsOf(config);
  for(const entry of (await loadRegistry(config)).images){
   const owner=owners.find(project=>project.id===entry.projectId);
-  if(!owner||owner.economy?.imageRetention===false)pinned.add(entry.imageId);
+  // A retired project (absent from the installation) no longer pins its candidates: they go like any unpinned image.
+  if(owner?.economy?.imageRetention===false)pinned.add(entry.imageId);
  }
  const roots=new Set([deps.productRoot??here,...projectsOf(config).map(item=>item.repo)]);
  const installed=join(config.dataDirectory,'verify-image.json');
@@ -433,7 +445,7 @@ export async function protectedDigests(config:Installation,deps:RetentionDeps,do
  }
  for(const image of await (deps.verifyRunImages??defaultVerifyRunImages)(config))for(const digest of digestsIn(image))pinned.add(digest);
  let foreign:Set<string>;
- try{foreign=await shareDaemonReferences(config,deps,docker,[...pinned],[...retired]);}catch{throw new SharedReferencesUnreadable();}
+ try{foreign=await shareDaemonReferences(config,deps,docker,[...pinned],[...retired],options.apply===true);}catch{throw new SharedReferencesUnreadable();}
  return {pinned,retired,foreign};
 }
 
@@ -445,10 +457,12 @@ export async function protectedDigests(config:Installation,deps:RetentionDeps,do
 class SharedReferencesUnreadable extends Error{constructor(){super('shared daemon references unreadable');}}
 const SharedRefs=z.object({schemaVersion:z.literal(1),dataDirectory:absolutePath,publishedAt:time,installationFile:absolutePath.optional(),productRoot:absolutePath.optional(),pinned:z.array(z.string().regex(imageIdPattern)).max(5000)}).strict();
 const SHARED_REFS_REFRESH_MS=60*60*1000;
+/** A reference file not republished for this long, or whose installation directory is gone, no longer pins anything. */
+export const SHARED_REFS_EXPIRY_MS=7*24*60*60*1000;
 const sharedRefsRoot=(deps:RetentionDeps)=>deps.sharedRefsRoot??process.env.AC_DOCKER_REFS_DIR??join(homedir(),'.agent-control-docker-refs');
 const installationKey=(config:Installation)=>createHash('sha256').update(resolve(config.dataDirectory)).digest('hex').slice(0,32);
 
-async function shareDaemonReferences(config:Installation,deps:RetentionDeps,docker:NonNullable<RetentionDeps['docker']>,pinned:string[],retired:string[]){
+async function shareDaemonReferences(config:Installation,deps:RetentionDeps,docker:NonNullable<RetentionDeps['docker']>,pinned:string[],retired:string[],apply=false){
  const daemonId=await dockerDaemonId(docker);
  if(!daemonId)return new Set<string>();// no daemon identity: proveImage refuses every image anyway
  const directory=join(sharedRefsRoot(deps),daemonId),own=installationKey(config)+'.json';
@@ -471,14 +485,25 @@ async function shareDaemonReferences(config:Installation,deps:RetentionDeps,dock
   if(name===own||!name.endsWith('.json'))continue;
   // Any entry that is not a well-formed inventory means an owner without a usable inventory: nothing may be removed.
   const parsed=SharedRefs.parse(JSON.parse(await readFile(join(directory,name),'utf8')));
+  // Expired: the installation's directory no longer exists (a finished test or a removed installation), or it stopped republishing.
+  // Only a definite ENOENT counts as gone; any other doubt keeps the pins.
+  const gone=await lstat(parsed.dataDirectory).then(()=>false,error=>errno(error,'ENOENT'));
+  if(gone||now-parsed.publishedAt>SHARED_REFS_EXPIRY_MS){
+   if(apply){
+    // Read again right before: a file republished in the meantime is kept.
+    const again=await readFile(join(directory,name),'utf8').then(text=>SharedRefs.safeParse(JSON.parse(text)),()=>undefined/* already gone */);
+    if(again?.success&&again.data.publishedAt===parsed.publishedAt)await unlink(join(directory,name)).catch(()=>undefined/* removed by another run */);
+   }
+   continue;
+  }
   for(const digest of parsed.pinned)foreign.add(digest);
  }
  return foreign;
 }
 
 /** Keeps this installation's published pins fresh even when it has no candidate image of its own, so others can see them. */
-async function publishOwnReferences(config:Installation,deps:RetentionDeps,docker:NonNullable<RetentionDeps['docker']>){
- try{await protectedDigests(config,deps,docker);}catch{/* best effort: a failed publication only means others keep treating this installation as unknown */}
+async function publishOwnReferences(config:Installation,deps:RetentionDeps,docker:NonNullable<RetentionDeps['docker']>,apply:boolean){
+ try{await protectedDigests(config,deps,docker,{apply});}catch{/* best effort: a failed publication only means others keep treating this installation as unknown */}
 }
 
 /** Free bytes where Docker keeps its data (`docker info`'s DockerRootDir), measured with statfs. Undefined when unreadable (rootless, remote daemon). */
@@ -517,8 +542,6 @@ async function proveImage(entry:ImageEntry,guard:{pinned:Set<string>;retired:Set
  try{
   const [image]=JSON.parse(inspected.stdout) as {Id?:string;RepoTags?:string[];RepoDigests?:string[];Size?:number}[];
   if(image?.Id!==entry.imageId)return no('o id da imagem não é o registrado');
-  if([...(image.RepoTags??[]),...(image.RepoDigests??[])].some(name=>/chatisp.*homolog|ac-test-db-journal|(?:^|[/:_-])design(?:[/:_-]|$)|agent-control-exam-tools:simple/i.test(name)))
-   return no('imagem protegida da instalação');
   digests=[image.Id,...(image.RepoDigests??[]).flatMap(item=>[...digestsIn(item)])];
   size=Number.isSafeInteger(image.Size)&&image.Size!>=0?image.Size:undefined;
  }catch{return no('resposta ilegível do Docker');}
@@ -562,7 +585,7 @@ async function sameDeviceTree(path:string,dev:string){
 }
 
 /** Whether any container, running or not, bind-mounts something at or under `path`. Throws when Docker cannot answer. */
-async function mountedByContainer(docker:NonNullable<RetentionDeps['docker']>,path:string){
+export async function mountedByContainer(docker:NonNullable<RetentionDeps['docker']>,path:string){
  const listed=await docker(['container','ls','-a','--no-trunc','-q']);
  if(listed.code!==0)throw new Error('docker unavailable');
  const ids=listed.stdout.split('\n').map(line=>line.trim()).filter(Boolean);
@@ -573,7 +596,7 @@ async function mountedByContainer(docker:NonNullable<RetentionDeps['docker']>,pa
 }
 
 async function proveTemp(config:Installation,registry:ArtifactRegistry,entry:TempEntry,deps:Required<Pick<RetentionDeps,'now'|'processInside'|'docker'>>&{root:string}):Promise<Verdict<{idleHours:number;resumed:boolean}>|{ok:false;reason:string;absent:true}>{
- if(!projectsOf(config).some(item=>item.id===entry.projectId))return no('projeto fora desta instalação');
+ // A retired project's temporaries keep every other proof (marker, identity, closed round, idleness, no process or mount).
  if(!validTempPath(entry.path,deps.root))return no('caminho fora do diretório temporário');
  const info=await lstat(entry.path,{bigint:true}).catch(error=>errno(error,'ENOENT')?null:undefined);
  if(info===null)return {ok:false,reason:'o diretório já não existe',absent:true};
@@ -626,17 +649,19 @@ export async function runPersonalArtifactRetention(config:Installation,apply:boo
  }
  if(unclosed.size){
   let states:Map<string,'terminal'|'running'|'missing'>|undefined;
-  try{states=await (deps.roundStatus??defaultRoundStatus)(config,[...unclosed.values()].map(({projectId,roundId})=>({projectId,roundId})));}catch{states=undefined;}
+  try{states=await (deps.roundStatus??defaultRoundStatus)(config,[...unclosed.values()].filter(round=>projectsOf(config).some(item=>item.id===round.projectId)).map(({projectId,roundId})=>({projectId,roundId})));}catch{states=undefined;}
   for(const [key,round] of unclosed){
    const label=`rodada ${round.roundId}`;
-   const state=states?.get(key);
+   // A retired project (removed from the installation) runs nothing any more: its open rounds are over.
+   const retired=!projectsOf(config).some(item=>item.id===round.projectId);
+   const state=retired?'terminal':states?.get(key);
    const orphan=state==='missing'&&now()-round.first>=ORPHAN_ROUND_MS;
    if(state!=='terminal'&&!orphan){
     lines.push(`${label}: sem encerramento registrado, preservada (${!states?'banco indisponível':state==='running'?'execução ainda em andamento':state==='missing'?'sem linha de execução, aguardando '+hours(ORPHAN_ROUND_MS)+' h':'estado desconhecido'}).`);
     continue;
    }
-   if(!apply){lines.push(`${label}: encerramento seria registrado (${state==='terminal'?'execução terminal no banco':'sem linha de execução há mais de '+hours(ORPHAN_ROUND_MS)+' h'}).`);continue;}
-   try{await closeRound(config,{projectId:round.projectId,roundId:round.roundId},{now});lines.push(`${label}: encerramento registrado (${state==='terminal'?'execução terminal no banco':'sem linha de execução'}); os temporários envelhecem 24 h a partir de agora.`);}
+   if(!apply){lines.push(`${label}: encerramento seria registrado (${retired?'projeto retirado':state==='terminal'?'execução terminal no banco':'sem linha de execução há mais de '+hours(ORPHAN_ROUND_MS)+' h'}).`);continue;}
+   try{await recordRoundEnd(config,{projectId:round.projectId,roundId:round.roundId},{now});lines.push(`${label}: encerramento registrado (${retired?'projeto retirado':state==='terminal'?'execução terminal no banco':'sem linha de execução'}); os temporários envelhecem 24 h a partir de agora.`);}
    catch{lines.push(`${label}: encerramento não pôde ser registrado, preservada.`);}
   }
   if(apply)registry=await loadRegistry(config);
@@ -669,7 +694,7 @@ export async function runPersonalArtifactRetention(config:Installation,apply:boo
    // Judged again, so a change since the first look wins.
    const again=await proveWorktree(config,entry,{git,now,processInside,mountInfo,docker});
    if(!again.ok){kept('worktree',label,'mudou durante a retenção: '+again.reason);continue;}
-   const owner=project(config,entry.projectId);
+   const owner={repo:again.facts.repo};
    // Swap protection: the directory is first renamed (same parent, atomic) to a private name, so the path that was proved can no
    // longer be replaced or have a mount placed on it by name. It is then judged again at the new path, by inode and by mountinfo,
    // and only then removed. Any doubt moves it back and keeps it. No --force: git itself refuses a worktree with changes.
@@ -698,23 +723,24 @@ export async function runPersonalArtifactRetention(config:Installation,apply:boo
    const branch=await git(owner.repo,['rev-parse','--verify','--quiet','refs/heads/'+entry.branch+'^{commit}']);
    await forget('worktree',entry.id,'removed');
    done('worktree');
-   lines.push(`${label}: removido (ramo ${entry.branch} ${branch.code===0&&branch.stdout.trim()===again.facts.tip?'preservado':'NÃO confere após a remoção'}).`);
+   lines.push(`${label}: removido${again.facts.retired?' (projeto retirado)':''} (ramo ${entry.branch} ${branch.code===0&&branch.stdout.trim()===again.facts.tip?'preservado':'NÃO confere após a remoção'}).`);
   }catch{kept('worktree',label,'falha ao verificar; repita depois');}
  }
 
  let imageBytes=0,freeBefore:number|undefined,freeAfter:number|undefined;
  const measure=async()=>{try{return await (deps.freeBytes??(()=>defaultFreeBytes(docker)))();}catch{return undefined;}};
- if(!registry.images.length)await publishOwnReferences(config,deps,docker);
+ if(!registry.images.length)await publishOwnReferences(config,deps,docker,apply);
  if(registry.images.length){
   let guard:{pinned:Set<string>;retired:Set<string>;foreign:Set<string>}|undefined,sharedFailed=false;
-  try{guard=await protectedDigests(config,deps,docker);}
+  try{guard=await protectedDigests(config,deps,docker,{apply});}
   catch(error){guard=undefined;sharedFailed=error instanceof SharedReferencesUnreadable;}
   if(apply)freeBefore=await measure();
   for(const entry of registry.images){
    const label=`imagem ${entry.imageId.slice(0,19)} (${entry.module})`;
    if(!guard){kept('image',label,sharedFailed?'referências compartilhadas do daemon ilegíveis':'não foi possível ler os digests fixados e os exames');continue;}
    try{
-    if(project(config,entry.projectId).economy?.imageRetention===false){kept('image',label,'retenção de imagens desligada neste projeto');continue;}
+    // Retired project (absent from the installation): its candidates are judged like any other, with no project option to keep them.
+    if(projectsOf(config).find(item=>item.id===entry.projectId)?.economy?.imageRetention===false){kept('image',label,'retenção de imagens desligada neste projeto');continue;}
     const proof=await proveImage(entry,guard,docker,now());
     if(!proof.ok){
      if('absent' in proof){
@@ -726,7 +752,7 @@ export async function runPersonalArtifactRetention(config:Installation,apply:boo
     const nominal=proof.facts.size===undefined?'tamanho desconhecido':`${(proof.facts.size/1e9).toFixed(3)} GB nominais`;
     if(!apply){done('image');imageBytes+=proof.facts.size??0;lines.push(`${label}: elegível (sem pin, sem contêiner, registrada há mais de ${hours(IMAGE_MIN_AGE_MS)} h; ${nominal}).`);continue;}
     // Judged again with fresh pins and containers, so a change since the first look wins.
-    const fresh=await protectedDigests(config,deps,docker);
+    const fresh=await protectedDigests(config,deps,docker,{apply});
     const again=await proveImage(entry,fresh,docker,now());
     if(!again.ok){kept('image',label,'mudou durante a retenção: '+again.reason);continue;}
     // By id, no --force: Docker itself refuses an image that has children, several tags or a container.
