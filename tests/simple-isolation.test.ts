@@ -115,19 +115,23 @@ test('specialist bind sources share project files and keep redaction private',as
  }finally{await rm(f.root,{recursive:true,force:true});}
 });
 
-test('simple retention preserves pins, containers, design and homologation, and selects old test databases only',()=>{
- const id='sha256:'+'a'.repeat(64),digest='sha256:'+'b'.repeat(64);
- const image={Id:id,RepoTags:['ac-module:stale'],RepoDigests:['repo@'+digest],Config:{}};
- assert.ok(removableSimpleImage(image,new Set(),new Set()));
- for(const pin of [digest,id])assert.ok(!removableSimpleImage(image,new Set([pin]),new Set()));
- assert.ok(!removableSimpleImage(image,new Set(),new Set([id])));
- for(const tag of ['ac-chatisp-homolog-1:old','chatisp:homolog-antes-abcd','ac-design:old','agent-control-exam-tools:simple'])
-  assert.ok(!removableSimpleImage({...image,RepoTags:[tag,...image.RepoTags]},new Set(),new Set()));
+test('simple retention preserves pins, containers and recent builds, never judges by name, and selects labelled AC volumes only',()=>{
+ const id='sha256:'+'a'.repeat(64),digest='sha256:'+'b'.repeat(64),now=Date.parse('2025-02-01');
+ const image={Id:id,Created:'2025-01-01T00:00:00Z',RepoTags:['ac-module:stale'],RepoDigests:['repo@'+digest],Config:{}};
+ assert.ok(removableSimpleImage(image,new Set(),new Set(),now));
+ for(const pin of [digest,id])assert.ok(!removableSimpleImage(image,new Set([pin]),new Set(),now));
+ assert.ok(!removableSimpleImage(image,new Set(),new Set([id]),now));
+ // Built less than 24 h ago (or with no creation time): a candidate may still be on its way to a pin.
+ assert.ok(!removableSimpleImage({...image,Created:'2025-01-31T12:00:00Z'},new Set(),new Set(),now));
+ assert.ok(!removableSimpleImage({...image,Created:undefined},new Set(),new Set(),now));
+ // A name such as "design" protects nothing any more: only a pin or use does.
+ assert.ok(removableSimpleImage({...image,RepoTags:['ac-design:old']},new Set(),new Set(),now));
+ assert.ok(!removableSimpleImage({...image,RepoTags:['ajust-erp/web:old'],RepoDigests:[]},new Set(),new Set(),now));
  const volume={Name:'ac-implementation_sandbox-pg',CreatedAt:'2025-01-01',Labels:{'com.docker.compose.project':'ac-implementation','com.docker.compose.volume':'sandbox-pg'}};
  assert.ok(oldTestVolume(volume,Date.parse('2025-02-01')));
  assert.ok(!oldTestVolume(volume,Date.parse('2025-01-01')));
- for(const Name of ['ac-test-db-journal','ac-chatisp-homolog-postgres'])assert.ok(!oldTestVolume({...volume,Name},Date.now()));
- assert.ok(!oldTestVolume({...volume,Labels:null,Name:'anonymous'},Date.now()));
+ assert.ok(oldTestVolume({Name:'0123abcd',CreatedAt:'2025-01-01',Labels:{'com.agent-control.installation':'x'}},now));
+ for(const Name of ['anonymous','ac-test-db-journal'])assert.ok(!oldTestVolume({...volume,Labels:null,Name},now));
 });
 
 for(const launcher of ['systemd','child','refused'])test('the personal module CLI records the launch and terminal outcome for '+launcher, {skip:!process.env.AC_TEST_DATABASE_URL}, async()=>{
@@ -252,7 +256,7 @@ test('native collector arguments mount the examined commit and databases read-on
  assert.ok(!args.includes('/home')&&!args.includes('/run/docker.sock'));
 });
 
-test('old clean reviewer clones are removed while dirty copies and unrelated checkouts stay',async()=>{
+test('old clean clones whose commits are all on a project branch are removed; dirty, recent and unpublished ones stay',async()=>{
  const f=await fixture(),previousTmp=process.env.TMPDIR,previousPath=process.env.PATH;
  try{
   const temporary=join(f.root,'temporary'),bin=join(f.root,'bin');
@@ -276,9 +280,9 @@ test('old clean reviewer clones are removed while dirty copies and unrelated che
    }
   }
   const config={dataDirectory:f.data,project:{id:randomUUID(),repo:f.repo,owner:'fixture',label:'test'},projects:[]};
-  assert.deepEqual(await simpleTempRetention(config,false),['Temporário elegível ac-review-clean']);
-  assert.deepEqual(await simpleTempRetention(config,true),['Temporário removido ac-review-clean']);
-  assert.deepEqual((await readdir(temporary)).sort(),clones.slice(1).sort());
+  assert.deepEqual(await simpleTempRetention(config,false),['Temporário elegível ac-review-clean','Temporário elegível ac-worker-copy']);
+  assert.deepEqual(await simpleTempRetention(config,true),['Temporário removido ac-review-clean','Temporário removido ac-worker-copy']);
+  assert.deepEqual((await readdir(temporary)).sort(),['ac-review-dirty','ac-review-recent','ac-review-unpublished']);
  }finally{
   if(previousTmp===undefined)delete process.env.TMPDIR;else process.env.TMPDIR=previousTmp;
   process.env.PATH=previousPath;await rm(f.root,{recursive:true,force:true});
