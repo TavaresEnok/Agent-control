@@ -1,7 +1,7 @@
 import {availableSimpleToolsImage} from './simple-tools-image.ts';
 import {execFile, spawn as spawnProcess} from 'node:child_process';
 import {createHash, randomUUID} from 'node:crypto';
-import {constants, createReadStream} from 'node:fs';
+import {constants, createReadStream, lstatSync} from 'node:fs';
 import {chmod, link, lstat, mkdir, open, readdir, readFile, rename, rm, unlink, writeFile} from 'node:fs/promises';
 import {dirname, isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {installationName, ownerLabelArgs} from '../scripts/ac-labels.mjs';
@@ -289,13 +289,21 @@ export async function refreshVerifyDatabases(input: RefreshVerifyDatabasesInput)
     await discardStamp(stamp, parent, image).catch(() => undefined /* the fetch already fails; the next prune takes an unclaimed folder */);
     throw new Error('VERIFY_DB_FETCH_FAILED');
   }
+  let published: VerifyDatabaseSnapshot;
   try {
-    return await publishStamp(input, root, parent, stamp, image, fetchedAt);
+    published = await publishStamp(input, root, parent, stamp, image, fetchedAt);
   } finally {
     await releaseVerifyDatabaseStamp(root, stamp, downloadClaim).catch(() => {
       console.error(JSON.stringify({event: 'VERIFY_DB_PRUNE_FAILED', reason: 'download-claim'}));
     });
   }
+  // The new stamp is published whole; compressing it is only a saving and never fails the refresh.
+  try {
+    for (const line of await compactVerifyDatabaseStamps(root, true, {image, spawn: input.spawn})) console.error(JSON.stringify({event: 'VERIFY_DB_COMPACT', line}));
+  } catch {
+    console.error(JSON.stringify({event: 'VERIFY_DB_COMPACT_FAILED'}));
+  }
+  return published;
 }
 
 async function publishStamp(
@@ -356,6 +364,7 @@ const JAVA_DB_FILE = 'trivy/java-db/trivy-java.db';
 
 /** True when the stamp carries the Trivy Java database. */
 export async function verifyDatabaseStampHasJava(stamp: string): Promise<boolean> {
+  if ((await readStampPack(stamp).catch(() => undefined /* unreadable pack: the file itself decides */))?.files.some(entry => entry.path === JAVA_DB_FILE)) return true;
   return (await lstat(join(stamp, JAVA_DB_FILE)).catch(() => null/* absent file: the stamp has no Java database */))?.isFile() === true;
 }
 
@@ -870,10 +879,253 @@ export async function runVerifyDatabaseRetention(
     : keepRecent === 1 ? 'fica a base atual e as em uso' : `fica a base atual, as em uso e as ${keepRecent} mais recentes`;
   const discard = await verifyDatabaseStampsToDiscard(root, keepRecent, apply);
   if (discard === null) throw new Refusal('VERIFY_DB_PRUNE_FAILED');
-  if (!apply) return [`Bases de vulnerabilidades (${rule}): ${discard.length} elegível(is)${discard.length ? ': ' + discard.join(', ') : ''}.`];
-  if (discard.length === 0) return [`Bases de vulnerabilidades (${rule}): nada a remover.`];
-  // The pinned image is needed only to chmod a stamp the host user cannot delete.
-  const removed = await pruneVerifyDatabaseStamps(root, deps.image ?? (() => readInstalledImage(root)), deps.spawn, {keepRecent});
-  if (removed === null) throw new Refusal('VERIFY_DB_PRUNE_FAILED');
-  return [`Bases de vulnerabilidades (${rule}): removida(s) ${removed.length} de ${discard.length}${removed.length ? ': ' + removed.join(', ') : ''}.`];
+  // The pinned image is needed only to chmod a stamp the host user cannot delete or compress.
+  const image = deps.image ?? (() => resolveStampImage(root));
+  if (!apply) return [`Bases de vulnerabilidades (${rule}): ${discard.length} elegível(is)${discard.length ? ': ' + discard.join(', ') : ''}.`,
+    ...await compactVerifyDatabaseStamps(root, false)];
+  let line = `Bases de vulnerabilidades (${rule}): nada a remover.`;
+  if (discard.length) {
+    const removed = await pruneVerifyDatabaseStamps(root, image, deps.spawn, {keepRecent});
+    if (removed === null) throw new Refusal('VERIFY_DB_PRUNE_FAILED');
+    line = `Bases de vulnerabilidades (${rule}): removida(s) ${removed.length} de ${discard.length}${removed.length ? ': ' + removed.join(', ') : ''}.`;
+  }
+  // The stamps that remain (the current one first of all) are kept compressed at rest.
+  return [line, ...await compactVerifyDatabaseStamps(root, true, {image, spawn: deps.spawn})];
+}
+
+// ---- Compressed stamps at rest -----------------------------------------------------------------------------------
+// The large database files of a published stamp (grype, trivy, osv archives) are kept compressed with zstd under
+// `<stamp>/.compactado/`, described by `pacote.json` (bound to the manifest by its digest). Each exam expands them into a
+// private temporary of its own round, mounted read-only, and removes it when the run ends. A file whose expanded bytes do not
+// match the manifest digest is refused (VERIFY_DB_CORRUPT), never used. The stamp is always whole: until `pacote.json` exists
+// the originals are all there; the originals go only after it exists and while no live run holds the stamp.
+
+const PACK_DIR = '.compactado';
+const PACK_FILE = 'pacote.json';
+/** Files from this size on are compressed; the rest stay as they are and are copied into the expanded copy. */
+export const PACK_MIN_BYTES = 8 * 1024 * 1024;
+const PACK_MAX_BYTES = 4 * 1024 * 1024;
+type PackEntry = {path: string; sha256: string; bytes: number; archive: string; archiveSha256: string; archiveBytes: number};
+type StampPack = {schemaVersion: 1; codec: 'zstd'; manifestSha256: string; files: PackEntry[]};
+const SAFE_RELATIVE = /^(?!.*(?:^|\/)\.\.?(?:\/|$))[A-Za-z0-9._@+-]+(?:\/[A-Za-z0-9._@+-]+)*$/;
+const HEX64 = /^[a-f0-9]{64}$/;
+
+async function readManifest(stamp: string): Promise<{bytes: Buffer; files: ManifestFile[]}> {
+  const bytes = await readFile(join(stamp, 'manifest.json'));
+  const parsed = JSON.parse(bytes.toString('utf8')) as {files?: unknown};
+  if (!Array.isArray(parsed.files)) throw new Refusal('VERIFY_DB_CORRUPT', 503);
+  const files = parsed.files.map((file: Partial<ManifestFile>) => {
+    if (typeof file?.path !== 'string' || !SAFE_RELATIVE.test(file.path) || file.path.startsWith(PACK_DIR + '/') || typeof file.sha256 !== 'string' || !HEX64.test(file.sha256)
+      || !Number.isSafeInteger(file.bytes) || (file.bytes as number) < 0) throw new Refusal('VERIFY_DB_CORRUPT', 503);
+    return {path: file.path, sha256: file.sha256, bytes: file.bytes as number};
+  });
+  return {bytes, files};
+}
+
+/** The pack of a stamp, or undefined when the stamp is not compressed. A pack that does not match its manifest is refused. */
+export async function readStampPack(stamp: string): Promise<StampPack | undefined> {
+  let text: Buffer;
+  try {
+    const handle = await open(join(stamp, PACK_DIR, PACK_FILE), constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const info = await handle.stat();
+      if (!info.isFile() || info.size > PACK_MAX_BYTES) throw new Refusal('VERIFY_DB_CORRUPT', 503);
+      text = await handle.readFile();
+    } finally { await handle.close(); }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    if (error instanceof Refusal) throw error;
+    throw new Refusal('VERIFY_DB_CORRUPT', 503);
+  }
+  let pack: StampPack;
+  try { pack = JSON.parse(text.toString('utf8')) as StampPack; } catch { throw new Refusal('VERIFY_DB_CORRUPT', 503); }
+  const manifest = await readManifest(stamp);
+  const byPath = new Map(manifest.files.map(file => [file.path, file]));
+  if (pack?.schemaVersion !== 1 || pack.codec !== 'zstd' || !Array.isArray(pack.files)
+    || pack.manifestSha256 !== createHash('sha256').update(manifest.bytes).digest('hex')) throw new Refusal('VERIFY_DB_CORRUPT', 503);
+  for (const entry of pack.files) {
+    const listed = byPath.get(entry?.path);
+    if (!listed || listed.sha256 !== entry.sha256 || listed.bytes !== entry.bytes || entry.archive !== `${PACK_DIR}/${entry.path}.zst`
+      || typeof entry.archiveSha256 !== 'string' || !HEX64.test(entry.archiveSha256) || !Number.isSafeInteger(entry.archiveBytes)) throw new Refusal('VERIFY_DB_CORRUPT', 503);
+  }
+  return pack;
+}
+
+/** Streams `source` through `transform` into `target` (created exclusively), returning the digest and size of what was read and written. */
+async function streamThrough(source: string, target: string, transform: NodeJS.ReadWriteStream, mode: number) {
+  const {pipeline} = await import('node:stream/promises');
+  const {createWriteStream} = await import('node:fs');
+  const read = createHash('sha256'), written = createHash('sha256');
+  let readBytes = 0, writtenBytes = 0;
+  const input = createReadStream(source);
+  input.on('data', (chunk: Buffer | string) => { const piece = Buffer.from(chunk); readBytes += piece.length; read.update(piece); });
+  transform.on('data', (chunk: Buffer) => { writtenBytes += chunk.length; written.update(chunk); });
+  await pipeline(input, transform, createWriteStream(target, {flags: 'wx', mode}));
+  return {readSha256: read.digest('hex'), readBytes, writtenSha256: written.digest('hex'), writtenBytes};
+}
+
+/** Compresses the large files of one stamp under `.compactado/` and writes `pacote.json` last. The originals stay. Idempotent. */
+async function packStamp(stamp: string): Promise<StampPack> {
+  const existing = await readStampPack(stamp);
+  if (existing) return existing;
+  const zlib = await import('node:zlib');
+  const manifest = await readManifest(stamp);
+  const root = join(stamp, PACK_DIR);
+  // A pass that died midway left partial archives: start over.
+  await rm(root, {recursive: true, force: true});
+  await mkdir(root, {mode: 0o755});
+  const files: PackEntry[] = [];
+  try {
+    for (const file of manifest.files.filter(item => item.bytes >= PACK_MIN_BYTES)) {
+      const archive = `${PACK_DIR}/${file.path}.zst`;
+      await mkdir(dirname(join(stamp, archive)), {recursive: true, mode: 0o755});
+      const done = await streamThrough(join(stamp, file.path), join(stamp, archive), zlib.createZstdCompress(), 0o644);
+      // An original that no longer matches its manifest is not packed: the stamp is left as it is.
+      if (done.readSha256 !== file.sha256 || done.readBytes !== file.bytes) throw new Refusal('VERIFY_DB_CORRUPT', 503);
+      files.push({...file, archive, archiveSha256: done.writtenSha256, archiveBytes: done.writtenBytes});
+    }
+    const pack: StampPack = {schemaVersion: 1, codec: 'zstd', manifestSha256: createHash('sha256').update(manifest.bytes).digest('hex'), files};
+    const temporary = join(root, `.${PACK_FILE}.${randomUUID()}.tmp`);
+    await writeFile(temporary, JSON.stringify(pack, null, 1) + '\n', {mode: 0o644, flag: 'wx'});
+    await rename(temporary, join(root, PACK_FILE));
+    return pack;
+  } catch (error) {
+    await rm(root, {recursive: true, force: true}).catch(() => undefined /* the error below is what the pass reports */);
+    throw error;
+  }
+}
+
+/** Removes the originals that the pack holds. The downloader (uid 65532) owns their folders: when the host user cannot unlink,
+ * `openForHost` gives the stamp to it once (the same root chmod a discard uses). Returns the originals still on disk. */
+async function dropPackedOriginals(stamp: string, pack: StampPack, openForHost: () => Promise<boolean>): Promise<number> {
+  let opened = false, left = 0;
+  for (const entry of pack.files) {
+    const path = join(stamp, entry.path);
+    for (;;) {
+      try { await unlink(path); break; } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT') break;
+        if ((code === 'EACCES' || code === 'EPERM') && !opened) { opened = true; if (await openForHost().catch(() => false)) continue; }
+        left += 1;
+        break;
+      }
+    }
+  }
+  return left;
+}
+
+/** Retention and refresh pass: compresses every stamp not yet compressed and, for those that no live run holds, removes the
+ * originals. Runs under the prune lock. `apply:false` only says what would happen. */
+export async function compactVerifyDatabaseStamps(dataDirectory: string, apply: boolean, deps: {image?: string | (() => Promise<string>); spawn?: CommandRunner} = {}): Promise<string[]> {
+  const root = assertDataDirectory(dataDirectory);
+  const parent = join(root, 'verify-db');
+  const names = await listStampNames(parent);
+  const lines: string[] = [];
+  const pending: string[] = [];
+  for (const name of names) {
+    const stamp = join(parent, name);
+    if (!await verifyDatabaseStampPresent(stamp)) continue;
+    const pack = await readStampPack(stamp).catch(() => null);
+    if (pack === null) { lines.push(`Base ${name}: pacote compactado inválido; preservada como está.`); continue; }
+    if (pack && pack.files.every(entry => !existsSyncSafe(join(stamp, entry.path)))) continue;
+    // Nothing large enough to be worth it (or a manifest that cannot be read): the stamp stays as it is.
+    if (!pack && !(await readManifest(stamp).catch(() => ({files: []}))).files.some(file => file.bytes >= PACK_MIN_BYTES)) continue;
+    pending.push(name);
+  }
+  if (!pending.length) return lines;
+  if (!apply) return [...lines, `Bases de vulnerabilidades: ${pending.length} seria(m) compactada(s): ${pending.join(', ')}.`];
+  const lock = await takePruneLock(parent);
+  if (lock === 'busy') return [...lines, 'Bases de vulnerabilidades: compactação adiada (outra poda em andamento).'];
+  try {
+    const image = deps.image ?? (() => resolveStampImage(root));
+    for (const name of pending) {
+      const stamp = join(parent, name);
+      let pack: StampPack;
+      try { pack = await packStamp(stamp); } catch (error) {
+        lines.push(`Base ${name}: compactação falhou (${error instanceof Refusal ? error.code : 'erro'}); a base segue sem compactar.`);
+        continue;
+      }
+      // The pack exists from here on. A run that claims the stamp now expands the pack; one that claimed it before keeps the originals.
+      let claimed: boolean;
+      try { claimed = (await liveClaimStamps(parent, false, true)).some(stamp => directStampName(parent, stamp) === name); } catch { claimed = true; }
+      const packed = pack.files.reduce((sum, entry) => sum + entry.archiveBytes, 0), original = pack.files.reduce((sum, entry) => sum + entry.bytes, 0);
+      if (claimed) { lines.push(`Base ${name}: compactada; originais preservados enquanto um exame a usa (a próxima retenção os remove).`); continue; }
+      const left = await dropPackedOriginals(stamp, pack, async () => {
+        const args = discardStampArguments(stamp, parent, typeof image === 'string' ? image : await image());
+        return (deps.spawn ? await deps.spawn(args) : await runCommand(args, 'ignore', DISCARD_TIMEOUT_MS)) === 0;
+      });
+      lines.push(left
+        ? `Base ${name}: compactada, mas ${left} original(is) não puderam ser removidos (sem permissão); a próxima retenção tenta de novo.`
+        : `Base ${name}: compactada (${(original / 1e9).toFixed(2)} GB em ${(packed / 1e9).toFixed(2)} GB).`);
+    }
+  } finally {
+    if (lock) await releasePruneLock(lock);
+  }
+  return lines;
+}
+
+function existsSyncSafe(path: string): boolean {
+  try { lstatSync(path); return true; } catch { return false; }
+}
+
+/** The image that may chmod a stamp: the pinned common image when present, else the installed verify image. */
+async function resolveStampImage(root: string): Promise<string> {
+  return (await availableSimpleToolsImage(root).catch(() => undefined /* no common pin: the installed image */)) ?? readInstalledImage(root);
+}
+
+export type ExpandedDatabases = {directory: string; release: () => Promise<void>};
+type ExpandDeps = {tmpRoot?: string; track?: (path: string) => Promise<unknown>; freeAfter?: (path: string, bytes: number) => Promise<number>};
+
+/** Disk use (percent) of the volume of `path` once `bytes` more are written there. */
+async function usedPercentAfter(path: string, bytes: number): Promise<number> {
+  const {statfs} = await import('node:fs/promises');
+  const info = await statfs(path);
+  const blocks = Math.ceil(bytes / info.bsize);
+  if (blocks > info.bavail) return 100;
+  const used = info.blocks - info.bfree + blocks, capacity = info.blocks - info.bfree + info.bavail;
+  return 100 * used / capacity;
+}
+
+/** The directory an exam mounts as `/databases`. An uncompressed stamp is mounted as it is. A compressed one is expanded into a
+ * private temporary (`ac-verify-db-*`, registered by `track` as a round temporary) that `release` removes; every expanded file is
+ * checked against the manifest digest. Refuses with PERSONAL_DISK_FULL when the expansion would take the disk to 95% or more. */
+export async function expandVerifyDatabaseStamp(stamp: string, deps: ExpandDeps = {}): Promise<ExpandedDatabases> {
+  const pack = await readStampPack(stamp);
+  if (!pack?.files.length) return {directory: stamp, release: async () => undefined};
+  const zlib = await import('node:zlib');
+  const {copyFile, mkdtemp, realpath} = await import('node:fs/promises');
+  const {tmpdir} = await import('node:os');
+  const {DISK_BLOCK_PERCENT} = await import('./personal-disk.ts');
+  const manifest = await readManifest(stamp);
+  const tmp = await realpath(deps.tmpRoot ?? tmpdir());
+  const needed = manifest.files.reduce((sum, file) => sum + file.bytes, 0);
+  if (await (deps.freeAfter ?? usedPercentAfter)(tmp, needed) >= DISK_BLOCK_PERCENT) throw new Refusal('PERSONAL_DISK_FULL', 503);
+  const directory = await mkdtemp(join(tmp, 'ac-verify-db-'));
+  const release = () => rm(directory, {recursive: true, force: true});
+  try {
+    await chmod(directory, 0o755);
+    await deps.track?.(directory);
+    const packed = new Map(pack.files.map(entry => [entry.path, entry]));
+    for (const file of manifest.files) {
+      const target = join(directory, file.path);
+      await mkdir(dirname(target), {recursive: true, mode: 0o755});
+      const entry = packed.get(file.path);
+      if (!entry) {
+        await copyFile(join(stamp, file.path), target, constants.COPYFILE_EXCL);
+        await chmod(target, 0o644);
+        continue;
+      }
+      const done = await streamThrough(join(stamp, entry.archive), target, zlib.createZstdDecompress(), 0o644);
+      if (done.readSha256 !== entry.archiveSha256 || done.writtenSha256 !== file.sha256 || done.writtenBytes !== file.bytes) throw new Refusal('VERIFY_DB_CORRUPT', 503);
+    }
+    await copyFile(join(stamp, 'manifest.json'), join(directory, 'manifest.json'), constants.COPYFILE_EXCL);
+    await chmod(join(directory, 'manifest.json'), 0o644);
+    return {directory, release};
+  } catch (error) {
+    await release().catch(() => undefined /* the refusal below is what the exam reports */);
+    if (error instanceof Refusal) throw error;
+    if ((error as NodeJS.ErrnoException).code === 'ENOSPC') throw new Refusal('PERSONAL_DISK_FULL', 503);
+    // A damaged archive fails inside zstd: it is a corrupt base, never a silent gap.
+    throw new Refusal('VERIFY_DB_CORRUPT', 503);
+  }
 }

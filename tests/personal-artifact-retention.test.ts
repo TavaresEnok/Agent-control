@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
-import {existsSync,mkdirSync,realpathSync,rmSync,statSync,symlinkSync,writeFileSync} from 'node:fs';
+import {existsSync,mkdirSync,readFileSync,readdirSync,realpathSync,rmSync,statSync,symlinkSync,writeFileSync} from 'node:fs';
 import {chmod,mkdtemp,readFile,rename,rm,utimes,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -359,6 +359,40 @@ test('an image stays when pinned by a product or project digest.txt, by the nati
   l.clock.now+=2*HOUR;
   await run(l,true);
   assert.deepEqual([...l.docker.images.keys()],[]);
+ }finally{await cleanup(l);}
+});
+
+test('in the simple isolation a present, pinned common image releases the module digest.txt pins; verify, design and exam pins stay',async()=>{
+ const l=await lab();
+ try{
+  for(const k of ['1','2','3','4','5'])l.docker.images.set(image(k),{repoDigests:[]});
+  for(const k of ['1','2','3','4'])await registerOld(l,image(k));
+  digestFile(l.deps.productRoot!,'qa',image('1'));
+  digestFile(l.deps.productRoot!,'desempenho',image('5'));
+  writeFileSync(join(l.deps.productRoot!,'deploy','design-image-digest.txt'),image('2')+'\n');
+  writeFileSync(join(l.data,'verify-image.json'),JSON.stringify({image:image('3')}),{mode:0o600});
+  l.runImages=[image('4')];
+  // Without the common pin, every module pin protects.
+  await run(l,true);
+  assert.deepEqual(removals(l),[]);
+  // A pinned common image the daemon does not have: the fallback is still needed, the module pins stay.
+  writeFileSync(join(l.data,'simple-tools-image.json'),JSON.stringify({image:image('c')}),{mode:0o600});
+  await run(l,true);
+  assert.deepEqual(removals(l),[]);
+  // Strict isolation never uses the common image: the module pins stay.
+  l.docker.images.set(image('c'),{repoDigests:[]});
+  (l.config as unknown as {isolation:string}).isolation='strict';
+  await run(l,true);
+  assert.deepEqual(removals(l),[]);
+  // Simple isolation with the common image present: only the module image goes; the common, verify, design and exam images stay.
+  delete (l.config as unknown as {isolation?:string}).isolation;
+  const text=(await run(l,true)).join('\n');
+  assert.deepEqual(removals(l),[['image','rm',image('1')]]);
+  for(const k of ['2','3','4','5','c'])assert.ok(l.docker.images.has(image(k)),k);
+  assert.match(text,/sha256:222222222222 \(qa\): preservado \(digest fixado/);
+  // The pins republished for the other installations of the daemon no longer list the released module images.
+  const refs=(readdirSync(l.deps.sharedRefsRoot!,{recursive:true}) as string[]).map(name=>join(l.deps.sharedRefsRoot!,name)).filter(path=>statSync(path).isFile()).map(path=>readFileSync(path,'utf8')).join('\n');
+  assert.ok(refs.includes(image('c'))&&!refs.includes(image('5')),refs);
  }finally{await cleanup(l);}
 });
 

@@ -23,7 +23,7 @@ import {personalAccountRoot} from './personal-health.ts';
 import {recoverPersonalOrphanedExams} from './personal-orphaned-exams.ts';
 import {clearTerminalVerifyProgress,failAbandonedVerifyContext} from './verify-abandon.ts';
 import {collectToolFindings} from './verify-collect.ts';
-import {claimVerifyDatabaseStamp, readCurrentVerifyDatabase, releaseVerifyDatabaseStamp, verifyDatabaseStampPresent} from './verify-db.ts';
+import {type ExpandedDatabases, claimVerifyDatabaseStamp, expandVerifyDatabaseStamp, readCurrentVerifyDatabase, releaseVerifyDatabaseStamp, verifyDatabaseStampPresent} from './verify-db.ts';
 import {attachInternalTarget, dynamicScanPlan} from './verify-dynamic.ts';
 import {VERIFY_RUNTIME_BIN, verifyExamArguments} from './verify-image.ts';
 import {installationName, ownerLabelArgs, projectLabel} from '../scripts/ac-labels.mjs';
@@ -662,6 +662,8 @@ async function runJob(input: {
   startedMs: number;
   lockPath: string;
   databaseStamp?: string;
+  /** The base the tools mount: the stamp itself, or its expanded copy when it is kept compressed. */
+  databases?: ExpandedDatabases;
   network?: string;
   container?: string;
   networkRunner: NetworkRunner;
@@ -683,12 +685,17 @@ async function runJob(input: {
       // The tools, the file list, the map, the hashes, the excerpts and the reviewer all read the one snapshot made when the
       // exam began. The checkout the owner keeps editing is only asked for history bound to the commit.
       const examRoot = input.shared?.path ?? examSnapshotRoot(snapshot, Boolean(ready.staticPolicy));
-      await runTools({image: ready.image, repository: ready.repoPath, databases: ready.databasesDirectory, output,
-        ...(ready.staticPolicy ? {staticPersonalExam: true} : {}),
-        retention,
-        commonTools:ready.simple,
-        snapshot,
-      });
+      try {
+        await runTools({image: ready.image, repository: ready.repoPath, databases: input.databases?.directory ?? ready.databasesDirectory, output,
+          ...(ready.staticPolicy ? {staticPersonalExam: true} : {}),
+          retention,
+          commonTools:ready.simple,
+          snapshot,
+        });
+      } finally {
+        // The expanded copy of a compressed base lives only as long as the tools (the end of the job releases it too).
+        await input.databases?.release().catch(containFailure('VERIFY_DB_EXPANDED_CLEANUP_FAILED',undefined));
+      }
       const collected = await collectToolFindings(output);
       assertExamDeadline(startedMs, ready.timeLimitMs);
       const verification: SecurityVerificationInput & {modelCallBudget?: number} = {
@@ -782,6 +789,7 @@ async function runJob(input: {
     // The one snapshot lives for the whole exam and goes away here, done or failed.
     if(input.shared)await input.shared.release();
     else { snapshotSuppressions.delete(snapshot); await rm(snapshot, {recursive: true, force: true}).catch(containFailure('VERIFY_SNAPSHOT_CLEANUP_FAILED',undefined)); }
+    await input.databases?.release().catch(containFailure('VERIFY_DB_EXPANDED_CLEANUP_FAILED',undefined));
     // The job reached its end (done or failed): leftovers may now age out.
     await endRound({dataDirectory: ready.dataDirectory, projectId: ready.projectId, roundId: id});
     try { await releaseExamDatabase(ready.dataDirectory, input.databaseStamp, id); }
@@ -834,6 +842,7 @@ export async function beginPersonalVerification(input: PersonalVerificationInput
   }
   let started = false;
   let databaseStamp: string | undefined;
+  let databases: ExpandedDatabases | undefined;
   let shared:Awaited<ReturnType<typeof sharedSimpleWorktree>>|undefined;
   let snapshot: string | undefined;
   let progressPath: string | undefined;
@@ -841,6 +850,9 @@ export async function beginPersonalVerification(input: PersonalVerificationInput
     if (network && container) await attachHomologation(network, container, networkRunner,
       ownerLabelArgs({installation: installationName(ready.dataDirectory), project: projectLabel(ready.projectId), kind: 'verify-dynamic-network'}));
     databaseStamp = await claimExamDatabase(ready.dataDirectory, ready.databasesDirectory, id);
+    // A stamp kept compressed at rest is expanded for this run only, into a temporary of its round (after the claim: the claim is
+    // what keeps the compaction from touching the stamp this run reads).
+    databases = await expandVerifyDatabaseStamp(ready.databasesDirectory, {track: path => trackRoundTemp({dataDirectory: ready.dataDirectory, projectId: ready.projectId, roundId: id}, path)});
     const output = await ensureTree(ready.dataDirectory, ['verificacoes', ready.projectId, 'ferramentas', id]);
     progressPath = join(progressDir, `${id}.json`);
     // ONE snapshot of the admitted commit per exam, made before any tool or model call and kept until the job ends.
@@ -849,7 +861,7 @@ export async function beginPersonalVerification(input: PersonalVerificationInput
     snapshot = shared?.path ?? await prepareExamSnapshot(ready.repoPath, ready.commit, Boolean(ready.staticPolicy),
       ready.staticPolicy ? {dataDirectory: ready.dataDirectory, projectId: ready.projectId, roundId: id} : undefined);
     await writePrivateFile(progressPath, renderProgress(state));
-    const job = runJob({ready, id, output, progressPath, state, modelCalls, startedMs, lockPath, databaseStamp, network, container, networkRunner, snapshot, shared})
+    const job = runJob({ready, id, output, progressPath, state, modelCalls, startedMs, lockPath, databaseStamp, databases, network, container, networkRunner, snapshot, shared})
       .then(outcome => { input.onOutcome?.(outcome); });
     started = true;
     input.observe?.(job);
@@ -861,6 +873,7 @@ export async function beginPersonalVerification(input: PersonalVerificationInput
       else if (snapshot) { snapshotSuppressions.delete(snapshot); await rm(snapshot, {recursive: true, force: true}).catch(() => undefined /* best-effort cleanup; the original error is what the caller sees */); }
       // Never leave a 'running' progress file behind when the job did not start (it would block every later exam).
       if (progressPath) await rm(progressPath, {force: true}).catch(() => undefined);
+      await databases?.release().catch(() => undefined /* keep the original error; the round temporary is also registered */);
       try { await releaseExamDatabase(ready.dataDirectory, databaseStamp, id); } catch { /* keep the original error */ }
       try { await releaseRunningLock(lockPath, id); } catch { /* keep the original error */ }
       if (network && container) {

@@ -16,6 +16,8 @@ import {ProviderCollectors} from '../src/providers.ts';
 import {createSyntheticProviderAdapter} from '../src/synthetic-provider-adapter.ts';
 import {beginPersonalVerification, defaultRunTools, evaluationSlots, NETWORK_COMMAND_TIMEOUT_MS, prepareExamSnapshot, readVerificationProgress, runBoundedCommand, type VerifyJobOutcome} from '../src/verify-command.ts';
 import {VERIFY_RUNTIME_BIN} from '../src/verify-image.ts';
+import {PACK_MIN_BYTES, compactVerifyDatabaseStamps} from '../src/verify-db.ts';
+import {createHash} from 'node:crypto';
 import {listSecurityReports} from '../src/verify-report.ts';
 import type {VerifyWorker} from '../src/verify-types.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
@@ -732,6 +734,37 @@ test('o carimbo da base é reivindicado no início e solto se o exame falha', as
     const progress = await readVerificationProgress(dataDirectory, projectId);
     assert.equal(progress[0]?.status, 'failed');
     assert.deepEqual(await readdir(toolsDir), []);
+  } finally {
+    if (observed) await observed.catch(() => undefined);
+    await rm(dataDirectory, {recursive: true, force: true});
+  }
+});
+
+test('uma base compactada é expandida só para o exame, montada no lugar do carimbo e apagada no fim', async () => {
+  const dataDirectory = await mkdtemp(join(tmpdir(), 'ac-verify-packed-'));
+  const databases = join(dataDirectory, 'verify-db', '20261128-030405');
+  const big = Buffer.alloc(PACK_MIN_BYTES, 'vuln;');
+  let observed: Promise<void> | undefined;
+  let mounted = '';
+  try {
+    await mkdir(join(databases, 'grype', '6'), {recursive: true, mode: 0o700});
+    await writeFile(join(databases, 'grype', '6', 'vulnerability.db'), big);
+    await writeFile(join(databases, 'manifest.json'), JSON.stringify({fetchedAt: 'x', files: [{path: 'grype/6/vulnerability.db', sha256: createHash('sha256').update(big).digest('hex'), bytes: big.length}]}) + '\n');
+    await compactVerifyDatabaseStamps(dataDirectory, true, {spawn: async () => 1});
+    await assert.rejects(stat(join(databases, 'grype', '6', 'vulnerability.db')));
+    const seed = await commitDirectory(dataDirectory);
+    await beginPersonalVerification({
+      ...blockedInput(dataDirectory, databases, {projectId: randomUUID(), commit: seed}),
+      runTools: async spec => {
+        mounted = spec.databases;
+        assert.ok((await readFile(join(mounted, 'grype', '6', 'vulnerability.db'))).equals(big));
+      },
+      observe: job => { observed = job; },
+    });
+    await observed?.catch(() => undefined /* the later phases of this fixture may fail; the base is what is checked */);
+    assert.match(basename(mounted), /^ac-verify-db-/);
+    assert.notEqual(mounted, databases);
+    await assert.rejects(stat(mounted));
   } finally {
     if (observed) await observed.catch(() => undefined);
     await rm(dataDirectory, {recursive: true, force: true});

@@ -18,6 +18,7 @@ import {inventoryJobWork,readRetentionCursor,rotateAfter,writeRetentionCursor} f
 import {composePersonalExecutionSupervisors} from './personal-runtime.ts';
 import {readCurrentVerifyDatabase,refreshVerifyDatabases,runVerifyDatabaseRetention,verifyDatabaseStampHasJava,verifyJavaDatabaseWanted} from './verify-db.ts';
 import {checkPersonalDockerDependencies} from './personal-docker-dependencies.ts';
+import {retireNativeImages} from './personal-retired-native-images.ts';
 
 
 export type MaintenanceDeps={
@@ -26,10 +27,10 @@ export type MaintenanceDeps={
  docker?:(args:string[])=>Promise<number>;
  /** Whether Docker still has this image. */
  imageExists?:(image:string)=>Promise<boolean>;
- /** Execution jobs of one executor that may still need their old supervisor. */
- openExecutionJobs?:(executorDigest:string)=>Promise<number>;
- /** Planning calls not yet finished. Planning rows do not name their image, so any open call keeps every retired planning image. */
- openPlanningJobs?:()=>Promise<number>;
+ /** The installation file the configuration came from. Without it, the retired native images are not judged (they stay pinned). */
+ installationFile?:string;
+ /** Retirement of the retired native images that no job or planning call still needs. Tests replace it. */
+ retiredNativeImages?:(config:Installation,installationFile:string,apply:boolean)=>Promise<{lines:string[];config?:Installation}>;
  /** Publishes a new vulnerability database. Failure must leave the previous stamp in place. */
  /** Lines it returns are added to the stage's report. */
  refreshDatabases?:(dataDirectory:string)=>Promise<void|string[]>;
@@ -140,7 +141,9 @@ export function javaSkipNotes(wanted:boolean,present:boolean):string[]{
  * worktrees, images and temporaries. The stages are independent: a damaged artifact registry, a database outage or any other failure
  * of one stage never keeps the next one from running. A failure is reported after every stage has had its turn. Every run, preview or
  * apply, leaves its report and the reason of each failure in `<dataDirectory>/retention-last.json` (see {@link readRetentionReport}). */
-export async function runRetentionStages(config:Installation,apply:boolean,deps:Pick<MaintenanceDeps,'jobRetention'|'artifactRetention'|'verifyDatabaseRetention'|'capacityWaitRetention'|'jobDirRetention'|'devWorktreeRetention'|'now'>={}):Promise<string[]>{
+export async function runRetentionStages(config:Installation,apply:boolean,deps:Pick<MaintenanceDeps,'jobRetention'|'artifactRetention'|'verifyDatabaseRetention'|'capacityWaitRetention'|'jobDirRetention'|'devWorktreeRetention'|'installationFile'|'retiredNativeImages'|'now'>={}):Promise<string[]>{
+ let current=config;
+ const installationFile=deps.installationFile;
  const stages:[string,string,(config:Installation,apply:boolean)=>Promise<string[]>][]=[
   ['jobs','work/ de jobs',deps.jobRetention??(simpleIsolation(config)?async(config,apply)=>{
    const ledger=new Ledger(config.databaseUrl);
@@ -155,11 +158,17 @@ export async function runRetentionStages(config:Installation,apply:boolean,deps:
   ['dev-worktrees','worktrees do produto',deps.devWorktreeRetention??((config,apply)=>devWorktreeRetention(config,apply))],
   ['artifacts','artefatos (worktrees, imagens e temporários)',deps.artifactRetention??runPersonalArtifactRetention],
  ];
+ // Before the images: a retired native image dropped from the installation is judged by the image retention of this same run.
+ if(installationFile)stages.splice(stages.findIndex(([name])=>name==='artifacts'),0,['native-images','imagens nativas aposentadas',async(config,apply)=>{
+  const result=await (deps.retiredNativeImages??retireNativeImages)(config,installationFile,apply);
+  if(result.config)current=result.config;
+  return result.lines;
+ }]);
  if(simpleIsolation(config)&&!deps.artifactRetention)stages.push(['docker','Docker',(config,apply)=>simpleDockerRetention(config,apply)],['tmp','temporários',(config,apply)=>simpleTempRetention(config,apply)]);
  const startedAt=(deps.now??(()=>new Date()))().toISOString();
  const lines:string[]=[],failed:string[]=[],failures:RetentionFailure[]=[];
  for(const [name,label,stage] of stages){
-  try{lines.push(...await stage(config,apply));}
+  try{lines.push(...await stage(current,apply));}
   catch(error){
    failed.push(name);
    const code=error instanceof Refusal?error.code:'erro';
@@ -209,9 +218,7 @@ export function retentionSummary(report:RetentionReport|undefined){
  return report.outcome==='ok'?'retention=ok':`retention=failed(${report.failures.map(f=>f.stage+':'+f.code).join(',')})`;
 }
 
-/** A retired execution pair is kept while any job under it is unfinished, or a reviewer, judge or QA job has not had its containers removed. */
-export const OPEN_EXECUTION_JOBS_SQL=`SELECT count(*)::int n FROM ac_native_execution_jobs j WHERE j.executor_digest=$1 AND (j.state NOT IN ('completed','failed')
- OR (j.role IN ('reviewer','judge','qa') AND NOT EXISTS(SELECT 1 FROM ac_native_terminal_retirements t WHERE t.job_id=j.id AND t.state='removed')))`;
+export {OPEN_EXECUTION_JOBS_SQL} from './personal-retired-native-images.ts';
 
 function run(command:string,args:string[],timeout:number){
  return new Promise<number>(resolvePromise=>{
@@ -659,7 +666,7 @@ async function runMaintenanceStages(config:Installation,file:string,deps:Mainten
    await (deps.publishReferences??publishDaemonReferences)(config);
    return {outcome:'skipped',lines:['Retenção automática desligada (modo off).']};
   }
-  const out=await runRetentionStages(config,mode==='apply',deps);
+  const out=await runRetentionStages(config,mode==='apply',{...deps,installationFile:file});
   return {outcome:'ok',lines:mode==='apply'?out:[...out,'Retenção em modo prévia: nada é apagado. Use retention.automatic=apply para liberar espaço.']};
  });
  await stage('cache',async()=>{
@@ -696,7 +703,7 @@ export async function runPersonalMaintenance(argv:string[],deps:MaintenanceDeps=
   const scheduled=await loadInstallation(resolve(argv[0]!));
   if(scheduled.activation!=='personal')throw new Refusal('MAINTENANCE_PERSONAL_REQUIRED');
   const mode=scheduled.retention?.automatic??'preview';
-  if(mode!=='off')return runRetentionStages(scheduled,mode==='apply',deps);
+  if(mode!=='off')return runRetentionStages(scheduled,mode==='apply',{...deps,installationFile:resolve(argv[0]!)});
   await (deps.publishReferences??publishDaemonReferences)(scheduled);
   return ['Retenção automática desligada.'];
  }
@@ -713,7 +720,7 @@ export async function runPersonalMaintenance(argv:string[],deps:MaintenanceDeps=
  if(parsed.artifactArgs)return runArtifactCommand(config,parsed.artifactArgs);
  if(parsed.recoverExamJobId)return recoverInterruptedExamFromInstallation(config,parsed.recoverExamJobId,true);
  if(parsed.releaseExamWork)return releaseExamWorkFromInstallation(config,parsed.releaseExamWork);
- if(parsed.jobRetention)return runRetentionStages(config,parsed.jobRetention.apply,deps);
+ if(parsed.jobRetention)return runRetentionStages(config,parsed.jobRetention.apply,{...deps,installationFile:file});
  if(parsed.recoverModuleExamJobId)return recoverNeverStartedModuleExamFromInstallation(config,parsed.recoverModuleExamJobId);
  if(parsed.accountConcurrency){
   const ledger=new Ledger(config.databaseUrl,config.installationAuthority?.token);
@@ -735,7 +742,7 @@ export async function runPersonalMaintenance(argv:string[],deps:MaintenanceDeps=
  });
  const boot=config.nativeBootstrap;
  if(!boot||boot.state==='disabled'||boot.state==='bench'){lines.push('Sem runtime nativo: nenhuma imagem aposentada.');return lines;}
- // Retired image records and images remain until pins across the shared daemon can be proved.
- lines.push('Imagens aposentadas e seus registros preservados; só uma imagem registrada como candidata é removida, por id, pela retenção de artefatos, e só se nenhuma instalação do daemon a fixar.');
+ // The manual run does not judge retired images: the retention does (see retireNativeImages), then the image retention by id.
+ lines.push('Imagens aposentadas e seus registros preservados nesta execução; a retenção (--retencao-automatica) retira da instalação as que nenhum job ou chamada aberta usa, e a retenção de imagens as remove por id, só se nenhuma instalação do daemon a fixar.');
  return lines;
 }

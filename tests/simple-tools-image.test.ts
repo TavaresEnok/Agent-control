@@ -49,6 +49,20 @@ test('a pinned common image missing from Docker falls back to the module image',
  });
 });
 
+test('with the common image and the module image both gone from Docker the routing falls through to the host collector, then refuses cleanly',async()=>{
+ await withDocker({},async dirs=>{
+  await writeFile(join(dirs.data,'simple-tools-image.json'),JSON.stringify({image:common}),{mode:0o600});
+  // Performance never has a host collector: the end of the order is a refusal, not a crash.
+  await mkdir(join(dirs.root,'deploy','modules','desempenho'),{recursive:true});
+  await writeFile(join(dirs.root,'deploy','modules','desempenho','digest.txt'),own+'\n');
+  await assert.rejects(selectModuleCollector({...input(dirs),module:'desempenho'}),/SIMPLE_TOOLS_IMAGE_MISSING/);
+  // Another module either finds the collector installed on this host or is refused the same way.
+  const qa=await selectModuleCollector(input(dirs)).catch((error:Error)=>error);
+  if(qa instanceof Error)assert.match(qa.message,/SIMPLE_TOOLS_IMAGE_MISSING/);
+  else assert.ok(qa.hostCollector&&qa.image?.startsWith('host-qa@sha256:'),JSON.stringify(qa));
+ });
+});
+
 test('a malformed common pin is refused, never replaced by a tag',async()=>{
  await withDocker({[commonToolTag]:common},async dirs=>{
   await writeFile(join(dirs.data,'simple-tools-image.json'),JSON.stringify({image:commonToolTag}),{mode:0o600});

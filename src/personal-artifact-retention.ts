@@ -9,7 +9,7 @@ import pg from 'pg';
 import {z} from 'zod';
 import {releaseRegisteredDirectory} from './native-work-retention.ts';
 import {Refusal} from './contracts.ts';
-import {privateDirectory,readPrivateFile,type Installation} from './installation.ts';
+import {privateDirectory,readPrivateFile,simpleIsolation,type Installation} from './installation.ts';
 import {VERIFICATION_MODULES} from './ledger.ts';
 
 /**
@@ -435,8 +435,7 @@ export async function protectedDigests(config:Installation,deps:RetentionDeps,do
  const roots=new Set([deps.productRoot??here,...projectsOf(config).map(item=>item.repo)]);
  const installed=join(config.dataDirectory,'verify-image.json');
  const simple=join(config.dataDirectory,'simple-tools-image.json');
- const files=[installed,simple,...[...roots].flatMap(root=>[join(root,'deploy','design-image-digest.txt'),...VERIFICATION_MODULES.map(module=>join(root,'deploy','modules',module,'digest.txt'))])];
- for(const file of files){
+ const readPin=async(file:string)=>{
   let text:string;
   try{
    const handle=await open(file,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
@@ -445,15 +444,29 @@ export async function protectedDigests(config:Installation,deps:RetentionDeps,do
     if(!info.isFile()||info.size>65536)throw new Refusal('RETENTION_IMAGE_PIN_INVALID');
     text=await handle.readFile('utf8');
    }finally{await handle.close();}
-  }catch(error){if(errno(error,'ENOENT'))continue;throw error;}
+  }catch(error){if(errno(error,'ENOENT'))return undefined;throw error;}
   if(file===installed||file===simple)text=JSON.parse(text).image;
   if(typeof text!=='string'||!digestsIn(text).size)throw new Refusal('RETENTION_IMAGE_PIN_INVALID');
   for(const digest of digestsIn(text))pinned.add(digest);
- }
+  return text;
+ };
+ const common=await readPin(simple);
+ // In the simple isolation the modules 2 to 9 run first on the common image that `personal:tools-image` proved and pinned; their own
+ // pins are only the fallback. While that image is present, the module pins no longer keep their images (exams still running, and
+ // the past runs, keep theirs through `verifyRunImages`). Without the common image on the daemon, the fallback is needed: they stay.
+ const commonCovers=simpleIsolation(config)&&common!==undefined&&imageIdPattern.test(common)&&await localImage(docker,common);
+ const files=[installed,...[...roots].flatMap(root=>[join(root,'deploy','design-image-digest.txt'),...(commonCovers?[]:VERIFICATION_MODULES.map(module=>join(root,'deploy','modules',module,'digest.txt')))])];
+ for(const file of files)await readPin(file);
  for(const image of await (deps.verifyRunImages??(current=>defaultVerifyRunImages(current,releasedProject)))(config))for(const digest of digestsIn(image))pinned.add(digest);
  let foreign:Set<string>;
  try{foreign=await shareDaemonReferences(config,deps,docker,[...pinned],[...retired],options.apply===true,options.publish??true);}catch{throw new SharedReferencesUnreadable();}
  return {pinned,retired,foreign};
+}
+
+/** Whether the daemon has this exact image id. Any failure answers no, which keeps the module pins. */
+async function localImage(docker:NonNullable<RetentionDeps['docker']>,image:string){
+ try{const found=await docker(['image','inspect','--format','{{.Id}}',image]);return found.code===0&&found.stdout.trim()===image;}
+ catch{return false;/* unknown: the module pins keep protecting */}
 }
 
 // ---- Per-daemon reference registry -----------------------------------------------------------------------------
