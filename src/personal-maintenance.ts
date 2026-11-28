@@ -1,15 +1,17 @@
 import {isArtifactCommand,runArtifactCommand} from './personal-artifact-commands.ts';
-import {runPersonalArtifactRetention} from './personal-artifact-retention.ts';
+import {publishDaemonReferences,runPersonalArtifactRetention} from './personal-artifact-retention.ts';
 import {spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
-import {chmod,lstat,readFile,rename,writeFile} from 'node:fs/promises';
+import {chmod,lstat,readFile,rename,unlink,writeFile} from 'node:fs/promises';
 import {basename,dirname,join,resolve} from 'node:path';
+import {homedir} from 'node:os';
 import {Id,Refusal,type Authority} from './contracts.ts';
-import {simpleJobRetention,simpleDockerRetention,simpleTempRetention} from './personal-simple-retention.ts';
+import {simpleJobRetention,simpleJobDirectoryRetention,simpleDockerRetention} from './personal-simple-retention.ts';
+import {simpleTempRetention} from './temp-retention.ts';
+import {devWorktreeRetention} from './dev-worktree-retention.ts';
 import {loadInstallation,simpleIsolation,type Installation} from './installation.ts';
 import {Ledger} from './ledger.ts';
 import {DockerDaemon} from './sandbox-broker.ts';
-import {nativeExecutionExecutorDigest} from './native-execution-contract.ts';
 import {readonlyDesignExam,type NativeModuleExamRecovery,type ModuleExamWorkRelease,ModuleExamRecoveryPreserved} from './native-execution-supervisor.ts';
 import {recoverPersonalOrphanedExams} from './personal-orphaned-exams.ts';
 import {inventoryJobWork,readRetentionCursor,rotateAfter,writeRetentionCursor} from './native-work-retention.ts';
@@ -17,8 +19,6 @@ import {composePersonalExecutionSupervisors} from './personal-runtime.ts';
 import {readCurrentVerifyDatabase,refreshVerifyDatabases,runVerifyDatabaseRetention} from './verify-db.ts';
 import {checkPersonalDockerDependencies} from './personal-docker-dependencies.ts';
 
-const imageId=/^sha256:[a-f0-9]{64}$/;
-type Pair={workerImage:string;toolsImage:string};
 
 export type MaintenanceDeps={
  dockerDependencies?:typeof checkPersonalDockerDependencies;
@@ -40,6 +40,12 @@ export type MaintenanceDeps={
  artifactRetention?:(config:Installation,apply:boolean)=>Promise<string[]>;
  /** Retention of dead capacity waits (terminal intent or manager lease expired > 1 h). Tests replace it. */
  capacityWaitRetention?:(config:Installation,apply:boolean)=>Promise<string[]>;
+ /** Retention of whole terminal native job directories older than `storage.jobDirRetentionDays`. Tests replace it. */
+ jobDirRetention?:(config:Installation,apply:boolean)=>Promise<string[]>;
+ /** Retention of the product's own development worktrees (`storage.productRepo`). Tests replace it. */
+ devWorktreeRetention?:(config:Installation,apply:boolean)=>Promise<string[]>;
+ /** Republishes the installation's image pins for other installations on the Docker daemon while retention is off. Tests replace it. */
+ publishReferences?:(config:Installation)=>Promise<void>;
  /** The published vulnerability database, or null when none. Used only to show its age. */
  currentDatabase?:(dataDirectory:string)=>Promise<{fetchedAt:string}|null>;
  now?:()=>Date;
@@ -104,10 +110,12 @@ export async function runPersonalCapacityWaitRetention(config:Installation,apply
  }
 }
 
-/** The AGENTS.md order: `work/` of terminal jobs first (the largest and most urgent under disk pressure), then old
- * vulnerability database stamps (several GB each), then dead capacity waits, then worktrees, images and temporaries. The stages are independent: a damaged artifact registry, a database outage or any other failure
- * of one stage never keeps the next one from running. A failure is reported after every stage has had its turn. */
-export async function runRetentionStages(config:Installation,apply:boolean,deps:Pick<MaintenanceDeps,'jobRetention'|'artifactRetention'|'verifyDatabaseRetention'|'capacityWaitRetention'>={}):Promise<string[]>{
+/** The AGENTS.md order: `work/` of terminal jobs first (the largest and most urgent under disk pressure), then whole old terminal job
+ * directories, old vulnerability database stamps (several GB each), dead capacity waits, the product's development worktrees, then
+ * worktrees, images and temporaries. The stages are independent: a damaged artifact registry, a database outage or any other failure
+ * of one stage never keeps the next one from running. A failure is reported after every stage has had its turn. Every run, preview or
+ * apply, leaves its report and the reason of each failure in `<dataDirectory>/retention-last.json` (see {@link readRetentionReport}). */
+export async function runRetentionStages(config:Installation,apply:boolean,deps:Pick<MaintenanceDeps,'jobRetention'|'artifactRetention'|'verifyDatabaseRetention'|'capacityWaitRetention'|'jobDirRetention'|'devWorktreeRetention'|'now'>={}):Promise<string[]>{
  const stages:[string,string,(config:Installation,apply:boolean)=>Promise<string[]>][]=[
   ['jobs','work/ de jobs',deps.jobRetention??(simpleIsolation(config)?async(config,apply)=>{
    const ledger=new Ledger(config.databaseUrl);
@@ -116,27 +124,69 @@ export async function runRetentionStages(config:Installation,apply:boolean,deps:
     return [...recovered,...await simpleJobRetention(config,apply)];
    }finally{await ledger.close();}
   }:runPersonalJobRetention)],
+  ['job-dirs','pastas de jobs terminais',deps.jobDirRetention??((config,apply)=>simpleJobDirectoryRetention(config,apply))],
   ['verify-db','bases de vulnerabilidades',deps.verifyDatabaseRetention??((config,apply)=>runVerifyDatabaseRetention(config.dataDirectory,apply))],
   ['capacity-waits','esperas de capacidade',deps.capacityWaitRetention??runPersonalCapacityWaitRetention],
+  ['dev-worktrees','worktrees do produto',deps.devWorktreeRetention??((config,apply)=>devWorktreeRetention(config,apply))],
   ['artifacts','artefatos (worktrees, imagens e temporários)',deps.artifactRetention??runPersonalArtifactRetention],
  ];
- if(simpleIsolation(config)&&!deps.artifactRetention)stages.push(['docker','Docker',simpleDockerRetention],['tmp','temporários',simpleTempRetention]);
- const lines:string[]=[],failed:string[]=[];
+ if(simpleIsolation(config)&&!deps.artifactRetention)stages.push(['docker','Docker',(config,apply)=>simpleDockerRetention(config,apply)],['tmp','temporários',(config,apply)=>simpleTempRetention(config,apply)]);
+ const startedAt=(deps.now??(()=>new Date()))().toISOString();
+ const lines:string[]=[],failed:string[]=[],failures:RetentionFailure[]=[];
  for(const [name,label,stage] of stages){
   try{lines.push(...await stage(config,apply));}
   catch(error){
    failed.push(name);
-   lines.push(`Retenção de ${label} falhou (${error instanceof Refusal?error.code:'erro'}); as demais etapas seguiram.`);
+   const code=error instanceof Refusal?error.code:'erro';
+   failures.push({stage:name,label,code,detail:error instanceof Refusal?undefined:failureDetail(error)});
+   lines.push(`Retenção de ${label} falhou (${code}); as demais etapas seguiram.`);
   }
  }
+ await writeRetentionReport(config.dataDirectory,{schemaVersion:1,startedAt,finishedAt:(deps.now??(()=>new Date()))().toISOString(),apply,outcome:failed.length?'failed':'ok',failures,lines:lines.slice(-RETENTION_REPORT_LINES)});
  if(failed.length)throw new RetentionIncomplete(lines,failed);
  return lines;
+}
+
+// ---- Last retention report -------------------------------------------------------------------------------------
+// The watch only learns "retention=failed" from the exception. The report of the last run, with the reason of each failed stage,
+// is kept next to the installation data for the watch, the panel and the operator.
+
+export const RETENTION_REPORT_FILE='retention-last.json';
+const RETENTION_REPORT_LINES=400;
+export type RetentionFailure={stage:string;label:string;code:string;detail?:string};
+export type RetentionReport={schemaVersion:1;startedAt:string;finishedAt:string;apply:boolean;outcome:'ok'|'failed';failures:RetentionFailure[];lines:string[]};
+
+/** First line of an unexpected error, with the home directory shown as `~`, at most 300 characters. */
+function failureDetail(error:unknown){
+ const text=(error instanceof Error?`${error.name}: ${error.message}`:String(error)).split('\n')[0]!;
+ return text.split(homedir()).join('~').slice(0,300);
+}
+
+async function writeRetentionReport(dataDirectory:string,report:RetentionReport){
+ const file=join(dataDirectory,RETENTION_REPORT_FILE),temporary=`${file}.${randomUUID()}.tmp`;
+ try{
+  await writeFile(temporary,JSON.stringify(report,null,1)+'\n',{mode:0o600,flag:'wx'});
+  await rename(temporary,file);
+ }catch{await unlink(temporary).catch(()=>undefined/* never created */);/* a full disk must not hide the retention itself */}
+}
+
+/** The report of the last retention run, or undefined when there is none or it is unreadable. */
+export async function readRetentionReport(dataDirectory:string):Promise<RetentionReport|undefined>{
+ try{
+  const report=JSON.parse(await readFile(join(dataDirectory,RETENTION_REPORT_FILE),'utf8')) as RetentionReport;
+  return report?.schemaVersion===1&&Array.isArray(report.failures)&&Array.isArray(report.lines)?report:undefined;
+ }catch{return undefined;}
+}
+
+/** One line for the watch: `retention=ok` or `retention=failed(<stage>:<code>,...)`. */
+export function retentionSummary(report:RetentionReport|undefined){
+ if(!report)return 'retention=unknown';
+ return report.outcome==='ok'?'retention=ok':`retention=failed(${report.failures.map(f=>f.stage+':'+f.code).join(',')})`;
 }
 
 /** A retired execution pair is kept while any job under it is unfinished, or a reviewer, judge or QA job has not had its containers removed. */
 export const OPEN_EXECUTION_JOBS_SQL=`SELECT count(*)::int n FROM ac_native_execution_jobs j WHERE j.executor_digest=$1 AND (j.state NOT IN ('completed','failed')
  OR (j.role IN ('reviewer','judge','qa') AND NOT EXISTS(SELECT 1 FROM ac_native_terminal_retirements t WHERE t.job_id=j.id AND t.state='removed')))`;
-export const OPEN_PLANNING_JOBS_SQL=`SELECT count(*)::int n FROM ac_native_planning_jobs WHERE state NOT IN ('completed','failed')`;
 
 function run(command:string,args:string[],timeout:number){
  return new Promise<number>(resolvePromise=>{
@@ -145,21 +195,6 @@ function run(command:string,args:string[],timeout:number){
   child.on('error',()=>{clearTimeout(timer);resolvePromise(1);});
   child.on('close',code=>{clearTimeout(timer);resolvePromise(code??1);});
  });
-}
-
-/** Which retired images can go. Pure: the caller supplies the job counts. */
-export function retiredPlan(boot:{planning:{imageId:string;retiredImageIds?:string[]};execution:{workerImage:string;toolsImage:string;retiredImages?:Pair[]};qa?:{image?:string}},
- openExecution:Map<string,number>,openPlanning:number){
- const keepPairs:Pair[]=[],dropPairs:Pair[]=[];
- for(const pair of boot.execution.retiredImages??[]){
-  ((openExecution.get(nativeExecutionExecutorDigest(pair.workerImage,pair.toolsImage))??1)>0?keepPairs:dropPairs).push(pair);
- }
- const retiredPlanning=boot.planning.retiredImageIds??[];
- const keepPlanning=openPlanning>0?retiredPlanning:[];
- const dropPlanning=openPlanning>0?[]:retiredPlanning;
- const inUse=new Set([boot.planning.imageId,boot.execution.workerImage,boot.execution.toolsImage,boot.qa?.image,...keepPlanning,...keepPairs.flatMap(p=>[p.workerImage,p.toolsImage])].filter(Boolean));
- const removable=[...new Set([...dropPlanning,...dropPairs.flatMap(p=>[p.workerImage,p.toolsImage])])].filter(id=>imageId.test(id)&&!inUse.has(id));
- return {keepPairs,dropPairs,keepPlanning,dropPlanning,removable};
 }
 
 type WorkSelection={apply:boolean;projectId?:string;after?:string;jobIds?:string[];limit:number};
@@ -589,7 +624,12 @@ async function runMaintenanceStages(config:Installation,file:string,deps:Mainten
   }catch{return {outcome:'failed',lines:['Bases de vulnerabilidade não atualizadas. A base anterior permanece.']};}
  });
  if(options.retention)await stage('retention',async()=>{
-  if(mode==='off')return {outcome:'skipped',lines:['Retenção automática desligada (modo off).']};
+  if(mode==='off'){
+   // The references this installation publishes expire after 7 days without a run; without them another installation on the
+   // daemon would remove the images it pins.
+   await (deps.publishReferences??publishDaemonReferences)(config);
+   return {outcome:'skipped',lines:['Retenção automática desligada (modo off).']};
+  }
   const out=await runRetentionStages(config,mode==='apply',deps);
   return {outcome:'ok',lines:mode==='apply'?out:[...out,'Retenção em modo prévia: nada é apagado. Use retention.automatic=apply para liberar espaço.']};
  });
@@ -627,7 +667,9 @@ export async function runPersonalMaintenance(argv:string[],deps:MaintenanceDeps=
   const scheduled=await loadInstallation(resolve(argv[0]!));
   if(scheduled.activation!=='personal')throw new Refusal('MAINTENANCE_PERSONAL_REQUIRED');
   const mode=scheduled.retention?.automatic??'preview';
-  return mode==='off'?['Retenção automática desligada.']:runRetentionStages(scheduled,mode==='apply',deps);
+  if(mode!=='off')return runRetentionStages(scheduled,mode==='apply',deps);
+  await (deps.publishReferences??publishDaemonReferences)(scheduled);
+  return ['Retenção automática desligada.'];
  }
  if(argv.length===2&&(argv[1]==='--manutencao-agendada'||argv[1]==='--estado-manutencao')){
   const scheduled=await loadInstallation(resolve(argv[0]!));

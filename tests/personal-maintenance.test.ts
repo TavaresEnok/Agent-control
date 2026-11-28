@@ -8,27 +8,10 @@ import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {MaintenanceIncomplete,RetentionIncomplete,runPersonalCapacityWaitRetention,runPersonalMaintenance,runRetentionStages} from '../src/personal-maintenance.ts';
 import {personalTimerUnits} from '../src/personal-timers.ts';
-import {nativeExecutionExecutorDigest} from '../src/native-execution-contract.ts';
-import {retiredPlan} from '../src/personal-maintenance.ts';
 import {newestBackup} from '../src/personal-restore-proof.ts';
 import {Ledger} from '../src/ledger.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
-const image=(c:string)=>'sha256:'+c.repeat(64);
-
-test('a retired image leaves only when no job needs it and nothing current uses it',()=>{
- const boot={planning:{imageId:image('a'),retiredImageIds:[image('b'),image('c')]},
-  execution:{workerImage:image('d'),toolsImage:image('e'),retiredImages:[{workerImage:image('f'),toolsImage:image('e')},{workerImage:image('1'),toolsImage:image('2')}]},qa:{image:image('e')}};
- const open=new Map([[nativeExecutionExecutorDigest(image('f'),image('e')),0],[nativeExecutionExecutorDigest(image('1'),image('2')),3]]);
- const plan=retiredPlan(boot,open,0);
- assert.deepEqual(plan.dropPairs,[{workerImage:image('f'),toolsImage:image('e')}]);
- assert.deepEqual(plan.keepPairs,[{workerImage:image('1'),toolsImage:image('2')}]);
- assert.deepEqual(plan.dropPlanning,[image('b'),image('c')]);
- // The shared tools image is still current, so only the old worker goes.
- assert.deepEqual(plan.removable.sort(),[image('b'),image('c'),image('f')].sort());
- const busy=retiredPlan(boot,new Map(),2);
- assert.deepEqual(busy.dropPairs,[]);assert.deepEqual(busy.dropPlanning,[]);assert.deepEqual(busy.removable,[]);
-});
 
 test('the restore proof picks the newest dated backup',async()=>{
  const root=await mkdtemp(join(tmpdir(),'restore-proof-'));
@@ -48,9 +31,11 @@ test('scheduled retention reads the current switch for each run',async()=>{
   const file=join(root,'installation.json');
   const repo=join(root,'repo');await mkdir(repo);
   const body:any={schemaVersion:1,mode:'administration-only',activation:'personal',databaseUrl:'postgresql://x:x@localhost/db',dataDirectory:root,project:{id:randomUUID(),label:'test',repo,owner:'test'},projects:[],http:{listen:'127.0.0.1',port:8765,publicOrigin:'http://localhost:8765'}};
-  const observed:boolean[]=[];const deps={jobRetention:async(_config:any,apply:boolean)=>{observed.push(apply);return [];},verifyDatabaseRetention:async()=>[],capacityWaitRetention:async()=>[],artifactRetention:async()=>[]};
+  const observed:boolean[]=[];let published=0;
+  const deps={jobRetention:async(_config:any,apply:boolean)=>{observed.push(apply);return [];},verifyDatabaseRetention:async()=>[],capacityWaitRetention:async()=>[],artifactRetention:async()=>[],publishReferences:async()=>{published++;}};
   for(const automatic of [undefined,'off','preview','apply']){if(automatic)body.retention={automatic};await writeFile(file,JSON.stringify(body),{mode:0o600});await runPersonalMaintenance([file,'--retencao-agendada'],deps);}
   assert.deepEqual(observed,[false,false,true]);
+  assert.equal(published,1,'off still republishes the image pins for the other installations');
  }finally{await rm(root,{recursive:true,force:true});}
 });
 
@@ -68,13 +53,14 @@ async function scheduledFixture(automatic?:'off'|'preview'|'apply'){
  return {base,directory,file};
 }
 function recorder(options:{dedicatedBuilder?:boolean;refreshFails?:boolean;retentionFails?:boolean;fetchedAt?:string|null}={}){
- const seen={refresh:0,retention:[] as boolean[],docker:[] as string[][]};
+ const seen={refresh:0,retention:[] as boolean[],docker:[] as string[][],published:0};
  const deps={
   refreshDatabases:async()=>{seen.refresh++;if(options.refreshFails)throw new Error('offline');},
   jobRetention:async(_c:unknown,apply:boolean)=>{seen.retention.push(apply);if(options.retentionFails)throw new Error('db down');return [apply?'jobs apagados':'jobs em prévia'];},
   verifyDatabaseRetention:async(_c:unknown,apply:boolean)=>[apply?'bases podadas':'bases em prévia'],
   capacityWaitRetention:async(_c:unknown,apply:boolean)=>[apply?'esperas apagadas':'esperas em prévia'],
   artifactRetention:async()=>['artefatos ok'],
+  publishReferences:async()=>{seen.published++;},
   docker:async(args:string[])=>{seen.docker.push(args);return args[0]==='buildx'&&args[1]==='inspect'&&!options.dedicatedBuilder?1:0;},
   currentDatabase:async()=>options.fetchedAt===null?null:{fetchedAt:options.fetchedAt??'2026-11-17T04:00:00.000Z'},
   now:()=>new Date('2026-11-20T04:00:00.000Z'),
@@ -121,6 +107,8 @@ test('preview mode is shown as such and off mode skips only retention; the datab
    assert.match(text,new RegExp(`Retenção: modo ${mode}`));
    if(mode==='preview'){assert.deepEqual(r.seen.retention,[false]);assert.match(text,/prévia: nada é apagado/);}
    else assert.deepEqual(r.seen.retention,[]);
+   // Off still renews the references others read: only the retention itself is skipped.
+   assert.equal(r.seen.published,mode==='off'?1:0,mode);
   }finally{await rm(env.base,{recursive:true,force:true});}
  }
 });

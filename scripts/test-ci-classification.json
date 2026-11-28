@@ -3,6 +3,7 @@
  "executar": [
   "agents-rules.test.ts",
   "simple-isolation.test.ts",
+  "retention-maturity.test.ts",
   "account-homes.test.ts",
   "account-state.test.ts",
   "administrative-operations.test.ts",
