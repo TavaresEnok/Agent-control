@@ -18,6 +18,7 @@ import {beginPersonalVerification, defaultRunTools, evaluationSlots, NETWORK_COM
 import {VERIFY_RUNTIME_BIN} from '../src/verify-image.ts';
 import {PACK_MIN_BYTES, compactVerifyDatabaseStamps} from '../src/verify-db.ts';
 import {createHash} from 'node:crypto';
+import {readdirSync} from 'node:fs';
 import {listSecurityReports} from '../src/verify-report.ts';
 import type {VerifyWorker} from '../src/verify-types.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
@@ -205,6 +206,8 @@ test('o exame grava andamento, espera as ferramentas e conta chamadas', {timeout
     const authority = await db.acquire(principal, context, randomUUID(), 'verify-command', 60);
     const gate = new Promise<void>(resolve => { releaseTools = () => resolve(); });
     let toolsStarted = false;
+    let toolsBegan: () => void = () => undefined;
+    const began = new Promise<void>(resolve => { toolsBegan = resolve; });
     let spec: {image: string; repository: string; databases: string; output: string} | undefined;
     const modelCalls = {count: 0};
     let networkCalled = false;
@@ -229,12 +232,15 @@ test('o exame grava andamento, espera as ferramentas e conta chamadas', {timeout
       runTools: async received => {
         spec = received;
         toolsStarted = true;
+        toolsBegan();
         await gate;
       },
       observe: job => { observed = job; },
     });
     assert.equal(begun.status, 'running');
     assert.equal(begun.phase, 'ferramentas');
+    // The tools start inside the job, right after the base is ready (expanded when it is kept compressed).
+    await began;
     assert.equal(toolsStarted, true);
     assert.equal(spec?.image, image);
     assert.equal(spec?.repository, repo);
@@ -610,9 +616,9 @@ test('contêiner fora da lista não cria rede; na lista, o rm acontece se as fer
       runTools: async () => { tools += 1; throw new Error('ferramentas'); },
       observe: job => { observed = job; },
     });
-    assert.equal(tools, 1);
     assert.ok(observed);
     await assert.rejects(observed);
+    assert.equal(tools, 1);
     assert.equal(calls.some(args => args[2] === 'rm' && args[3]?.startsWith('verify-homologation-')), true);
     assert.equal(calls.some(args => args[2] === 'disconnect'), true);
   } finally {
@@ -765,6 +771,57 @@ test('uma base compactada é expandida só para o exame, montada no lugar do car
     assert.match(basename(mounted), /^ac-verify-db-/);
     assert.notEqual(mounted, databases);
     await assert.rejects(stat(mounted));
+  } finally {
+    if (observed) await observed.catch(() => undefined);
+    await rm(dataDirectory, {recursive: true, force: true});
+  }
+});
+
+test('a expansão roda dentro do job: o exame já aparece em andamento, uma base corrompida falha o job com o código e solta o claim; a reivindicação sai junto com as ferramentas', async () => {
+  const dataDirectory = await mkdtemp(join(tmpdir(), 'ac-verify-packed-bad-'));
+  const databases = join(dataDirectory, 'verify-db', '20261128-030406');
+  const projectId = randomUUID();
+  const big = Buffer.alloc(PACK_MIN_BYTES, 'vuln;');
+  let observed: Promise<void> | undefined;
+  let toolsRan = false;
+  const claimsInModel: string[][] = [];
+  try {
+    await mkdir(join(databases, 'grype', '6'), {recursive: true, mode: 0o700});
+    await writeFile(join(databases, 'grype', '6', 'vulnerability.db'), big);
+    await writeFile(join(databases, 'manifest.json'), JSON.stringify({fetchedAt: 'x', files: [{path: 'grype/6/vulnerability.db', sha256: createHash('sha256').update(big).digest('hex'), bytes: big.length}]}) + '\n');
+    await compactVerifyDatabaseStamps(dataDirectory, true, {spawn: async () => 1});
+    const seed = await commitDirectory(dataDirectory);
+    // A healthy pack first: the claim is gone once the tools end, before any model call.
+    await beginPersonalVerification({
+      ...blockedInput(dataDirectory, databases, {projectId, commit: seed}),
+      runTools: async () => { toolsRan = true; },
+      // The first use of the ledger after the tools (the model phases) records the claims held at that point.
+      ledger: new Proxy({}, {get() { if (toolsRan) claimsInModel.push(readdirSync(join(dataDirectory, 'verify-db', 'in-use'))); return undefined; }}) as Ledger,
+      observe: job => { observed = job; },
+    });
+    await observed?.catch(() => undefined /* the later phases of this fixture may fail */);
+    assert.equal(toolsRan, true);
+    assert.ok(claimsInModel.length > 0, 'the job reaches the phases after the tools');
+    for (const claims of claimsInModel) assert.deepEqual(claims.filter(name => name.endsWith('.json')), []);
+    toolsRan = false;
+    // Now the archive breaks and the originals are gone: the request is still answered, the job fails with the code.
+    const archive = join(databases, '.compactado', 'grype', '6', 'vulnerability.db.zst');
+    const bytes = await readFile(archive);
+    bytes[bytes.length >> 1] ^= 0xff;
+    await writeFile(archive, bytes);
+    const started = await beginPersonalVerification({
+      ...blockedInput(dataDirectory, databases, {projectId, commit: seed}),
+      runTools: async () => { toolsRan = true; },
+      observe: job => { observed = job; },
+    });
+    assert.equal(started.status, 'running');
+    await assert.rejects(observed!, /VERIFY_DB_CORRUPT/);
+    assert.equal(toolsRan, false);
+    const progress = (await readVerificationProgress(dataDirectory, projectId)).find(row => row.id === started.id);
+    assert.equal(progress?.status, 'failed');
+    assert.equal(progress?.lastFailureCode, 'VERIFY_DB_CORRUPT');
+    assert.deepEqual((await readdir(join(dataDirectory, 'verify-db', 'in-use'))).filter(name => name.endsWith('.json')), []);
+    await assert.rejects(stat(join(dataDirectory, 'verificacoes', projectId, 'andamento', '.running')));
   } finally {
     if (observed) await observed.catch(() => undefined);
     await rm(dataDirectory, {recursive: true, force: true});

@@ -146,6 +146,9 @@ export type VerificationModuleRunInput = {
   dataDirectory: string;
   commit: string;
   image?: string;
+  /** Run whose recorded image this run measures again (`--medir-correcao`). Stored as `remeasure_of`: a measurement is not an exam,
+   * so it never takes from the module's latest exam the protection of its image in the image retention. */
+  remeasureOf?: string;
   rootDir?: string;
   runId?: string;
   createdAt?: Date;

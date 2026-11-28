@@ -1,6 +1,6 @@
 import {randomUUID} from 'node:crypto';
-import {chmod,readFile,rename,unlink,writeFile} from 'node:fs/promises';
-import {dirname,join} from 'node:path';
+import {chmod,readFile,readdir,readlink,rename,stat,unlink,writeFile} from 'node:fs/promises';
+import {dirname,join,resolve} from 'node:path';
 import {Installation} from './installation.ts';
 import {Ledger} from './ledger.ts';
 import {nativeExecutionExecutorDigest} from './native-execution-contract.ts';
@@ -29,8 +29,49 @@ export type RetiredNativeDeps={
  /** Jobs or calls under one executor digest that may still need its supervisor. Failure keeps every retired entry. */
  executionInUse?:(executorDigest:string)=>Promise<number>;
  planningInUse?:(executorDigest:string)=>Promise<number>;
+ /** Start times of the gateway processes that serve this installation file. Failure keeps every retired entry. */
+ gatewayStarts?:(installationFile:string)=>Promise<Date[]>;
  now?:()=>Date;
 };
+
+/** Start of every `server-main.ts serve <installationFile>` process, read from `proc` (start in clock ticks after boot, USER_HZ=100
+ * on Linux). A gateway loads installation.json once, when it starts. The served file is looked up inside the process's own root
+ * (`/proc/<pid>/root`), so a gateway in a container (`serve /data/installation.json` on the data volume) is matched by device and
+ * inode. Doubt never means "no gateway": a serve process whose filesystem cannot be seen (another user, a container's root) is
+ * counted, and a /proc mounted with `hidepid`, which hides other users' processes, is an error. */
+export async function gatewayStartTimes(installationFile:string,proc='/proc'):Promise<Date[]>{
+ const target=await stat(installationFile);
+ if(process.getuid?.()!==0&&/ - proc \S+ \S*\bhidepid=(?!0\b|off\b)/m.test(await readFile(join(proc,'self','mountinfo'),'utf8')))throw new Error('PROC_HIDEPID');
+ const boot=Number(/^btime (\d+)$/m.exec(await readFile(join(proc,'stat'),'utf8'))?.[1]);
+ if(!Number.isSafeInteger(boot)||boot<=0)throw new Error('PROC_STAT_UNREADABLE');
+ const starts:Date[]=[];
+ for(const name of await readdir(proc)){
+  if(!/^[1-9][0-9]*$/.test(name))continue;
+  let argv:string[],fields:string[];
+  try{
+   argv=(await readFile(join(proc,name,'cmdline'),'utf8')).split('\0');
+   const at=argv.findIndex(arg=>arg.endsWith('/server-main.ts')||arg==='server-main.ts');
+   if(at<0||argv[at+1]!=='serve'||!argv[at+2])continue;
+   const cwd=await readlink(join(proc,name,'cwd')).catch(()=>undefined);
+   const file=argv[at+2]!;
+   if(cwd!==undefined||file.startsWith('/')){
+    try{
+     const served=await stat(join(proc,name,'root',resolve(cwd??'/',file)));
+     if(served.dev!==target.dev||served.ino!==target.ino)continue;
+    }catch(error){
+     // Absent in the process's own view: it serves another file. Any other failure (EACCES) cannot tell: counted.
+     if((error as NodeJS.ErrnoException).code==='ENOENT'||(error as NodeJS.ErrnoException).code==='ENOTDIR')continue;
+    }
+   }
+   const line=await readFile(join(proc,name,'stat'),'utf8');
+   fields=line.slice(line.lastIndexOf(')')+2).split(' ');
+  }catch{continue;/* the process ended while it was read */}
+  const ticks=Number(fields[19]);
+  if(!Number.isSafeInteger(ticks))throw new Error('PROC_STAT_UNREADABLE');
+  starts.push(new Date((boot+ticks/100)*1000));
+ }
+ return starts;
+}
 
 function stampOf(now:Date){
  const pad=(value:number,width=2)=>value.toString().padStart(width,'0');
@@ -50,6 +91,14 @@ export async function retireNativeImages(config:Installation,installationFile:st
   ledger??=new Ledger(config.databaseUrl,config.installationAuthority?.token);
   return Number((await ledger.pool.query<{n:number}>(sql,[digest,RETIRED_QUIET_DAYS])).rows[0]?.n??1);
  };
+ // A gateway started before the last change of installation.json may still run a retired pair (or planning image) as its
+ // active one: nothing is judged until it has been restarted on the current file.
+ let stale:boolean;
+ try{
+  const changed=(await stat(installationFile)).mtimeMs;
+  stale=(await (deps.gatewayStarts??gatewayStartTimes)(installationFile)).some(start=>start.getTime()<changed);
+ }catch{return {lines:['Imagens nativas aposentadas preservadas: não foi possível saber quando o gateway em execução carregou a instalação.']};}
+ if(stale)return {lines:['Imagens nativas aposentadas preservadas: o gateway em execução começou antes da última mudança de installation.json e ainda pode usar uma delas como ativa. Reinicie o gateway; a próxima retenção decide.']};
  const executionInUse=deps.executionInUse??(digest=>count(EXECUTION_IN_USE_SQL,digest));
  const planningInUse=deps.planningInUse??(digest=>count(PLANNING_IN_USE_SQL,digest));
  const keepPairs:Pair[]=[],dropPairs:Pair[]=[],keepPlanning:string[]=[],dropPlanning:string[]=[];
@@ -95,6 +144,6 @@ export async function retireNativeImages(config:Installation,installationFile:st
   }
   await rename(temporary,installationFile);
  }catch(error){await unlink(temporary).catch(()=>undefined/* already renamed or never created */);throw error;}
- lines.push(`Imagens nativas aposentadas retiradas da instalação: ${summary}; backup em ${backup}. As inativas deixam de ser supervisionadas no próximo reinício do gateway; as imagens saem pela retenção de imagens, por id.`);
+ lines.push(`Imagens nativas aposentadas retiradas da instalação: ${summary}; backup em ${backup}. As inativas deixam de ser supervisionadas no próximo reinício do gateway (até lá, nenhuma outra sai da instalação); as imagens saem pela retenção de imagens, por id.`);
  return {lines,config:parsed.data};
 }

@@ -7,6 +7,7 @@ import {basename,dirname,isAbsolute,join,resolve,sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import pg from 'pg';
 import {z} from 'zod';
+import {withInstallationImageLock} from './personal-image-lock.ts';
 import {releaseRegisteredDirectory} from './native-work-retention.ts';
 import {Refusal} from './contracts.ts';
 import {privateDirectory,readPrivateFile,simpleIsolation,type Installation} from './installation.ts';
@@ -67,8 +68,9 @@ export type RetentionDeps={
  processInside?:(path:string)=>Promise<boolean>;
  /** Text of `/proc/self/mountinfo`. Throwing or unparseable text means "cannot prove": the worktree is kept. */
  mountInfo?:()=>Promise<string>;
- /** Images named by verification runs (`ac_verify_runs.collector_image`). Failure keeps every image. */
- verifyRunImages?:(config:Installation)=>Promise<string[]>;
+ /** Images that verification runs keep (`ac_verify_runs.collector_image`, see {@link defaultVerifyRunImages}). `commonCovers`:
+  * the pinned common image is present and covers the modules 2 to 9. Failure keeps every image. */
+ verifyRunImages?:(config:Installation,options:{commonCovers:boolean})=>Promise<string[]>;
  /** What the database says about each round id of a project: `terminal` (done/failed), `running`, or `missing` (no run row).
   * Failure or any other answer keeps everything. The default reads `ac_verify_runs` scoped to the project. */
  roundStatus?:(config:Installation,rounds:{projectId:string;roundId:string}[])=>Promise<Map<string,'terminal'|'running'|'missing'>>;
@@ -127,10 +129,24 @@ export async function defaultProcessInside(path:string){
  return false;
 }
 
-/** `excludeProject`: the runs of a project being removed no longer pin anything; every other project's runs still do. */
-async function defaultVerifyRunImages(config:Installation,excludeProject?:string){
+/** Images that the verification runs keep (`ac_verify_runs.collector_image`):
+ * - every run not finished (`running`, the only non-terminal status; `done` and `failed` are terminal), and every run whose
+ *   collector container still waits for its removal (`collector_start_pending`);
+ * - per project and module, the most recent finished exam, the one a remeasurement (`--medir-correcao`) repeats with its own
+ *   image. A remeasurement row (`remeasure_of`) is not an exam: it reuses an older run's image and never displaces the latest exam. When
+ *   the pinned common image covers the modules 2 to 9 (`commonCovers`), their finished runs keep nothing: a remeasurement of
+ *   a run whose image is gone is refused (VERIFY_RECHECK_IMAGE_GONE) and a new exam runs on the common image. Module 1 is
+ *   never covered.
+ * Older finished runs keep nothing. `excludeProject`: the runs of a project being removed no longer pin anything. */
+export const VERIFY_RUN_IMAGES_SQL=`SELECT collector_image FROM ac_verify_runs
+ WHERE collector_image IS NOT NULL AND ($1::uuid IS NULL OR project_id<>$1::uuid) AND (status NOT IN ('done','failed') OR collector_start_pending)
+ UNION
+ SELECT collector_image FROM (SELECT DISTINCT ON (project_id,module) collector_image FROM ac_verify_runs
+  WHERE collector_image IS NOT NULL AND status IN ('done','failed') AND remeasure_of IS NULL AND ($1::uuid IS NULL OR project_id<>$1::uuid) AND (module='verify' OR NOT $2::boolean)
+  ORDER BY project_id,module,created_at DESC,id DESC) latest`;
+export async function defaultVerifyRunImages(config:Installation,excludeProject?:string,commonCovers=false){
  const pool=new pg.Pool({connectionString:config.databaseUrl,max:1,connectionTimeoutMillis:5000});
- try{return (await pool.query<{collector_image:string}>('SELECT DISTINCT collector_image FROM ac_verify_runs WHERE collector_image IS NOT NULL AND ($1::uuid IS NULL OR project_id<>$1::uuid)',[excludeProject??null])).rows.map(row=>row.collector_image);}
+ try{return (await pool.query<{collector_image:string}>(VERIFY_RUN_IMAGES_SQL,[excludeProject??null,commonCovers])).rows.map(row=>row.collector_image);}
  finally{await pool.end();}
 }
 
@@ -452,12 +468,12 @@ export async function protectedDigests(config:Installation,deps:RetentionDeps,do
  };
  const common=await readPin(simple);
  // In the simple isolation the modules 2 to 9 run first on the common image that `personal:tools-image` proved and pinned; their own
- // pins are only the fallback. While that image is present, the module pins no longer keep their images (exams still running, and
- // the past runs, keep theirs through `verifyRunImages`). Without the common image on the daemon, the fallback is needed: they stay.
+ // pins are only the fallback. While that image is present, the module pins no longer keep their images (exams still running keep
+ // theirs through `verifyRunImages`). Without the common image on the daemon, the fallback is needed: they stay.
  const commonCovers=simpleIsolation(config)&&common!==undefined&&imageIdPattern.test(common)&&await localImage(docker,common);
  const files=[installed,...[...roots].flatMap(root=>[join(root,'deploy','design-image-digest.txt'),...(commonCovers?[]:VERIFICATION_MODULES.map(module=>join(root,'deploy','modules',module,'digest.txt')))])];
  for(const file of files)await readPin(file);
- for(const image of await (deps.verifyRunImages??(current=>defaultVerifyRunImages(current,releasedProject)))(config))for(const digest of digestsIn(image))pinned.add(digest);
+ for(const image of await (deps.verifyRunImages??((current,{commonCovers})=>defaultVerifyRunImages(current,releasedProject,commonCovers)))(config,{commonCovers}))for(const digest of digestsIn(image))pinned.add(digest);
  let foreign:Set<string>;
  try{foreign=await shareDaemonReferences(config,deps,docker,[...pinned],[...retired],options.apply===true,options.publish??true);}catch{throw new SharedReferencesUnreadable();}
  return {pinned,retired,foreign};
@@ -787,15 +803,22 @@ export async function runPersonalArtifactRetention(config:Installation,apply:boo
     }
     const nominal=proof.facts.size===undefined?'tamanho desconhecido':`${(proof.facts.size/1e9).toFixed(3)} GB nominais`;
     if(!apply){done('image');imageBytes+=proof.facts.size??0;lines.push(`${label}: elegível (sem pin, sem contêiner, registrada há mais de ${hours(IMAGE_MIN_AGE_MS)} h; ${nominal}).`);continue;}
-    // Judged again with fresh pins and containers, so a change since the first look wins.
-    const fresh=await protectedDigests(config,deps,docker,{apply});
-    const again=await proveImage(entry,fresh,docker,now());
-    if(!again.ok){kept('image',label,'mudou durante a retenção: '+again.reason);continue;}
-    // By id, no --force: Docker itself refuses an image that has children, several tags or a container.
-    const removed=await docker(['image','rm',entry.imageId]);
-    if(removed.code!==0){kept('image',label,'o Docker recusou a remoção');continue;}
-    const gone=await docker(['image','inspect','--format','{{.Id}}',entry.imageId]);
-    if(gone.code===0){kept('image',label,'a imagem continua no Docker após a remoção');continue;}
+    // Judged again with fresh pins and containers, so a change since the first look wins. Under the exclusive image lock: a run
+    // selects its image and records it in its 'running' row under the shared one, so no run can pick an image between this
+    // judgement and its removal.
+    const outcome=await withInstallationImageLock(config.dataDirectory,false,async()=>{
+     const fresh=await protectedDigests(config,deps,docker,{apply});
+     const again=await proveImage(entry,fresh,docker,now());
+     if(!again.ok)return {kept:'mudou durante a retenção: '+again.reason} as const;
+     // By id, no --force: Docker itself refuses an image that has children, several tags or a container.
+     const removed=await docker(['image','rm',entry.imageId]);
+     if(removed.code!==0)return {kept:'o Docker recusou a remoção'} as const;
+     const gone=await docker(['image','inspect','--format','{{.Id}}',entry.imageId]);
+     if(gone.code===0)return {kept:'a imagem continua no Docker após a remoção'} as const;
+     return {again};
+    });
+    if(outcome.kept!==undefined){kept('image',label,outcome.kept);continue;}
+    const again=outcome.again!;
     await forget('image',entry.id,'removed');
     done('image');imageBytes+=again.facts.size??0;
     lines.push(`${label}: removida (${again.facts.size===undefined?'tamanho desconhecido':`${(again.facts.size/1e9).toFixed(3)} GB nominais`}).`);

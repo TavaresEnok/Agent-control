@@ -93,7 +93,7 @@ test('a corrupt archive or pack is refused and leaves nothing behind; a disk at 
     parsed.files[0].sha256 = '0'.repeat(64);
     await writeFile(pack, JSON.stringify(parsed));
     await assert.rejects(expandVerifyDatabaseStamp(l.stamp, {tmpRoot: l.temp}), /VERIFY_DB_CORRUPT/);
-    assert.match((await compactVerifyDatabaseStamps(l.data, true, {spawn: noSpawn})).join('\n'), /pacote compactado inválido; preservada/);
+    assert.match((await compactVerifyDatabaseStamps(l.data, true, {spawn: noSpawn})).join('\n'), /pacote compactado inválido e sem os originais; os exames do módulo 1 com esta base são recusados \(VERIFY_DB_CORRUPT\)/);
   } finally { await l.close(); }
 });
 
@@ -115,5 +115,87 @@ test('a stamp a live run holds keeps its originals until the run releases it; fo
     assert.equal(spawned.length, 1);
     assert.ok(spawned[0]!.includes('chmod -R a+rwX /databases'));
     assert.equal(await present(join(l.stamp, 'grype/6/vulnerability.db')), false);
+  } finally { await l.close(); }
+});
+
+test('the compaction checks the disk before each archive, counting the expansions in progress, and leaves the stamp whole when it would reach 95%', async () => {
+  const l = await lab();
+  try {
+    // An expansion being written by this (live) process reserved 5 GB and wrote 1 KiB so far; a dead one is ignored.
+    const live = join(l.temp, 'ac-verify-db-live'), dead = join(l.temp, 'ac-verify-db-dead');
+    await mkdir(live); await mkdir(dead);
+    await writeFile(join(live, '.reserva.json'), JSON.stringify({bytes: 5e9, pid: process.pid}));
+    await writeFile(join(live, 'part'), Buffer.alloc(1024));
+    await writeFile(join(dead, '.reserva.json'), JSON.stringify({bytes: 9e9, pid: 2 ** 22 + 12345}));
+    const asked: number[] = [];
+    const lines = await compactVerifyDatabaseStamps(l.data, true, {spawn: noSpawn, tmpRoot: l.temp, freeAfter: async (_path, bytes) => { asked.push(bytes); return 95; }});
+    assert.match(lines.join('\n'), /Base 20261128-010000: compactação adiada; o pacote levaria o disco a 95% ou mais \(PERSONAL_DISK_FULL\)/);
+    assert.equal(asked.length, 1);
+    assert.ok(asked[0]! >= PACK_MIN_BYTES + 5e9 - 1024 && asked[0]! < 6e9, String(asked[0]));
+    assert.equal(await present(join(l.stamp, '.compactado')), false);
+    for (const path of Object.keys(contents)) assert.equal(await present(join(l.stamp, path)), true, path);
+    // Below the block the same pass goes ahead.
+    assert.match((await compactVerifyDatabaseStamps(l.data, true, {spawn: noSpawn, tmpRoot: l.temp, freeAfter: async () => 80})).join('\n'), /compactada \(/);
+  } finally { await l.close(); }
+});
+
+test('two expansions see each other: the second counts what the first reserved and has not written yet', async () => {
+  const l = await lab();
+  try {
+    await compactVerifyDatabaseStamps(l.data, true, {spawn: noSpawn});
+    const total = Object.values(contents).reduce((sum, bytes) => sum + bytes.length, 0);
+    const first = join(l.temp, 'ac-verify-db-first');
+    await mkdir(first);
+    await writeFile(join(first, '.reserva.json'), JSON.stringify({bytes: total, pid: process.pid}));
+    const asked: number[] = [];
+    await assert.rejects(expandVerifyDatabaseStamp(l.stamp, {tmpRoot: l.temp, freeAfter: async (_path, bytes) => { asked.push(bytes); return bytes > total ? 96 : 50; }}), /PERSONAL_DISK_FULL/);
+    assert.deepEqual(asked, [2 * total]);
+    assert.deepEqual(await readdir(l.temp), ['ac-verify-db-first']);
+    await rm(first, {recursive: true});
+    const expanded = await expandVerifyDatabaseStamp(l.stamp, {tmpRoot: l.temp, freeAfter: async (_path, bytes) => bytes > total ? 96 : 50});
+    // The reservation goes once the copy is whole: it is never part of what the tools mount.
+    assert.equal(await present(join(expanded.directory, '.reserva.json')), false);
+    await expanded.release();
+  } finally { await l.close(); }
+});
+
+test('a small file that no longer matches the manifest is refused on expansion, like an archive', async () => {
+  const l = await lab();
+  try {
+    await compactVerifyDatabaseStamps(l.data, true, {spawn: noSpawn});
+    await writeFile(join(l.stamp, 'trivy/db/metadata.json'), '{"Version":3}\n');
+    await assert.rejects(expandVerifyDatabaseStamp(l.stamp, {tmpRoot: l.temp}), /VERIFY_DB_CORRUPT/);
+    assert.deepEqual(await readdir(l.temp), []);
+  } finally { await l.close(); }
+});
+
+test('a broken pack with every original still on the stamp: the exam mounts the checked originals and the retention rebuilds the pack', async () => {
+  const l = await lab();
+  try {
+    const run = randomUUID();
+    await claimVerifyDatabaseStamp(l.data, l.stamp, run);
+    await compactVerifyDatabaseStamps(l.data, true, {spawn: noSpawn});
+    assert.equal(await present(join(l.stamp, 'grype/6/vulnerability.db')), true);
+    // The archive breaks at rest (truncated): its size no longer matches the pack.
+    const archive = join(l.stamp, '.compactado/grype/6/vulnerability.db.zst');
+    await writeFile(archive, (await readFile(archive)).subarray(0, 100));
+    const mounted = await expandVerifyDatabaseStamp(l.stamp, {tmpRoot: l.temp});
+    assert.equal(mounted.directory, l.stamp);
+    assert.deepEqual(await readdir(l.temp), []);
+    // An original that does not match the manifest is never mounted.
+    const original = join(l.stamp, 'trivy/java-db/trivy-java.db');
+    const kept = await readFile(original);
+    const changed = Buffer.from(kept); changed[0] ^= 1;
+    await writeFile(original, changed);
+    await assert.rejects(expandVerifyDatabaseStamp(l.stamp, {tmpRoot: l.temp}), /VERIFY_DB_CORRUPT/);
+    await writeFile(original, kept);
+    await releaseVerifyDatabaseStamp(l.data, l.stamp, run);
+    assert.match((await compactVerifyDatabaseStamps(l.data, false)).join('\n'), /pacote compactado inválido; os originais estão no disco e o pacote seria refeito/);
+    const lines = await compactVerifyDatabaseStamps(l.data, true, {spawn: noSpawn});
+    assert.match(lines.join('\n'), /o pacote é refeito[\s\S]*Base 20261128-010000: compactada \(/);
+    assert.equal(await present(join(l.stamp, 'grype/6/vulnerability.db')), false);
+    const expanded = await expandVerifyDatabaseStamp(l.stamp, {tmpRoot: l.temp});
+    for (const [path, bytes] of Object.entries(contents)) assert.ok((await readFile(join(expanded.directory, path))).equals(bytes), path);
+    await expanded.release();
   } finally { await l.close(); }
 });

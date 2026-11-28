@@ -3,6 +3,7 @@ import {chmod,mkdir,mkdtemp,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
+import {Refusal} from '../src/contracts.ts';
 import {availableSimpleToolsImage,commonToolTag} from '../src/simple-tools-image.ts';
 import {selectModuleCollector} from '../src/verification-modules-run.ts';
 import {moduleOwnerLabelArgs} from '../src/verification-modules-container.ts';
@@ -60,6 +61,27 @@ test('with the common image and the module image both gone from Docker the routi
   const qa=await selectModuleCollector(input(dirs)).catch((error:Error)=>error);
   if(qa instanceof Error)assert.match(qa.message,/SIMPLE_TOOLS_IMAGE_MISSING/);
   else assert.ok(qa.hostCollector&&qa.image?.startsWith('host-qa@sha256:'),JSON.stringify(qa));
+ });
+});
+
+test('a remeasurement keeps the image of its original run; once the retention removed it, the run is refused with a clear code, never a crash or another image',async()=>{
+ const old=id('0');
+ await withDocker({[common]:common,[own]:own,[old]:old},async dirs=>{
+  await writeFile(join(dirs.data,'simple-tools-image.json'),JSON.stringify({image:common}),{mode:0o600});
+  assert.deepEqual(await selectModuleCollector({...input(dirs),image:old}),{image:old,commonTools:false});
+ });
+ await withDocker({[common]:common,[own]:own},async dirs=>{
+  await writeFile(join(dirs.data,'simple-tools-image.json'),JSON.stringify({image:common}),{mode:0o600});
+  await assert.rejects(selectModuleCollector({...input(dirs),image:old}),(error:unknown)=>error instanceof Refusal&&error.code==='VERIFY_RECHECK_IMAGE_GONE'&&error.status===409);
+  // A new exam of the module still runs, on the current common image.
+  assert.deepEqual(await selectModuleCollector(input(dirs)),{image:common,commonTools:true});
+ });
+ // Strict isolation: the same clear refusal, before any run row, never VERIFY_MODULE_IMAGE_MISSING at container creation.
+ await withDocker({[own]:own,[old]:old},async dirs=>{
+  assert.deepEqual(await selectModuleCollector({...input(dirs),isolation:'strict',image:old,remeasureOf:'5f1d2a8e-3c4b-4d6e-8f9a-0b1c2d3e4f50'}),{image:old});
+ });
+ await withDocker({[own]:own},async dirs=>{
+  await assert.rejects(selectModuleCollector({...input(dirs),isolation:'strict',image:old,remeasureOf:'5f1d2a8e-3c4b-4d6e-8f9a-0b1c2d3e4f50'}),(error:unknown)=>error instanceof Refusal&&error.code==='VERIFY_RECHECK_IMAGE_GONE'&&error.status===409);
  });
 });
 
