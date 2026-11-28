@@ -11,6 +11,7 @@ import {IsolatedImplementation} from '../src/isolated-implementation.ts';
 import {ManagerPlans,type ManagerPlan} from '../src/planning.ts';
 import {provisionEngineering} from './fixtures/provision-engineering.ts';
 import {authorizeSyntheticManagedCorrections,correctionExecutionRecipe,executionRecipe} from '../src/managed-plan.ts';
+import {projectRepository} from './fixtures/project-repository.ts';
 
 test('correction graph is bounded and the existing zero-correction recipe stays v1',()=>{
  const task=(maxCorrections:number)=>({id:'one',objectiveRef:'message:one',acceptanceRefs:['acceptance:synthetic-effect-v1'],inputRefs:[],outputRefs:['output:one'],dependsOn:[],writePaths:['src/one.txt'],qualityRevision:1,targetRef:'refs/heads/protected',maxCorrections});
@@ -32,7 +33,7 @@ test('physical QA rejection leads to one corrected artifact; infrastructure fail
   for(const mode of ['quality','infra'] as const){
    const project=randomUUID(),principal='correction-'+randomUUID();await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,'correction fixture']);
    await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project,principal]);
-   await mkdir('.state/projects',{recursive:true});const repo=await mkdtemp(resolve('.state/projects/managed-correction-'));
+   const repo=await projectRepository('managed-correction-');
    const git=(...args:string[])=>execFileSync('git',['-C',repo,...args],{encoding:'utf8'}).trim();
    git('init','-q','-b','main');git('config','user.email','fixture@example.invalid');git('config','user.name','fixture');
    await writeFile(join(repo,'README'),'fixture\n');git('add','.');git('commit','-qm','base');git('branch','protected');const base=git('rev-parse','HEAD');

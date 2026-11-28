@@ -11,6 +11,7 @@ import {IsolatedImplementation} from '../src/isolated-implementation.ts';
 import {ManagerPlans,type ManagerPlan} from '../src/planning.ts';
 import {provisionEngineering} from './fixtures/provision-engineering.ts';
 import {digest} from '../src/contracts.ts';
+import {projectRepository} from './fixtures/project-repository.ts';
 
 for(const stop of ['physical','cas'] as const)test(`managed SIGKILL after ${stop} reconciles without repeating effect`,{timeout:180000,skip:process.env.AC_MANAGED_RECOVERY_TEST!=='1'},async()=>{
  const url=process.env.AC_SANDBOX_DATABASE_URL;
@@ -20,7 +21,7 @@ for(const stop of ['physical','cas'] as const)test(`managed SIGKILL after ${stop
   await db.migrate();const project=randomUUID(),principal='managed-recovery-'+randomUUID();
   await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,'managed recovery fixture']);
   await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project,principal]);
-  await mkdir('.state/projects',{recursive:true});const repo=await mkdtemp(resolve('.state/projects/managed-crash-'));
+  const repo=await projectRepository('managed-crash-');
   const git=(...args:string[])=>execFileSync('git',['-C',repo,...args],{encoding:'utf8'}).trim();
   git('init','-q','-b','main');git('config','user.email','fixture@example.invalid');git('config','user.name','fixture');
   await writeFile(join(repo,'README.md'),'fixture\n');git('add','.');git('commit','-qm','base');git('branch','protected');

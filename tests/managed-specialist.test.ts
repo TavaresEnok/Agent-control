@@ -12,6 +12,7 @@ import {ManagerPlans,type ManagerPlan} from '../src/planning.ts';
 import {authorizeSyntheticSpecialistAdvice} from '../src/managed-plan.ts';
 import {digest} from '../src/contracts.ts';
 import {provisionEngineering} from './fixtures/provision-engineering.ts';
+import {projectRepository} from './fixtures/project-repository.ts';
 
 test('owner policy requires independent specialist on frozen source before managed writers',{timeout:180000,skip:process.env.AC_SPECIALIST_TEST!=='1'},async()=>{
  const url=process.env.AC_SANDBOX_DATABASE_URL;if(!url||!/^\/ac_managed_test_[a-f0-9]+$/.test(new URL(url).pathname))throw Error('FRESH_MANAGED_DATABASE_REQUIRED');
@@ -20,7 +21,7 @@ test('owner policy requires independent specialist on frozen source before manag
   await db.migrate();const project=randomUUID(),principal='specialist-'+randomUUID();
   await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,'specialist fixture']);
   await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project,principal]);
-  await mkdir('.state/projects',{recursive:true});const repo=await mkdtemp(resolve('.state/projects/managed-specialist-'));
+  const repo=await projectRepository('managed-specialist-');
   const git=(...args:string[])=>execFileSync('git',['-C',repo,...args],{encoding:'utf8'}).trim();
   git('init','-q','-b','main');git('config','user.email','fixture@example.invalid');git('config','user.name','fixture');
   await writeFile(join(repo,'README'),'fixture\n');git('add','.');git('commit','-qm','base');git('branch','protected');const base=git('rev-parse','HEAD');

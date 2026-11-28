@@ -26,10 +26,12 @@ import {qaStaticTool} from './fixtures/module-exam-review.ts';
 const base = process.env.AC_TEST_DATABASE_URL;
 
 test('dois exames concorrentes com uma vaga só: o segundo aguarda com pausa crescente sem criar mais de uma espera ativa por reserva, reserva quando a vaga abre e limpa esperas ao terminar ou interromper',
-  {skip: !base, timeout: 120_000}, async () => {
+  {skip: !base, timeout: 120_000}, async t => {
     const database = await isolatedDatabase(base!, 'exam_cap_queue');
     const ledger = new Ledger(database.url);
     const root = await mkdtemp(join(tmpdir(), 'ac-exam-cap-queue-'));
+    // Também quando o fechamento do banco ou do Docker falha antes do rm do finally.
+    t.after(() => rm(root, {recursive: true, force: true}));
     let fixture: Awaited<ReturnType<typeof createModuleExamFixture>> | undefined;
     try {
       await ledger.migrate();
@@ -343,12 +345,13 @@ test('dois exames concorrentes com uma vaga só: o segundo aguarda com pausa cre
   });
 
 test('módulo 1 (personal:verify) com vaga ocupada ou fila à frente aguarda com pausa crescente e segue, e traduz CAPACITY_QUEUED se atingir o teto',
-  {skip: !base, timeout: 120_000}, async () => {
+  {skip: !base, timeout: 120_000}, async t => {
     const database = await isolatedDatabase(base!, 'verify_cap_queue');
     const db = new Ledger(database.url);
     const capacity = new Capacity(db);
     const repo = await mkdtemp(join(tmpdir(), 'ac-verify-queue-repo-'));
     const dataDirectory = await mkdtemp(join(tmpdir(), 'ac-verify-queue-data-'));
+    t.after(() => Promise.all([repo, dataDirectory].map(path => rm(path, {recursive: true, force: true}))));
     try {
       await db.migrate();
       const principal = 'verify-queue-owner';

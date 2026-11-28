@@ -15,6 +15,7 @@ import {Refusal,digest,canonical} from '../src/contracts.ts';
 import {ProjectTemplates} from '../src/project-templates.ts';
 import {authorizeExplicitQaWaiver} from '../src/quality.ts';
 import {SandboxClient} from '../src/sandbox-client.ts';
+import {projectRepository} from './fixtures/project-repository.ts';
 
 // The caller provisions a new disposable DB and broker bound to that DB.
 test('managed fork joins verified unit artifacts and verifies the composition',{timeout:180000,skip:process.env.AC_MANAGED_RUNTIME_TEST!=='1'},async(t)=>{
@@ -24,7 +25,7 @@ test('managed fork joins verified unit artifacts and verifies the composition',{
  const project=randomUUID(),principal='managed-'+randomUUID();
  await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,'managed test']);
  await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project,principal]);
- await mkdir('.state/projects',{recursive:true});const repo=await mkdtemp(resolve('.state/projects/managed-runtime-'));
+ const repo=await projectRepository('managed-runtime-');
  const git=(...args:string[])=>execFileSync('git',['-C',repo,...args],{encoding:'utf8'}).trim();
  git('init','-q','-b','main');git('config','user.email','fixture@example.invalid');git('config','user.name','fixture');
  await writeFile(join(repo,'README.md'),'fixture\n');git('add','.');git('commit','-qm','base');git('branch','protected');
@@ -147,7 +148,7 @@ test('failed fork branch cannot produce a composition or advance the target',{ti
   await db.migrate();const project=randomUUID(),principal='managed-negative-'+randomUUID();
   await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,'managed negative']);
   await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project,principal]);
-  await mkdir('.state/projects',{recursive:true});const repo=await mkdtemp(resolve('.state/projects/managed-negative-'));
+  const repo=await projectRepository('managed-negative-');
   const git=(...args:string[])=>execFileSync('git',['-C',repo,...args],{encoding:'utf8'}).trim();
   git('init','-q','-b','main');git('config','user.email','fixture@example.invalid');git('config','user.name','fixture');
   await writeFile(join(repo,'README'),'fixture\n');git('add','.');git('commit','-qm','base');git('branch','protected');

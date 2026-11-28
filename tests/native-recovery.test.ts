@@ -21,6 +21,8 @@ import {SandboxClient} from '../src/sandbox-client.ts';
 import {Templates} from '../src/templates.ts';
 import {provisionEngineering} from './fixtures/provision-engineering.ts';
 import type {Command} from '../src/contracts.ts';
+import {writeEvidence} from './fixtures/evidence.ts';
+import {projectRepository} from './fixtures/project-repository.ts';
 
 class CountStarts extends SandboxClient{
  starts=0;
@@ -407,7 +409,7 @@ for(const boundary of ['implementation','qa-physical'])test(`native Cezar graph 
  const project=randomUUID(),principal='native-recovery-'+randomUUID();
  await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,'Native graph recovery']);
  await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project,principal]);
- await mkdir('.state/projects',{recursive:true});const repo=await mkdtemp(resolve('.state/projects/ac-native-recovery-'));
+ const repo=await projectRepository('ac-native-recovery-');
  const git=(...args:string[])=>execFileSync('git',['-C',repo,...args],{encoding:'utf8'}).trim();
  git('init','-q','-b','main');git('config','user.email','fixture@example.invalid');git('config','user.name','Synthetic fixture');
  await writeFile(join(repo,'README.md'),'Native recovery fixture\n');git('add','.');git('commit','-qm','base');git('branch','protected');
@@ -458,7 +460,7 @@ for(const boundary of ['implementation','qa-physical'])test(`native Cezar graph 
   assert.equal(client.starts,0,'replayed implementation must not launch another container');
   const stages=(await db.pool.query('SELECT node_id,state FROM ac_stage_operations WHERE intent_id=$1 ORDER BY node_id',[intent.id])).rows;
   assert.deepEqual(stages.map(s=>s.node_id),['integrate','judge','qa','review','review']);assert(stages.every(s=>s.state==='completed'));
-  await writeFile(`docs/validation/evidence/native-graph-recovery-${boundary}.json`,JSON.stringify({result:'passed',synthetic:true,controllerSignal:'SIGKILL',
+  await writeEvidence(`native-graph-recovery-${boundary}.json`,JSON.stringify({result:'passed',synthetic:true,controllerSignal:'SIGKILL',
    pausePreserved:true,physicalLaunches:1,recoveryLaunches:client.starts,stages:stages.map(s=>s.node_id),
    boundary,limitation:'Recovery covers the specified synthetic physical receipt boundary; missing verifier output, active old writers and real providers remain unverified.'},null,2)+'\n');
  }finally{if(child&&child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL');await runtime?.close();await db.close();await rm(configPath,{force:true});}

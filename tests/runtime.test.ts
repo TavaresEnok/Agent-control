@@ -11,6 +11,8 @@ import { Command, Refusal, Projection } from '../src/contracts.ts';
 import { CezarRuntime } from '../src/cezar.ts';
 import { createApi } from '../src/api.ts';
 import { provisionCapacity } from './fixtures/provision-capacity.ts';
+import { writeEvidence } from './fixtures/evidence.ts';
+import {projectRepository} from './fixtures/project-repository.ts';
 
 test('C03/C05/C07/C08: process takeover, actual Cezar DAG, Git, retries and ingress denial', { timeout: 60000 }, async () => {
   const url = process.env.AC_TEST_DATABASE_URL;
@@ -22,8 +24,7 @@ test('C03/C05/C07/C08: process takeover, actual Cezar DAG, Git, retries and ingr
   const context = await db.createContext('owner', project, 'session-' + randomUUID());
   const capacity = await provisionCapacity(db, 'owner', project);
   await capacity.service.assignPolicy('owner', context, capacity.revision);
-  await mkdir('.state/projects', { recursive: true });
-  const repo = await mkdtemp(resolve('.state/projects/ac-impl-test-'));
+  const repo=await projectRepository('ac-impl-test-');
   const git = (...args: string[]) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim();
   git('init', '-q', '-b', 'main'); git('config', 'user.email', 'synthetic@example.invalid'); git('config', 'user.name', 'Synthetic fixture');
   await writeFile(join(repo, 'README.md'), 'Synthetic isolated project\n'); git('add', '.'); git('commit', '-qm', 'base');
@@ -119,7 +120,7 @@ test('C03/C05/C07/C08: process takeover, actual Cezar DAG, Git, retries and ingr
     const foreignAuthority = await db.acquire('owner', foreignContext, randomUUID(), 'manager');
     const foreignIntent = await db.accept('owner', { ...body, contextId: foreignContext, intentId: randomUUID(), deliveryAttemptId: randomUUID() }, foreignAuthority, 'api');
     await assert.rejects(runtime.dispatch(foreignIntent, foreignAuthority), (e: unknown) => e instanceof Refusal && e.code === 'PROJECT_RUNTIME_MISMATCH');
-    await writeFile('docs/validation/evidence/runtime-result.json', JSON.stringify({ result: 'passed', project, context,
+    await writeEvidence('runtime-result.json', JSON.stringify({ result: 'passed', project, context,
       intentId: intent.id, runId: intent.run_id, operationId: intent.operation_id, epoch: authority.epoch,
       oldEpoch: old.epoch, base, receipt: operation.receipt, synthetic: true }, null, 2));
   } finally { child.kill('SIGKILL'); await runtime.close(); await db.close(); }

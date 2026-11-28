@@ -168,8 +168,9 @@ test('extrator de JSON do worker aceita objeto puro ou cerca Markdown em linhas 
   );
 });
 
-test('credencial vencida interrompe o exame sem renovar ou alterar a conta', async () => {
+test('credencial vencida interrompe o exame sem renovar ou alterar a conta', async t => {
   const root = await mkdtemp(join(tmpdir(), 'ac-module-auth-test-'));
+  t.after(() => rm(root, {recursive: true, force: true}));
   const file = join(root, '.credentials.json');
   const now = 1_800_000_000_000;
   const original = JSON.stringify({claudeAiOauth: {
@@ -187,8 +188,9 @@ test('credencial vencida interrompe o exame sem renovar ou alterar a conta', asy
   }
 });
 
-test('o fechamento do relay encerra a autorização de inferência do worker', async () => {
+test('o fechamento do relay encerra a autorização de inferência do worker', async t => {
   const root = await mkdtemp(join(tmpdir(), 'ac-module-relay-test-'));
+  t.after(() => rm(root, {recursive: true, force: true}));
   const socket = join(root, 'egress.sock');
   const close = await startModuleExamEgress(socket, 'codex');
   try {
@@ -233,6 +235,8 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
     const database = await isolatedDatabase(base!, 'moduleexam');
     const ledger = new Ledger(database.url);
     const root = await mkdtemp(join(tmpdir(), 'ac-module-native-test-'));
+    // Também quando o fechamento do banco ou do Docker falha antes do rm do finally.
+    t.after(() => rm(root, {recursive: true, force: true}));
     let exhaust = false;
     let examineFunctionalFinding = false;
     let recheckAnswer: ((task: ReviewTaskFixture) => string) | undefined;

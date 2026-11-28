@@ -12,6 +12,7 @@ import {Refusal} from '../src/contracts.ts';
 import type {DiskGuard} from '../src/disk-admission.ts';
 import {provisionEngineering} from './fixtures/provision-engineering.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
+import {projectRepository} from './fixtures/project-repository.ts';
 
 test('disk pressure parks the same native cursor, respects pause and recovers without repeating implementation',{timeout:30000},async()=>{
  const base=process.env.AC_TEST_DATABASE_URL;if(!base)throw Error('ISOLATED_DATABASE_REQUIRED');
@@ -22,7 +23,7 @@ test('disk pressure parks the same native cursor, respects pause and recovers wi
   await ledger.migrate();const principal='disk-wait-'+randomUUID(),project=randomUUID();
   await ledger.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,'Disk wait synthetic fixture']);
   await ledger.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project,principal]);
-  await mkdir('.state/projects',{recursive:true});repo=await mkdtemp(resolve('.state/projects/ac-disk-wait-'));
+  repo=await projectRepository('ac-disk-wait-');
   const git=(...args:string[])=>execFileSync('git',['-C',repo!,...args],{encoding:'utf8'}).trim();
   git('init','-q','-b','main');git('config','user.email','fixture@example.invalid');git('config','user.name','Synthetic fixture');
   await writeFile(join(repo,'README.md'),'Disk wait fixture only\n');git('add','.');git('commit','-qm','base');git('branch','protected');

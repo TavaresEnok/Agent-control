@@ -86,6 +86,8 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
  const fixture=await isolatedDatabase(base,'modexamrec');
  const db=new Ledger(fixture.url),area=await mkdtemp(join(tmpdir(),'ac-modexam-rec-'));
  const closers:(()=>Promise<void>)[]=[];
+ // A retenção publica as referências do daemon; sem isto o teste grava em ~/.agent-control-docker-refs.
+ const previousRefs=process.env.AC_DOCKER_REFS_DIR;process.env.AC_DOCKER_REFS_DIR=join(area,'docker-refs');
  try{
   await db.migrate();
   await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
@@ -1056,6 +1058,7 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
   for(const close of closers)await close().catch(()=>undefined);
   await db.close().catch(()=>undefined);
   await fixture.close().catch(()=>undefined);
+  if(previousRefs===undefined)delete process.env.AC_DOCKER_REFS_DIR;else process.env.AC_DOCKER_REFS_DIR=previousRefs;
   await rm(area,{recursive:true,force:true});
  }
 });

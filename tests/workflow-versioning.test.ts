@@ -11,6 +11,7 @@ import {
   AGENT_CONTROL_RUNTIME_BUILD,AGENT_CONTROL_RUNTIME_VERSION,currentWorkflow,resolveFrozenWorkflow,retainedWorkflows,
   workflowForAdmission,workflowVersionRegistry,WORKFLOW_VERSION_RETIRED,
 } from '../src/workflow-versions.ts';
+import {projectRepository} from './fixtures/project-repository.ts';
 
 const names=['baseline-synthetic-v1','engineering-synthetic-v1','engineering-native-v1','semantic-proposal-v1','security-verify-readonly-v1'] as const;
 
@@ -73,8 +74,7 @@ test('pinned recovery keeps the frozen snapshot and a retired version stays park
     const context=await db.createContext(principal,project,randomUUID());
     await capacity.service.assignPolicy(principal,context,capacity.revision);
     const authority=await db.acquire(principal,context,randomUUID(),'synthetic-manager',60);
-    await mkdir('.state/projects',{recursive:true});
-    repo=await mkdtemp(resolve('.state/projects/ac-workflow-version-'));
+    repo=await projectRepository('ac-workflow-version-');
     const git=(...args:string[])=>execFileSync('git',['-C',repo,...args],{encoding:'utf8'}).trim();
     git('init','-q','-b','main');git('config','user.email','fixture@example.invalid');git('config','user.name','Synthetic fixture');
     await writeFile(join(repo,'README.md'),'Workflow version fixture\n');git('add','.');git('commit','-qm','base');
