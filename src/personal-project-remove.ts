@@ -87,14 +87,14 @@ async function defaultProcessPaths(){
 
 /** Bytes on disk of a tree, without following links or crossing into other file systems. Hard links count once. */
 async function diskUsage(path:string):Promise<number>{
- const top=await lstat(path).catch(()=>undefined);
+ const top=await lstat(path).catch(()=>undefined/* absent path uses no disk */);
  if(!top)return 0;
  const seen=new Set<string>();
  let bytes=0;
  const stack=[path];
  while(stack.length){
   const current=stack.pop()!;
-  const info=await lstat(current).catch(()=>undefined);
+  const info=await lstat(current).catch(()=>undefined/* gone while measuring: counts nothing */);
   if(!info||info.dev!==top.dev)continue;
   const key=info.dev+':'+info.ino;
   if(seen.has(key))continue;
@@ -188,7 +188,7 @@ export async function removePersonalProject(installationPath:string,token:string
   const jobDirs:{id:string;path:string;terminal:boolean;bytes:number}[]=[];
   for(const job of jobs){
    const path=join(hostRoot,job.id);
-   const info=await lstat(path).catch(()=>undefined);
+   const info=await lstat(path).catch(()=>undefined/* no job directory on the host: nothing to remove */);
    if(info)jobDirs.push({id:job.id,path,terminal:job.state==='completed'||job.state==='failed',bytes:0});
   }
   const extraDirs=[join(config.dataDirectory,'qa-cache',projectId),verifyDir];
@@ -279,7 +279,7 @@ export async function removePersonalProject(installationPath:string,token:string
    const removable=async(path:string,parent:string):Promise<string|undefined>=>{
     if(!open||mounts===undefined||!binds)return 'não foi possível provar que nada usa o diretório';
     if(protectedRoots.some(root=>overlaps(root,path)))return 'sobrepõe um repositório';
-    const info=await lstat(path).catch(()=>undefined);
+    const info=await lstat(path).catch(()=>undefined/* absent, reported below as already gone */);
     if(!info)return 'já não existe';
     if(info.isSymbolicLink()||!info.isDirectory()||info.uid!==process.getuid?.())return 'não é um diretório próprio';
     if(dirname(path)!==parent||await realpath(path)!==path)return 'caminho não canônico';
@@ -289,7 +289,7 @@ export async function removePersonalProject(installationPath:string,token:string
     return undefined;
    };
    let removedJobs=0,removedJobBytes=0;
-   const hostReal=await realpath(hostRoot).catch(()=>undefined);
+   const hostReal=await realpath(hostRoot).catch(()=>undefined/* unresolved root: no job is considered inside it */);
    for(const job of jobDirs){
     if(!job.terminal){kept++;say(`job ${job.id}: preservado (não terminal).`);continue;}
     if(!hostReal||hostReal!==hostRoot){kept++;say(`job ${job.id}: preservado (raiz dos jobs não canônica).`);continue;}
@@ -298,7 +298,7 @@ export async function removePersonalProject(installationPath:string,token:string
     try{
      // A programmer checkout is a linked worktree of the project repository: git forgets it first, so the repository keeps no stale entry.
      for(const leaf of ['work','review-artifact']){
-      const linked=await lstat(join(job.path,leaf,'.git')).catch(()=>undefined);
+      const linked=await lstat(join(job.path,leaf,'.git')).catch(()=>undefined/* no linked worktree here */);
       if(linked?.isFile()&&repoOnDisk)await git(repoOnDisk,['worktree','remove','--force','--',join(job.path,leaf)]);
      }
      await rm(job.path,{recursive:true});

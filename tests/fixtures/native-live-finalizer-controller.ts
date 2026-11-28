@@ -1,9 +1,11 @@
+import {tmpdir} from 'node:os';
 import {readFile} from 'node:fs/promises';
 import {Ledger} from '../../src/ledger.ts';
 import {NativeArtifactFinalizer} from '../../src/native-artifact-finalizer.ts';
 
 const file=process.argv[2];
-if(!file||!/^\/tmp\/ac-finalizer-live-[^/]+\/controller\.json$/.test(file))throw Error('ISOLATED_FINALIZER_FIXTURE_REQUIRED');
+// The suite gives each test file a private TMPDIR: the fixture must sit in the tmpdir of this run, not in a fixed /tmp.
+if(!file||!file.startsWith(tmpdir()+'/')||!/^ac-finalizer-live-[^/]+\/controller\.json$/.test(file.slice(tmpdir().length+1)))throw Error('ISOLATED_FINALIZER_FIXTURE_REQUIRED');
 const f=JSON.parse(await readFile(file,'utf8')),url=new URL(f.url);
 if(!['db','127.0.0.1','localhost'].includes(url.hostname)||!/^\/ac_implementation_test_livefinalizer_[a-f0-9]{20}$/.test(url.pathname))throw Error('ISOLATED_DATABASE_REQUIRED');
 const db=new Ledger(f.url);

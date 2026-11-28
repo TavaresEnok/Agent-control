@@ -168,7 +168,7 @@ export async function simpleJobDirectoryRetention(config:JobInstallation&{storag
   for(const child of await readdir(path).catch(()=>['work']/* unreadable: treated as busy */)){
    if(child==='work'||child==='review-artifact'){busy=true;break;}
    if(!KEPT_IN_JOB_DIRECTORY.has(child))trimmable=true;
-   newest=Math.max(newest,(await lstat(join(path,child)).catch(()=>undefined))?.mtimeMs??Infinity);
+   newest=Math.max(newest,(await lstat(join(path,child)).catch(()=>undefined/* gone meanwhile: the Infinity fallback keeps the directory out of the sweep */))?.mtimeMs??Infinity);
   }
   if(busy||!trimmable||now()-newest<retentionMs)continue;
   if([...names2].some(name=>name.endsWith('-'+id))||mounts.some(source=>overlap(source,path))||held.some(target=>overlap(target,path))||mountedInside(mountText,path))continue;

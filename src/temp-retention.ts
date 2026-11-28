@@ -108,7 +108,7 @@ export async function vouchTempCheckout(git:Git,dir:string,repos:readonly string
  for(const repo of repos){
   const own=await git(repo,['rev-parse','--path-format=absolute','--git-common-dir']);
   if(own.code!==0||own.stdout.trim()!==common.stdout.trim())continue;
-  const record=(await listWorktrees(git,repo).catch(()=>[])).find(item=>item.path===dir);
+  const record=(await listWorktrees(git,repo).catch(()=>[]/* worktree list unavailable: the directory is not a known worktree and stays */)).find(item=>item.path===dir);
   if(!record||record.main||record.locked||!record.head)return undefined;
   // Removing the worktree keeps its branch, so its own branch counts; a detached commit on no branch keeps it.
   return await outsideBranches(git,repo,[record.head])===''?{git:'worktree',path:dir,repo}:undefined;

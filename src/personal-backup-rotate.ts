@@ -384,7 +384,7 @@ async function rotateLocked(input:{installationFile:string;config:Awaited<Return
   if(error instanceof Refusal)throw error;
   if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;
  }
- const previous=config.storage.backups.dedupe?await latestBackupFolder(parent,config.project.id,config.dataDirectory).catch(()=>undefined):undefined;
+ const previous=config.storage.backups.dedupe?await latestBackupFolder(parent,config.project.id,config.dataDirectory).catch(()=>undefined/* no previous backup to link from: this one is a full copy */):undefined;
  const lines=await runPersonalBackup([installationFile,dated],{...options,linkFrom:previous});
  const copied=lines[0]?.startsWith('Backup em ')?lines[0].slice('Backup em '.length):'';
  const notify=options.notify??defaultNotify;
