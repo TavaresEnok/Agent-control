@@ -340,6 +340,28 @@ test('falha do provedor no lote entra na cobertura do revisor e os pontos seguem
     async run(call) {
       if (call.task.startsWith('Pedido de confirmação em lote.')) {
         tasks.push(call.task);
+        // O provedor respondeu, mas com recusa de login: falha do provedor, não de infraestrutura.
+        return 'Failed to authenticate: OAuth session expired';
+      }
+      return inner.run(call);
+    },
+  };
+  const result = await examineDesignScreens({...base, intentId: randomUUID(), screens: oneScreen, batch: BATCH, worker, reserve: k.reserve, release: k.release});
+  assert.equal(result.modelCoverage.reviewer.failure, 'PROVIDER_AUTH_FAILED');
+  assert.ok(result.notes.some(note => note.includes('confirmação em lote') && note.includes('PROVIDER_AUTH_FAILED') && note.includes('um a um')));
+  assert.equal(result.confirmations.length, 2);
+  assert.equal(result.stopped, null);
+  assert.equal(tasks.filter(task => task.startsWith('Pedido de confirmação.')).length, 2);
+});
+
+test('falha de infraestrutura no lote entra na cobertura do revisor e os pontos não são repetidos um a um', async () => {
+  const k = seats();
+  const tasks: string[] = [];
+  const inner = confirmWorker(tasks, 2);
+  const worker: DesignWorker = {
+    async run(call) {
+      if (call.task.startsWith('Pedido de confirmação em lote.')) {
+        tasks.push(call.task);
         throw new Error('rede caiu');
       }
       return inner.run(call);
@@ -347,9 +369,9 @@ test('falha do provedor no lote entra na cobertura do revisor e os pontos seguem
   };
   const result = await examineDesignScreens({...base, intentId: randomUUID(), screens: oneScreen, batch: BATCH, worker, reserve: k.reserve, release: k.release});
   assert.equal(result.modelCoverage.reviewer.failure, 'EXECUTION_NATIVE_FAILED');
-  assert.ok(result.notes.some(note => note.includes('confirmação em lote') && note.includes('EXECUTION_NATIVE_FAILED') && note.includes('um a um')));
-  assert.equal(result.confirmations.length, 2);
-  assert.equal(tasks.filter(task => task.startsWith('Pedido de confirmação.')).length, 2);
+  assert.ok(result.notes.some(note => note.includes('confirmação em lote') && note.includes('EXECUTION_NATIVE_FAILED') && note.includes('sem confirmação')));
+  // Chamadas individuais bateriam na mesma dependência caída: o disjuntor poupa-as.
+  assert.equal(tasks.filter(task => task.startsWith('Pedido de confirmação.')).length, 0);
 });
 
 test('login vencido no lote para o exame, sem chamadas individuais', async () => {

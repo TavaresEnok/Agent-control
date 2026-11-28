@@ -12,7 +12,7 @@ import {promisify} from 'node:util';
 import {Capacity, CapacityPolicy} from '../src/capacity.ts';
 import {canonical, Refusal} from '../src/contracts.ts';
 import {Ledger} from '../src/ledger.ts';
-import {authorizedStaticCliPolicy, beginPersonalVerification, resolvePersonalVerification} from '../src/verify-command.ts';
+import {authorizedStaticCliPolicy, beginPersonalVerification, resolvePersonalVerification as resolveVerification} from '../src/verify-command.ts';
 import {createCapacityNativeWorker} from '../src/verify-native-launch.ts';
 import {
   runResolvedPersonalSecurityVerification,
@@ -21,6 +21,10 @@ import {
 } from '../src/verify-runtime.ts';
 import type {VerifyWorker} from '../src/verify-types.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
+
+// The fixtures pin a made-up image ID: the exam's dependency check gets a Docker that has it, instead of the host's.
+const fixtureDocker = async () => '';
+const resolvePersonalVerification: typeof resolveVerification = (argv, deps) => resolveVerification(argv, {docker: fixtureDocker, ...deps});
 
 const exec = promisify(execFile);
 const databaseUrl = process.env.AC_TEST_DATABASE_URL;

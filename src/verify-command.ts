@@ -1020,7 +1020,7 @@ function projectOf(config: Installation, projectId: string) {
 
 export async function resolvePersonalVerification(
   argv: readonly string[],
-  deps?: {composeRuntime?: typeof import('./personal-runtime.ts').composePersonalRuntime},
+  deps?: {composeRuntime?: typeof import('./personal-runtime.ts').composePersonalRuntime; docker?: Parameters<typeof installationExamPreflight>[3]},
 ): Promise<{input: PersonalVerificationInput; close: () => Promise<void>}> {
   const parsed = parseVerifyArgs(argv);
   if (parsed.url !== undefined) dynamicScanPlan(parsed.url);
@@ -1117,7 +1117,7 @@ export async function resolvePersonalVerification(
         // economy.maxModelCalls: the security exam already stops with a partial report at its call budget.
         ...(project.economy?.maxModelCalls !== undefined ? {modelCallBudget: project.economy.maxModelCalls} : {}),
         // The host collector of the simple mode is not a Docker image: only the pinned image is checked.
-        preflight: installationExamPreflight(config, ledger, simple ? [] : [image]),
+        preflight: installationExamPreflight(config, ledger, simple ? [] : [image], deps?.docker),
         ...(importExamJobs ? {importExamJobs} : {}),
       },
       close: async () => {
