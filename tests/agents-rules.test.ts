@@ -30,7 +30,8 @@ test('todo comando npm e todo caminho do repositório citados em AGENTS.md exist
   for (const [, path] of text.matchAll(/`((?:docs|src|scripts|tests|deploy)\/[^`\s*<]+)`/g)) {
     assert.ok(existsSync(join(root, path.replace(/\/$/, ''))), `caminho inexistente: ${path}`);
   }
-  for (const [, name] of text.matchAll(/`docs\/[^`]*`|`([a-z]+\/)`/g)) {
-    if (name) assert.ok(existsSync(join(root, 'docs', name)), `pasta de docs inexistente: ${name}`);
+  const docsLine = text.split('\n').find(line => line.includes('Subpastas de `docs/`')) ?? '';
+  for (const [, name] of docsLine.matchAll(/`([a-z]+\/)`/g)) {
+    if (name !== 'docs/') assert.ok(existsSync(join(root, 'docs', name!)), `pasta de docs inexistente: ${name}`);
   }
 });
