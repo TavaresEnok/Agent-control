@@ -7,7 +7,7 @@ import {serve} from '@hono/node-server';
 import {z} from 'zod';
 import {join} from 'node:path';
 import {Installation,readPrivateFile,loadInstallation,sessionKey,initializeInstallation,prepareInstallationOperator,privateDirectory,syncInstallationActivation} from './installation.ts';
-import {assertInstallationMigrations,inspectInstallationReadiness,migrationsPendingText} from './installation-readiness.ts';
+import {assertInstallationMigrations,inspectInstallationReadiness,migrationExitCode,migrationsPendingText} from './installation-readiness.ts';
 import {Refusal} from './contracts.ts';
 import {Ledger} from './ledger.ts';
 import {Projects,ProjectRuntimes} from './projects.ts';
@@ -341,4 +341,6 @@ main().catch(error=>{
  // Only a refusal code or an upper-case error identifier is shown; free text may carry paths or secrets.
  const raw=String((error as {code?:unknown})?.code??(error as Error)?.message??''),code=/^[A-Z][A-Z0-9_]{2,80}$/.test(raw)?raw:(error as Error)?.name==='ZodError'?'INVALID_CONFIGURATION_SHAPE':'UNCLASSIFIED';
  const detail=error instanceof Refusal&&code==='MIGRATIONS_PENDING'?migrationsPendingText:'inspect private configuration, initialization and service availability; secrets are not logged.';
- console.error('INSTALLATION_COMMAND_FAILED ('+code+'): '+detail);process.exitCode=1;});
+ console.error('INSTALLATION_COMMAND_FAILED ('+code+'): '+detail);
+ // EX_CONFIG: a restart cannot fix the schema, so the unit stops on it (RestartPreventExitStatus=78) and the watch says to update.
+ process.exitCode=migrationExitCode(code);});

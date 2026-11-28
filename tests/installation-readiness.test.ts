@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {execFileSync,spawnSync} from 'node:child_process';
 import {Installation,initializeInstallation,sessionKey,syncInstallationActivation} from '../src/installation.ts';
-import {inspectInstallationReadiness} from '../src/installation-readiness.ts';
+import {inspectInstallationReadiness,migrationExitCode} from '../src/installation-readiness.ts';
 import {digest} from '../src/contracts.ts';
 import type {Ledger} from '../src/ledger.ts';
 import type pg from 'pg';
@@ -14,6 +14,11 @@ import {createServer} from 'node:net';
 import {Ledger as RealLedger} from '../src/ledger.ts';
 import {Projects} from '../src/projects.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
+
+test('schema refusals exit with 78 (EX_CONFIG) and every other failure with 1',()=>{
+ for(const code of ['MIGRATIONS_PENDING','MIGRATION_CHANGED','MIGRATIONS_AHEAD','MIGRATIONS_UNAVAILABLE'])assert.equal(migrationExitCode(code),78);
+ for(const code of ['INSTALLATION_NOT_INITIALIZED','UNCLASSIFIED','DUPLICATE_MIGRATION','NATIVE_MIGRATIONS_X'])assert.equal(migrationExitCode(code),1);
+});
 
 test('readiness reports local facts without writing or exposing configuration',async()=>{
  const original=process.cwd(),root=await mkdtemp(join(tmpdir(),'ac-readiness-'));
@@ -143,11 +148,12 @@ test('serve e personal:design recusam o esquema anterior à 121; initialize migr
   await assert.rejects(readHeartbeat,{code:'42703'});
   const env={...process.env};delete env.NO_COLOR;
   const serve=spawnSync(process.execPath,['--import','tsx','src/server-main.ts','serve',file],{encoding:'utf8',timeout:20000,env});
-  const assertPending=(result:typeof serve)=>{
-   assert.ifError(result.error);assert.equal(result.status,1);assert.match(result.stderr,/MIGRATIONS_PENDING/);
+  // The gateway exits with 78 (EX_CONFIG) so systemd does not restart it in a loop; other commands keep 1.
+  const assertPending=(result:typeof serve,status=1)=>{
+   assert.ifError(result.error);assert.equal(result.status,status);assert.match(result.stderr,/MIGRATIONS_PENDING/);
    assert.match(result.stderr,/npm run personal:backup -- <instalação\.json> \/caminho\/vazio e depois execute node --import tsx src\/server-main\.ts initialize <instalação\.json>/);
   };
-  assertPending(serve);
+  assertPending(serve,78);
   const design=spawnSync(process.execPath,['scripts/personal-design.mjs',file,config.project.id,'--url','http://migration-fixture.local'],{encoding:'utf8',timeout:20000,env});
   assertPending(design);
   assert.deepEqual(await applied(),before);

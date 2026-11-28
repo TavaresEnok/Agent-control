@@ -21,7 +21,7 @@ if(remove){
 }
 if(config.activation!=='personal')throw Error('PERSONAL_ACTIVATION_REQUIRED');
 const path=[dirname(process.execPath),'/usr/local/bin','/usr/bin','/bin'].join(':');
-const unit=(description,argv,extra='',environment=[])=>`[Unit]
+const unit=(description,argv,extra='',environment=[],service='')=>`[Unit]
 Description=${description} (${name})
 ${extra}
 [Service]
@@ -30,7 +30,7 @@ Environment=${systemdEnvironment('PATH',path)}
 ${environment.map(([key,value])=>`Environment=${systemdEnvironment(key,value)}\n`).join('')}ExecStart=${systemdExecStart(argv)}
 Restart=always
 RestartSec=5
-UMask=0077
+${service}UMask=0077
 
 [Install]
 WantedBy=default.target
@@ -44,6 +44,8 @@ await writeFile(join(units,dockerFilter),unit('Agent Control: filtro do Docker',
 // --egress turns on the allowlist proxy for every personal worker, planner and manager call (AC_PERSONAL_EGRESS=1).
 const egress=args.includes('--egress')||['observe','enforce'].includes(config.egress?.mode);
 const gatewayEnvironment=[['AC_DOCKER_SOCKET',filterSocket],...(egress?[['AC_PERSONAL_EGRESS','1']]:[])];
-await writeFile(join(units,gateway),unit('Agent Control: gateway',[process.execPath,'--import','tsx',join(root,'src/server-main.ts'),'serve',file],`After=${dockerFilter}\nRequires=${dockerFilter}`,gatewayEnvironment));
+// Exit 78 (EX_CONFIG, pending or changed migrations) is not restarted: only personal:update fixes it, and the watch says so.
+// Any other crash loop stops after 5 starts in 5 minutes instead of running forever.
+await writeFile(join(units,gateway),unit('Agent Control: gateway',[process.execPath,'--import','tsx',join(root,'src/server-main.ts'),'serve',file],`After=${dockerFilter}\nRequires=${dockerFilter}\nStartLimitIntervalSec=300\nStartLimitBurst=5`,gatewayEnvironment,'RestartPreventExitStatus=78\n'));
 systemctl('daemon-reload');systemctl('enable','--now',dockerFilter);systemctl('enable','--now',gateway);
 console.log(JSON.stringify({installed:[dockerFilter,gateway],egress,logs:`journalctl --user -u ${gateway} -f`}));

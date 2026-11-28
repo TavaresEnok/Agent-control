@@ -64,7 +64,7 @@ async function migrationDigests(){
 }
 type AppliedMigration={version:number;digest:string};
 const appliedMigrationsQuery='SELECT version,digest FROM ac_schema_migrations ORDER BY version';
-async function migrationRefusal(loadApplied:()=>Promise<{rows:AppliedMigration[]}>){
+export async function migrationRefusal(loadApplied:()=>Promise<{rows:AppliedMigration[]}>){
  const expected=await timed(migrationDigests());
  let applied:AppliedMigration[];
  try{applied=(await loadApplied()).rows;}
@@ -83,6 +83,9 @@ export async function assertInstallationMigrations(ledger:Ledger){
  const code=await migrationRefusal(()=>ledger.pool.query<AppliedMigration>(appliedMigrationsQuery));
  if(code)throw new Refusal(code,503);
 }
+/** Exit status for a refusal code: 78 (EX_CONFIG) for a schema that does not match the code, 1 otherwise. */
+export const MIGRATION_EXIT_STATUS=78;
+export function migrationExitCode(code:string){return /^MIGRATIONS?_/.test(code)?MIGRATION_EXIT_STATUS:1;}
 export const migrationsPendingText='Há migrações pendentes. Faça um backup com npm run personal:backup -- <instalação.json> /caminho/vazio e depois execute node --import tsx src/server-main.ts initialize <instalação.json>.';
 
 function filesystemStatus(fn:()=>Promise<boolean>):Promise<Status>{return timed(fn()).then(ok=>ok?'ok':'blocked',error=>{

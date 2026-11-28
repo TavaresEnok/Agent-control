@@ -77,6 +77,14 @@ test('the real personal-services script writes units whose ExecStart keeps a rep
   assert.ok(gateway.includes('Environment="AC_DOCKER_SOCKET='+join(data,'docker-filter.sock')+'"'));
   assert.match(gateway,/^Requires=agent-control-docker-filter-espaco\.service$/m);
   assert.doesNotMatch(gateway,/AC_PERSONAL_EGRESS/);
+  // A schema refusal (exit 78) is not restarted, and any other crash loop stops after 5 starts in 300 s.
+  const sections=(text:string)=>{const [unitPart,servicePart]=text.split('[Service]');return {unitPart:unitPart!,servicePart:servicePart!.split('[Install]')[0]!};};
+  const parts=sections(gateway);
+  assert.match(parts.unitPart,/^StartLimitIntervalSec=300$/m);
+  assert.match(parts.unitPart,/^StartLimitBurst=5$/m);
+  assert.match(parts.servicePart,/^RestartPreventExitStatus=78$/m);
+  assert.match(parts.servicePart,/^Restart=always$/m);
+  assert.doesNotMatch(filter,/RestartPreventExitStatus|StartLimit/);
   execFileSync(process.execPath,[join(root,'scripts/personal-services.mjs'),installation,'espaco','--egress'],{env:{...process.env,HOME:home,PATH:`${bin}:${process.env.PATH}`},stdio:'pipe'});
   assert.match(await readFile(join(units,'agent-control-gateway-espaco.service'),'utf8'),/^Environment="AC_PERSONAL_EGRESS=1"$/m);
  }finally{await rm(base,{recursive:true,force:true});}
