@@ -28,6 +28,8 @@ const USAGE='Uso: npm run personal:project -- --remover <instalação.json> <id-
 export type ProjectRemoveDeps=RetentionDeps&{
  /** Every path some live process has as cwd, root or open file. Throwing means "cannot prove": nothing on disk is removed. */
  processPaths?:()=>Promise<string[]>;
+ /** Test hook: runs after the first activity check and before the archiving transaction judges the activity again. */
+ beforeArchive?:()=>Promise<void>;
 };
 export type ProjectRemoveResult={projectId:string;label:string;applied:boolean;lines:string[];backupPath?:string;reportPath?:string;restart:string};
 
@@ -222,22 +224,23 @@ export async function removePersonalProject(installationPath:string,token:string
   if(busy)throw new ActiveProject(busy+'.');
   if(db&&!archived)throw new Refusal('PROJECT_ARCHIVE_MIGRATION_REQUIRED',409);
   const stamp=stampOf(options.now??new Date());
-  let backupPath:string|undefined;
+  // The new installation.json is prepared and validated first, but written only after the ledger committed: a refusal of the
+  // transaction (late activity) leaves the file exactly as it was.
+  let original:Buffer|undefined,next:string|undefined,remoteDropped=false;
   if(target.inFile){
-   const original=await readFile(file);
-   const raw=JSON.parse(original.toString('utf8')) as {projects?:{id?:unknown}[];managerTransport?:{contexts?:{projectId?:unknown}[]}};
+   original=await readFile(file);
+   const raw=JSON.parse(original.toString('utf8')) as {projects?:{id?:unknown}[];managerTransport?:{contexts?:{projectId?:unknown}[]};remoteDevelopment?:{projects?:{projectId?:unknown}[]}};
    raw.projects=(raw.projects??[]).filter(item=>item?.id!==projectId);
    if(raw.managerTransport?.contexts)raw.managerTransport.contexts=raw.managerTransport.contexts.filter(item=>item?.projectId!==projectId);
-   if(!Installation.safeParse(raw).success)throw new Refusal('INVALID_INSTALLATION',409);
-   for(let index=1;;index++){
-    backupPath=join(dirname(file),`installation.json.before-remove-${stamp}${index===1?'':'-'+index}`);
-    try{await writeFile(backupPath,original,{mode:0o600,flag:'wx'});break;}
-    catch(error){if(!errno(error,'EEXIST')||index>=100)throw error;}
+   if(raw.remoteDevelopment?.projects){
+    raw.remoteDevelopment.projects=raw.remoteDevelopment.projects.filter(item=>item?.projectId!==projectId);
+    // The schema asks for at least one project: without any, remote development is simply off.
+    if(!raw.remoteDevelopment.projects.length){delete raw.remoteDevelopment;remoteDropped=true;}
    }
-   await chmod(backupPath,0o600);
-   await writePrivate(file,JSON.stringify(raw,null,2)+'\n');
-   say(`installation.json: projeto retirado de projects[]; backup em ${backupPath}.`);
+   if(!Installation.safeParse(raw).success)throw new Refusal('INVALID_INSTALLATION',409);
+   next=JSON.stringify(raw,null,2)+'\n';
   }
+  await deps.beforeArchive?.();
   if(db){
    await ledger.tx(async c=>{
     // Same lock as project registration, then the activity is judged again inside the transaction.
@@ -251,6 +254,17 @@ export async function removePersonalProject(installationPath:string,token:string
     await c.query('DELETE FROM ac_account_access WHERE project_id=$1',[projectId]);
    });
    say(`Banco: projeto arquivado, ${db.contexts} contexto(s) arquivado(s), ${db.access} acesso(s) de conta revogado(s).`);
+  }
+  let backupPath:string|undefined;
+  if(original&&next){
+   for(let index=1;;index++){
+    backupPath=join(dirname(file),`installation.json.before-remove-${stamp}${index===1?'':'-'+index}`);
+    try{await writeFile(backupPath,original,{mode:0o600,flag:'wx'});break;}
+    catch(error){if(!errno(error,'EEXIST')||index>=100)throw error;}
+   }
+   await chmod(backupPath,0o600);
+   await writePrivate(file,next);
+   say(`installation.json: projeto retirado de projects[]${remoteDropped?' e o bloco remoteDevelopment, que ficou sem projeto':''}; backup em ${backupPath}.`);
   }
   await (await import('./personal-ssh.ts')).forgetRemoteProject(config.dataDirectory,projectId);
 
@@ -316,8 +330,9 @@ export async function removePersonalProject(installationPath:string,token:string
    // worktrees are released through it). Freeing the row lets the repository be added again and drops the project from the panel.
    await ledger.pool.query('DELETE FROM ac_project_repositories WHERE project_id=$1',[projectId]);
    say('Banco: ligação do projeto ao repositório retirada (o repositório pode ser acrescentado de novo).');
-  }else if(db&&target.repo)say('Banco: ligação ao repositório mantida até os itens preservados saírem; repita o comando.');
-  say(kept?`Remoção aplicada com ${kept} item(ns) preservado(s); repita o comando para tentar de novo.`:'Remoção aplicada.');
+  }else if(db&&target.repo)say('Banco: ligação ao repositório mantida até os itens preservados saírem; repita o comando abaixo.');
+  // By id: the project already left installation.json and is archived, so its label no longer finds it.
+  say(kept?`Remoção aplicada com ${kept} item(ns) preservado(s). Para tentar de novo: npm run personal:project -- --remover ${file} ${projectId} --apagar-dados --sim`:'Remoção aplicada.');
   const reportPath=await writeReport(config.dataDirectory,stamp,projectId,lines);
   say(`Relatório: ${reportPath}`);
   return {projectId,label:target.label,applied:true,lines,backupPath,reportPath,restart};

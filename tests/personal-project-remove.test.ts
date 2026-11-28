@@ -3,7 +3,7 @@ import {execFileSync} from 'node:child_process';
 import {createHash,randomUUID} from 'node:crypto';
 import {chmod,lstat,mkdir,mkdtemp,readFile,readdir,realpath,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {dirname,join} from 'node:path';
 import {test} from 'node:test';
 import pg from 'pg';
 import {Capacity} from '../src/capacity.ts';
@@ -18,36 +18,43 @@ import {isolatedDatabase} from './fixtures/isolated-database.ts';
 const url=process.env.AC_TEST_DATABASE_URL;
 const exists=(path:string)=>lstat(path).then(()=>true,()=>false);
 
-/** Docker as a recorded fake: one daemon, a few images, one labelled container and volume per project. */
-function fakeDocker(byProject:Record<string,{container:string;volume:string;image:string}>,registryImages:string[]){
+/** Docker as a recorded fake: one daemon, labelled containers, volumes and images per project; `running` and `imageOf` say
+ * which containers run and which image each one was created from. */
+type Labelled={containers:string[];volumes:string[];images:string[]};
+function fakeDocker(byProject:Record<string,Labelled>,registryImages:string[]){
  const calls:string[][]=[];
- const images=new Set([...registryImages,...Object.values(byProject).map(item=>item.image)]);
- const containers=new Set(Object.values(byProject).map(item=>item.container));
- const volumes=new Set(Object.values(byProject).map(item=>item.volume));
+ const images=new Set([...registryImages,...Object.values(byProject).flatMap(item=>item.images)]);
+ const containers=new Set(Object.values(byProject).flatMap(item=>item.containers));
+ const volumes=new Set(Object.values(byProject).flatMap(item=>item.volumes));
+ const running=new Set<string>(),imageOf=new Map<string,string>();
+ const zero='sha256:'+'0'.repeat(64);
  const ok=(stdout='')=>({code:0,stdout}) as CommandResult;
  const docker=async(args:string[]):Promise<CommandResult>=>{
   calls.push(args);
   const joined=args.join(' ');
   const label=args.find(item=>item.startsWith(`label=${PROJECT_LABEL}=`))?.split('=').at(-1);
   const of=label?byProject[label]:undefined;
+  const lines=(items:string[])=>ok(items.map(item=>item+'\n').join(''));
   if(joined==='info --format {{.ID}}')return ok('daemon-1\n');
   if(joined.startsWith('info'))return {code:1,stdout:''};
   if(args[0]==='container'&&args[1]==='ls'){
-   if(label)return ok(of&&containers.has(of.container)?of.container+'\n':'');
-   if(args.some(item=>item.startsWith('ancestor=')))return ok('');
-   return ok([...containers].join('\n'));
+   if(label)return lines((of?.containers??[]).filter(item=>containers.has(item)));
+   const ancestor=args.find(item=>item.startsWith('ancestor='))?.slice('ancestor='.length);
+   if(ancestor)return lines([...containers].filter(item=>imageOf.get(item)===ancestor));
+   return lines([...containers]);
   }
   if(args[0]==='container'&&args[1]==='inspect'){
-   if(joined.includes('.State.Running'))return ok('false\n');
+   const ids=args.slice(4);
+   if(joined.includes('.State.Running'))return lines(ids.map(id=>String(running.has(id))));
    if(joined.includes('.Mounts'))return ok('');
-   if(joined.includes('.Image'))return ok([...containers].map(()=> 'sha256:'+'0'.repeat(64)).join('\n'));
+   if(joined.includes('.Image'))return lines(ids.map(id=>imageOf.get(id)??zero));
   }
   if(args[0]==='container'&&args[1]==='rm'){containers.delete(args[2]!);return ok();}
-  if(args[0]==='volume'&&args[1]==='ls')return ok(of&&volumes.has(of.volume)?of.volume+'\n':'');
+  if(args[0]==='volume'&&args[1]==='ls')return lines((of?.volumes??[]).filter(item=>volumes.has(item)));
   if(args[0]==='volume'&&args[1]==='rm'){volumes.delete(args[2]!);return ok();}
   if(args[0]==='image'&&args[1]==='ls'){
-   if(label)return ok(of&&images.has(of.image)?of.image+'\n':'');
-   return ok([...images].join('\n'));
+   if(label)return lines((of?.images??[]).filter(item=>images.has(item)));
+   return lines([...images]);
   }
   if(args[0]==='image'&&args[1]==='inspect'){
    const id=args.at(-1)!;
@@ -59,7 +66,7 @@ function fakeDocker(byProject:Record<string,{container:string;volume:string;imag
   if(args[0]==='image'&&args[1]==='rm'){images.delete(args[2]!);return ok();}
   return {code:1,stdout:'',stderr:'unexpected '+joined};
  };
- return {docker,calls,images,containers,volumes};
+ return {docker,calls,images,containers,volumes,running,imageOf};
 }
 
 test('removing a project: preview changes nothing, active work refuses, only the chosen project goes and its repository stays',{skip:!url,timeout:180000},async()=>{
@@ -79,6 +86,7 @@ test('removing a project: preview changes nothing, active work refuses, only the
   };
   const names=['primary','removed','other','dbonly'] as const;
   const projects:Record<string,{id:string;repo:string;head:string;context:string;jobs:string[];grants:string[]}>={};
+  const authorities:Record<string,Awaited<ReturnType<Ledger['acquire']>>>={};
   const account=randomUUID(),profile=randomUUID();
   for(const name of names){
    const id=randomUUID(),repo=join(area,'repos',name);
@@ -96,6 +104,7 @@ test('removing a project: preview changes nothing, active work refuses, only the
    await ledger.pool.query('INSERT INTO ac_account_access VALUES($1,$2) ON CONFLICT DO NOTHING',[account,p.id]);
    p.context=await ledger.createContext(owner,p.id,randomUUID());
    const authority=await ledger.acquire(owner,p.context,randomUUID(),'fixture-manager',60);
+   authorities[name]=authority;
    for(let index=0;index<2;index++){
     const intent=await ledger.accept(owner,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:p.context,policyRevision:1,action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'encrypted:fixture'}},authority,'api');
     const grant=randomUUID(),job=intent.operation_id as string,active=name==='removed'&&index===0?'running':undefined;
@@ -120,17 +129,44 @@ test('removing a project: preview changes nothing, active work refuses, only the
   }
   // Registry: one candidate image and one round of the removed project, one image of the other project.
   const image=(seed:string)=>'sha256:'+createHash('sha256').update(seed).digest('hex');
-  const removedImage=image('removed-registry'),otherImage=image('other-registry');
+  // pinnedImage is a candidate of the removed project that an exam of the other project still uses.
+  const removedImage=image('removed-registry'),otherImage=image('other-registry'),pinnedImage=image('removed-registry-pinned');
   const registryDir=join(data,'artifact-retention');await mkdir(registryDir,{mode:0o700});
   const old=Date.now()-60_000;
   await writeFile(join(registryDir,'registry.json'),JSON.stringify({schemaVersion:1,worktrees:[],temps:[],history:[],
    images:[{id:randomUUID(),projectId:projects.removed!.id,module:'qa',imageId:removedImage,daemonId:'daemon-1',registeredAt:old},
+    {id:randomUUID(),projectId:projects.removed!.id,module:'qa',imageId:pinnedImage,daemonId:'daemon-1',registeredAt:old},
     {id:randomUUID(),projectId:projects.other!.id,module:'qa',imageId:otherImage,daemonId:'daemon-1',registeredAt:old}],
    rounds:[{projectId:projects.removed!.id,roundId:'round-1',endedAt:old},{projectId:projects.other!.id,roundId:'round-2',endedAt:old}]})+'\n',{mode:0o600});
+  // Exams: the other project's run still uses pinnedImage; the removed project's own run of removedImage no longer pins it.
+  const verifyRun=async(name:string,collector:string|null,status='done')=>{
+   const p=projects[name]!;
+   const intent=await ledger.accept(owner,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:p.context,policyRevision:1,action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'encrypted:fixture'}},authorities[name]!,'api');
+   const id=randomUUID();
+   await ledger.pool.query(`INSERT INTO ac_verify_runs(id,project_id,context_id,intent_id,principal_id,commit_id,status,report_dir,collector_image)
+    VALUES($1,$2,$3,$4,$5,$6,$7,'pending',$8)`,[id,p.id,p.context,intent.id,owner,p.head,status,collector]);
+   return id;
+  };
+  await verifyRun('other',pinnedImage);
+  await verifyRun('removed',removedImage);
   const labelled=(name:string)=>({container:createHash('sha256').update('c'+name).digest('hex'),volume:'ac-vol-'+name,image:image('label-'+name)});
-  const fake=fakeDocker({[projects.removed!.id]:labelled('removed'),[projects.other!.id]:labelled('other'),[projects.primary!.id]:labelled('primary'),[projects.dbonly!.id]:labelled('dbonly')},[removedImage,otherImage]);
-  const product=join(area,'product');await mkdir(product);
-  const deps={docker:fake.docker,verifyRunImages:async()=>[],sharedRefsRoot:join(area,'refs'),productRoot:product,tmpRoot:join(area,'tmp'),
+  const asLists=(item:{container:string;volume:string;image:string})=>({containers:[item.container],volumes:[item.volume],images:[item.image]});
+  // The removed project also has a running labelled container, an image that container uses and two images pinned by the product.
+  const runningContainer=createHash('sha256').update('c-removed-running').digest('hex');
+  const usedImage=image('label-removed-used'),moduleImage=image('label-removed-module'),designImage=image('label-removed-design');
+  const removedLabels=asLists(labelled('removed'));
+  removedLabels.containers.push(runningContainer);
+  removedLabels.images.push(usedImage,moduleImage,designImage);
+  const fake=fakeDocker({[projects.removed!.id]:removedLabels,[projects.other!.id]:asLists(labelled('other')),[projects.primary!.id]:asLists(labelled('primary')),[projects.dbonly!.id]:asLists(labelled('dbonly'))},[removedImage,otherImage,pinnedImage]);
+  fake.running.add(runningContainer);
+  fake.imageOf.set(runningContainer,usedImage);
+  const product=join(area,'product');
+  const modulePin=join(product,'deploy','modules','qa','digest.txt'),designPin=join(product,'deploy','design-image-digest.txt');
+  await mkdir(dirname(modulePin),{recursive:true});
+  await writeFile(modulePin,moduleImage+'\n');
+  await writeFile(designPin,designImage+'\n');
+  // verifyRunImages is not stubbed: the exam pins come from ac_verify_runs in the test database.
+  const deps={docker:fake.docker,sharedRefsRoot:join(area,'refs'),productRoot:product,tmpRoot:join(area,'tmp'),
    processPaths:async()=>[],processInside:async()=>false,mountInfo:async()=>'22 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw\n'};
   await mkdir(join(area,'tmp'));
 
@@ -141,17 +177,34 @@ test('removing a project: preview changes nothing, active work refuses, only the
    contextVault:{directory:join(data,'vault'),masterFile:join(data,'vault-master')},
    managerTransport:{principal:'conversation-owner',contexts:[
     {projectId:projects.primary!.id,contextId:projects.primary!.context,sessionId:'s-primary',profileId:'personal-manager',keyVersion:1,encryptionVariant:'legacy'},
-    {projectId:projects.removed!.id,contextId:projects.removed!.context,sessionId:'s-removed',profileId:'personal-manager',keyVersion:1,encryptionVariant:'legacy'}]}},null,2)+'\n',{mode:0o600});
+    {projectId:projects.removed!.id,contextId:projects.removed!.context,sessionId:'s-removed',profileId:'personal-manager',keyVersion:1,encryptionVariant:'legacy'}]},
+   remoteDevelopment:{mode:'synthetic-fixed-task-v1',transport:{allowedHosts:['remote.invalid'],credentials:[{id:randomUUID(),path:join(area,'ssh','id_fixture')}]},
+    projects:(['removed','other'] as const).map(name=>({projectId:projects[name]!.id,verifierKeyFile:join(data,'remote-'+name+'.key'),tmpfsRoot:join(area,'tmpfs',name),
+     profiles:[{profileId:randomUUID(),hostId:randomUUID(),taskId:'fixture',writePaths:['src/example.ts']}]}))}},null,2)+'\n',{mode:0o600});
 
   const count=async(sql:string,args:unknown[])=>Number((await ledger.pool.query(sql,args)).rows[0].n);
-  const snapshot=async()=>({file:await readFile(file,'utf8'),registry:await readFile(join(registryDir,'registry.json'),'utf8'),
+  // The shared per-daemon pins, file by file: a preview must not republish them.
+  const tree=async(root:string)=>{
+   const out:string[]=[];
+   const walk=async(dir:string)=>{
+    for(const name of (await readdir(dir).catch(()=>[] as string[])).sort()){
+     const path=join(dir,name),info=await lstat(path);
+     if(info.isDirectory()){out.push(path+'/');await walk(path);}else out.push(path+'='+await readFile(path,'utf8'));
+    }
+   };
+   await walk(root);
+   return out;
+  };
+  const snapshot=async()=>({refs:await tree(join(area,'refs')),file:await readFile(file,'utf8'),registry:await readFile(join(registryDir,'registry.json'),'utf8'),
    jobs:(await readdir(hostRoot)).sort().join(','),access:await count('SELECT count(*)::int n FROM ac_account_access',[]),
    archived:await count('SELECT count(*)::int n FROM ac_projects WHERE archived_at IS NOT NULL',[]),contexts:await count('SELECT count(*)::int n FROM ac_contexts WHERE archived',[]),
    repos:await count('SELECT count(*)::int n FROM ac_project_repositories',[]),entries:(await readdir(data)).sort().join(',')});
   const mutating=()=>fake.calls.filter(args=>args[1]==='rm');
 
-  // 1. Preview: nothing changes, sizes are reported.
+  // 1. Preview: nothing changes, sizes are reported. A retention preview first publishes the installation's full pin set.
+  await runPersonalArtifactRetention(await loadInstallation(file),false,deps);
   const before=await snapshot();
+  assert.ok(before.refs.some(line=>line.includes(moduleImage)&&line.includes(pinnedImage)),before.refs.join('\n'));
   const preview=await removePersonalProject(file,'removed',{apply:false,deleteData:true,deps});
   assert.equal(preview.applied,false);
   assert.deepEqual(await snapshot(),before);
@@ -177,6 +230,15 @@ test('removing a project: preview changes nothing, active work refuses, only the
   await rm(join(data,'verificacoes',projects.removed!.id,'andamento'),{recursive:true});
   assert.deepEqual(await snapshot(),before);
   assert.deepEqual(mutating(),[]);
+  // Work that starts between the first check and the archiving transaction refuses too, and installation.json is not rewritten.
+  let lateExam='';
+  await assert.rejects(()=>removePersonalProject(file,'removed',{apply:true,deleteData:true,deps:{...deps,beforeArchive:async()=>{
+   lateExam=await verifyRun('removed',null,'running');}}}),(error:unknown)=>error instanceof Refusal&&error.code==='PROJECT_REMOVE_ACTIVE'&&/exame/.test(personalProjectRemoveFailureText(error)));
+  assert.ok(lateExam);
+  await ledger.pool.query("UPDATE ac_verify_runs SET status='failed',finished_at=clock_timestamp() WHERE id=$1",[lateExam]);
+  assert.deepEqual(await snapshot(),before);
+  assert.deepEqual(mutating(),[]);
+  assert.deepEqual((await readdir(data)).filter(name=>name.startsWith('installation.json.')),[]);
 
   // 4. Removal with data: only the chosen project goes.
   const result=await removePersonalProject(file,'removed',{apply:true,deleteData:true,deps,now:new Date('2026-11-28T10:00:00Z')});
@@ -185,9 +247,17 @@ test('removing a project: preview changes nothing, active work refuses, only the
   assert.deepEqual(config.projects.map(item=>item.label),['other']);
   assert.equal(config.project.id,projects.primary!.id);
   assert.deepEqual(config.managerTransport?.contexts.map(item=>item.projectId),[projects.primary!.id]);
+  assert.deepEqual(config.remoteDevelopment?.projects.map(item=>item.projectId),[projects.other!.id]);
   assert.equal(await readFile(result.backupPath!,'utf8'),before.file);
   assert.ok(await exists(result.reportPath!));
-  assert.match(await readFile(result.reportPath!,'utf8'),/Remoção aplicada\./);
+  const report=await readFile(result.reportPath!,'utf8');
+  // Kept: the running container, the image it uses, the two product pins and the candidate the other project's exam uses.
+  assert.ok(report.includes(`Remoção aplicada com 5 item(ns) preservado(s). Para tentar de novo: npm run personal:project -- --remover ${file} ${projects.removed!.id} --apagar-dados --sim`),report);
+  assert.match(report,new RegExp(`contêiner ${runningContainer.slice(0,12)}: preservado \\(em execução`));
+  assert.match(report,new RegExp(`imagem ${usedImage.slice(0,19)}: preservada \\(há contêiner usando a imagem\\)`));
+  assert.match(report,new RegExp(`imagem ${moduleImage.slice(0,19)}: preservada \\(digest fixado`));
+  assert.match(report,new RegExp(`imagem ${designImage.slice(0,19)}: preservada \\(digest fixado`));
+  assert.match(report,new RegExp(`imagem ${pinnedImage.slice(0,19)} \\(qa\\): preservado \\(digest fixado ou referenciado por exame\\)`));
   const row=(await ledger.pool.query('SELECT archived_at FROM ac_projects WHERE id=$1',[projects.removed!.id])).rows[0];
   assert.ok(row.archived_at instanceof Date);
   assert.equal(await count('SELECT count(*)::int n FROM ac_projects WHERE archived_at IS NOT NULL',[]),1);
@@ -197,8 +267,8 @@ test('removing a project: preview changes nothing, active work refuses, only the
   assert.equal(await count('SELECT count(*)::int n FROM ac_account_access',[]),3);
   // Receipts and history stay; the repository link is freed.
   assert.equal(await count('SELECT count(*)::int n FROM ac_native_execution_jobs j JOIN ac_contexts x ON x.id=j.context_id WHERE x.project_id=$1',[projects.removed!.id]),2);
-  assert.equal(await count('SELECT count(*)::int n FROM ac_project_repositories WHERE project_id=$1',[projects.removed!.id]),0);
-  assert.equal(await count('SELECT count(*)::int n FROM ac_project_repositories',[]),3);
+  // The repository link stays while something was kept, so the rerun still finds the repository.
+  assert.equal(await count('SELECT count(*)::int n FROM ac_project_repositories WHERE project_id=$1',[projects.removed!.id]),1);
   for(const job of projects.removed!.jobs)assert.equal(await exists(join(hostRoot,job)),false);
   for(const name of ['primary','other','dbonly'])for(const job of projects[name]!.jobs)assert.ok(await exists(join(hostRoot,job,'output','result.json')));
   assert.equal(await exists(join(data,'qa-cache',projects.removed!.id)),false);
@@ -212,15 +282,29 @@ test('removing a project: preview changes nothing, active work refuses, only the
   assert.ok(await exists(join(projects.removed!.repo,'.git','HEAD')));
   assert.equal(execFileSync('git',['-C',projects.removed!.repo,'rev-parse','HEAD'],{encoding:'utf8'}).trim(),projects.removed!.head);
   const registry=JSON.parse(await readFile(join(registryDir,'registry.json'),'utf8'));
-  assert.deepEqual(registry.images.map((item:{imageId:string})=>item.imageId),[otherImage]);
+  assert.deepEqual(registry.images.map((item:{imageId:string})=>item.imageId),[pinnedImage,otherImage]);
   assert.deepEqual(registry.rounds.map((item:{projectId:string})=>item.projectId),[projects.other!.id]);
   // Docker: only the removed project's labelled resources and registered image, by id and never forced.
   const removedDocker=labelled('removed');
   assert.deepEqual(mutating().map(args=>args.join(' ')).sort(),[`container rm ${removedDocker.container}`,`image rm ${removedImage}`,`image rm ${removedDocker.image}`,`volume rm ${removedDocker.volume}`].sort());
+  assert.ok(fake.containers.has(runningContainer)&&[usedImage,moduleImage,designImage,pinnedImage].every(item=>fake.images.has(item)));
   assert.ok(fake.images.has(otherImage)&&fake.images.has(labelled('other').image)&&fake.containers.has(labelled('other').container)&&fake.volumes.has(labelled('other').volume));
   assert.ok(!fake.calls.some(args=>args.includes('-f')||args.includes('--force')||args.includes('prune')));
 
-  // 5. A rerun on the archived project, by id, is harmless.
+  // 5. Once nothing holds them any more, the rerun by id (the label no longer finds an archived project) removes the rest.
+  await assert.rejects(()=>removePersonalProject(file,'removed',{apply:false,deleteData:true,deps}),/NOT_FOUND/);
+  fake.running.delete(runningContainer);
+  await rm(modulePin);await rm(designPin);
+  await ledger.pool.query('DELETE FROM ac_verify_runs WHERE project_id=$1',[projects.other!.id]);
+  const rerun=await removePersonalProject(file,projects.removed!.id,{apply:true,deleteData:true,deps});
+  assert.match(rerun.lines.join('\n'),/Remoção aplicada\./);
+  assert.deepEqual(mutating().map(args=>args.join(' ')).filter(line=>[runningContainer,usedImage,moduleImage,designImage,pinnedImage].some(item=>line.endsWith(item))).sort(),
+   [`container rm ${runningContainer}`,`image rm ${usedImage}`,`image rm ${moduleImage}`,`image rm ${designImage}`,`image rm ${pinnedImage}`].sort());
+  assert.equal(await count('SELECT count(*)::int n FROM ac_project_repositories WHERE project_id=$1',[projects.removed!.id]),0);
+  assert.equal(await count('SELECT count(*)::int n FROM ac_project_repositories',[]),3);
+  assert.deepEqual(JSON.parse(await readFile(join(registryDir,'registry.json'),'utf8')).images.map((item:{imageId:string})=>item.imageId),[otherImage]);
+
+  // 5b. A further rerun is harmless.
   const calls=mutating().length;
   const again=await removePersonalProject(file,projects.removed!.id,{apply:true,deleteData:true,deps});
   assert.equal(again.applied,true);
@@ -252,6 +336,9 @@ test('removing a project: preview changes nothing, active work refuses, only the
   for(const job of projects.other!.jobs)assert.ok(await exists(join(hostRoot,job)));
   assert.ok(await exists(join(data,'qa-cache',projects.other!.id)));
   assert.deepEqual((await loadInstallation(file)).projects,[]);
+  // The other project was the last one with remote development: the block goes, and the file stays valid.
+  assert.equal((await loadInstallation(file)).remoteDevelopment,undefined);
+  assert.match(kept.join('\n'),/bloco remoteDevelopment/);
  }finally{
   await ledger.close();
   await database.close();

@@ -404,7 +404,9 @@ const here=resolve(dirname(fileURLToPath(import.meta.url)),'..');
  * `retired`: images the native bootstrap still lists as retired (`execution.retiredImages`, `planning.retiredImageIds`) because a job may still need them.
  * `foreign`: digests pinned by OTHER installations on the same Docker daemon, read from the per-daemon reference registry.
  * Any read failure other than a missing file throws, including an unreadable reference file of another installation. */
-export async function protectedDigests(config:Installation,deps:RetentionDeps,docker:NonNullable<RetentionDeps['docker']>,releasedProject?:string){
+/** `publish:false` reads the other installations' pins without rewriting this installation's own file: a preview must not
+ * announce a reduced pin set while the project it leaves out is still installed. */
+export async function protectedDigests(config:Installation,deps:RetentionDeps,docker:NonNullable<RetentionDeps['docker']>,releasedProject?:string,publish=true){
  const pinned=new Set<string>(digestsIn(JSON.stringify(config)));
  const retired=new Set<string>();
  const boot=config.nativeBootstrap as {planning?:{retiredImageIds?:string[]};execution?:{retiredImages?:{workerImage?:string;toolsImage?:string}[]}}|undefined;
@@ -436,7 +438,7 @@ export async function protectedDigests(config:Installation,deps:RetentionDeps,do
  }
  for(const image of await (deps.verifyRunImages??(current=>defaultVerifyRunImages(current,releasedProject)))(config))for(const digest of digestsIn(image))pinned.add(digest);
  let foreign:Set<string>;
- try{foreign=await shareDaemonReferences(config,deps,docker,[...pinned],[...retired]);}catch{throw new SharedReferencesUnreadable();}
+ try{foreign=await shareDaemonReferences(config,deps,docker,[...pinned],[...retired],publish);}catch{throw new SharedReferencesUnreadable();}
  return {pinned,retired,foreign};
 }
 
@@ -451,11 +453,11 @@ const SHARED_REFS_REFRESH_MS=60*60*1000;
 const sharedRefsRoot=(deps:RetentionDeps)=>deps.sharedRefsRoot??process.env.AC_DOCKER_REFS_DIR??join(homedir(),'.agent-control-docker-refs');
 const installationKey=(config:Installation)=>createHash('sha256').update(resolve(config.dataDirectory)).digest('hex').slice(0,32);
 
-async function shareDaemonReferences(config:Installation,deps:RetentionDeps,docker:NonNullable<RetentionDeps['docker']>,pinned:string[],retired:string[]){
+async function shareDaemonReferences(config:Installation,deps:RetentionDeps,docker:NonNullable<RetentionDeps['docker']>,pinned:string[],retired:string[],publish=true){
  const daemonId=await dockerDaemonId(docker);
  if(!daemonId)return new Set<string>();// no daemon identity: proveImage refuses every image anyway
  const directory=join(sharedRefsRoot(deps),daemonId),own=installationKey(config)+'.json';
- await mkdir(directory,{recursive:true,mode:0o755});
+ if(publish)await mkdir(directory,{recursive:true,mode:0o755});
  const mine=[...new Set([...pinned,...retired])].filter(digest=>imageIdPattern.test(digest)).sort();
  const file=join(directory,own);
  const now=(deps.now??Date.now)();
@@ -464,13 +466,15 @@ async function shareDaemonReferences(config:Installation,deps:RetentionDeps,dock
   const current=SharedRefs.parse(JSON.parse(await readFile(file,'utf8')));
   fresh=current.dataDirectory===resolve(config.dataDirectory)&&now-current.publishedAt<SHARED_REFS_REFRESH_MS&&now>=current.publishedAt&&JSON.stringify(current.pinned)===JSON.stringify(mine);
  }catch{fresh=false;}
- if(!fresh){
+ if(publish&&!fresh){
   const temporary=`${file}.${randomUUID()}.tmp`;
   await writeFile(temporary,JSON.stringify({schemaVersion:1,dataDirectory:resolve(config.dataDirectory),publishedAt:now,pinned:mine})+'\n',{mode:0o644,flag:'wx'});
   await rename(temporary,file);
  }
  const foreign=new Set<string>();
- for(const name of await readdir(directory)){
+ let names:string[];
+ try{names=await readdir(directory);}catch(error){if(!publish&&errno(error,'ENOENT'))return foreign;throw error;}
+ for(const name of names){
   if(name===own||!name.endsWith('.json'))continue;
   // Any entry that is not a well-formed inventory means an owner without a usable inventory: nothing may be removed.
   const parsed=SharedRefs.parse(JSON.parse(await readFile(join(directory,name),'utf8')));
@@ -840,7 +844,7 @@ export async function releaseProjectArtifacts(config:Installation,projectId:stri
  const images=registry.images.filter(item=>item.projectId===projectId);
  if(images.length){
   let guard:Awaited<ReturnType<typeof protectedDigests>>|undefined;
-  try{guard=await protectedDigests(config,deps,docker,projectId);}catch{guard=undefined;}
+  try{guard=await protectedDigests(config,deps,docker,projectId,apply);}catch{guard=undefined;}
   for(const entry of images){
    const label=`imagem ${entry.imageId.slice(0,19)} (${entry.module})`;
    if(!guard){keep(label,'não foi possível ler os digests fixados, os exames e as referências compartilhadas');continue;}
