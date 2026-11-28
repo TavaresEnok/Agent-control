@@ -538,6 +538,10 @@ async function dockerDaemonId(docker:NonNullable<RetentionDeps['docker']>){
 
 type ImageFacts={digests:string[];size:number|undefined};
 /** Judged again right before removal. Every doubt preserves; `docker image rm` is later run by id and never forced. */
+/** Refusals that mean "someone else keeps this image": a pin of the installation, a retired image still referenced, another installation. */
+const PIN_REASONS={retired:'imagem aposentada ainda referenciada pela instalação',foreign:'digest fixado por outra instalação neste daemon',pinned:'digest fixado ou referenciado por exame'} as const;
+const pinReasons=new Set<string>(Object.values(PIN_REASONS));
+
 async function proveImage(entry:ImageEntry,guard:{pinned:Set<string>;retired:Set<string>;foreign:Set<string>},docker:NonNullable<RetentionDeps['docker']>,now:number,minAge=IMAGE_MIN_AGE_MS):Promise<Verdict<ImageFacts>|{ok:false;reason:string;absent:true}>{
  if(!entry.daemonId)return no('registro antigo sem identidade do daemon Docker');
  const daemonId=await dockerDaemonId(docker);
@@ -560,9 +564,9 @@ async function proveImage(entry:ImageEntry,guard:{pinned:Set<string>;retired:Set
   digests=[image.Id,...(image.RepoDigests??[]).flatMap(item=>[...digestsIn(item)])];
   size=Number.isSafeInteger(image.Size)&&image.Size!>=0?image.Size:undefined;
  }catch{return no('resposta ilegível do Docker');}
- if(digests.some(digest=>guard.retired.has(digest)))return no('imagem aposentada ainda referenciada pela instalação');
- if(digests.some(digest=>guard.foreign.has(digest)))return no('digest fixado por outra instalação neste daemon');
- if(digests.some(digest=>guard.pinned.has(digest)))return no('digest fixado ou referenciado por exame');
+ if(digests.some(digest=>guard.retired.has(digest)))return no(PIN_REASONS.retired);
+ if(digests.some(digest=>guard.foreign.has(digest)))return no(PIN_REASONS.foreign);
+ if(digests.some(digest=>guard.pinned.has(digest)))return no(PIN_REASONS.pinned);
  const age=now-entry.registeredAt;
  if(age<minAge)return no(`registrada há ${hours(Math.max(age,0))} h (mínimo ${hours(minAge)} h)`);
  // Any container, running or stopped, created from this image or from one built on it.
@@ -885,6 +889,9 @@ export async function releaseProjectArtifacts(config:Installation,projectId:stri
     const proof=await proveImage(entry,guard,docker,now(),0);
     if(!proof.ok){
      if('absent' in proof){if(apply)await forget('image',entry.id,'dropped');lines.push(`${label}: registro ${apply?'retirado':'seria retirado'} (${proof.reason}).`);}
+     // A pin outside the removed project keeps the image: the common image retention takes it once the pin goes, so it does not hold
+     // the removal (nor the repository link) open.
+     else if(pinReasons.has(proof.reason))lines.push(`${label}: fica no Docker (${proof.reason}); a retenção de imagens a retira quando o pin sair.`);
      else keep(label,proof.reason);
      continue;
     }

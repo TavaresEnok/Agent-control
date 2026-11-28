@@ -251,13 +251,14 @@ test('removing a project: preview changes nothing, active work refuses, only the
   assert.equal(await readFile(result.backupPath!,'utf8'),before.file);
   assert.ok(await exists(result.reportPath!));
   const report=await readFile(result.reportPath!,'utf8');
-  // Kept: the running container, the image it uses, the two product pins and the candidate the other project's exam uses.
-  assert.ok(report.includes(`Remoção aplicada com 5 item(ns) preservado(s). Para tentar de novo: npm run personal:project -- --remover ${file} ${projects.removed!.id} --apagar-dados --sim`),report);
+  // Kept: the running container, the image it uses and the two product pins. The registered candidate the other project's exam
+  // uses stays in Docker under that pin without holding the removal; the image retention takes it once the pin goes.
+  assert.ok(report.includes(`Remoção aplicada com 4 item(ns) preservado(s). Para tentar de novo: npm run personal:project -- --remover ${file} ${projects.removed!.id} --apagar-dados --sim`),report);
   assert.match(report,new RegExp(`contêiner ${runningContainer.slice(0,12)}: preservado \\(em execução`));
   assert.match(report,new RegExp(`imagem ${usedImage.slice(0,19)}: preservada \\(há contêiner usando a imagem\\)`));
   assert.match(report,new RegExp(`imagem ${moduleImage.slice(0,19)}: preservada \\(digest fixado`));
   assert.match(report,new RegExp(`imagem ${designImage.slice(0,19)}: preservada \\(digest fixado`));
-  assert.match(report,new RegExp(`imagem ${pinnedImage.slice(0,19)} \\(qa\\): preservado \\(digest fixado ou referenciado por exame\\)`));
+  assert.match(report,new RegExp(`imagem ${pinnedImage.slice(0,19)} \\(qa\\): fica no Docker \\(digest fixado ou referenciado por exame\\); a retenção de imagens a retira quando o pin sair`));
   const row=(await ledger.pool.query('SELECT archived_at FROM ac_projects WHERE id=$1',[projects.removed!.id])).rows[0];
   assert.ok(row.archived_at instanceof Date);
   assert.equal(await count('SELECT count(*)::int n FROM ac_projects WHERE archived_at IS NOT NULL',[]),1);
