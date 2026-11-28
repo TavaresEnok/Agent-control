@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-import {copyFileSync,existsSync,mkdirSync,mkdtempSync,rmSync,symlinkSync,writeFileSync} from 'node:fs';
+import {copyFileSync,existsSync,mkdirSync,mkdtempSync,readdirSync,rmSync,symlinkSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import test from 'node:test';
@@ -154,17 +154,20 @@ test('the runner fails when a test file leaves residue and names the file; AC_CI
     mkdirSync(join(sandbox,'scripts'));mkdirSync(join(sandbox,'tests'));
     for(const file of ['test-ci.mjs','test-ci-selection.mjs'])copyFileSync(join(root,'scripts',file),join(sandbox,'scripts',file));
     symlinkSync(join(root,'node_modules'),join(sandbox,'node_modules'));
-    writeFileSync(join(sandbox,'.gitignore'),'node_modules\n');
+    writeFileSync(join(sandbox,'.gitignore'),'node_modules\nbase\ntmp\nrefs\n');
     writeFileSync(join(sandbox,'scripts','test-ci-classification.json'),JSON.stringify({executar:['limpo.test.ts','sujo.test.ts'],laboratorio:{},excluido:{}}));
-    writeFileSync(join(sandbox,'tests','limpo.test.ts'),"import test from 'node:test';test('limpo',()=>{});\n");
-    writeFileSync(join(sandbox,'tests','sujo.test.ts'),"import test from 'node:test';import {mkdirSync,writeFileSync} from 'node:fs';"+
-      "test('sujo',()=>{mkdirSync('.state/projects/ac-sobra',{recursive:true});writeFileSync('versionado.txt','mudou');});\n");
+    // O limpo faz o papel de outro processo do host: cria ac-* direto no /tmp global, fora do TMPDIR isolado.
+    writeFileSync(join(sandbox,'tests','limpo.test.ts'),"import test from 'node:test';import {mkdirSync} from 'node:fs';"+
+      "test('limpo',()=>{mkdirSync(process.env.AC_CI_LEAK_TMP_DIRS+'/ac-de-fora',{recursive:true});});\n");
+    writeFileSync(join(sandbox,'tests','sujo.test.ts'),"import test from 'node:test';import {mkdirSync,writeFileSync} from 'node:fs';import {tmpdir} from 'node:os';"+
+      "test('sujo',()=>{mkdirSync('.state/projects/ac-sobra',{recursive:true});writeFileSync('versionado.txt','mudou');"+
+      "mkdirSync(tmpdir()+'/ac-sobra-tmp');mkdirSync(process.env.AC_DOCKER_REFS_DIR+'/daemon',{recursive:true});writeFileSync(process.env.AC_DOCKER_REFS_DIR+'/daemon/ref.json','{}');});\n");
     writeFileSync(join(sandbox,'versionado.txt'),'original');
     const git=(...args:string[])=>spawnSync('git',['-C',sandbox,...args],{encoding:'utf8'});
     git('init','-q');git('add','.');git('-c','user.name=t','-c','user.email=t@example.invalid','commit','-qm','base');
-    mkdirSync(join(sandbox,'tmp'));
+    mkdirSync(join(sandbox,'tmp'));mkdirSync(join(sandbox,'base'));
     const env:Record<string,string|undefined>={...cleanEnv(),AC_TEST_DATABASE_URL:'postgresql://unused@127.0.0.1:1/ac_unused',
-      AC_DOCKER_REFS_DIR:join(sandbox,'refs'),AC_CI_LEAK_TMP_DIRS:join(sandbox,'tmp')};
+      AC_DOCKER_REFS_DIR:join(sandbox,'refs'),AC_CI_LEAK_TMP_DIRS:join(sandbox,'tmp'),TMPDIR:join(sandbox,'base')};
     // Rodando dentro de node --test, o filho herdaria o contexto do executor e não imprimiria o TAP.
     delete env.NODE_TEST_CONTEXT;
     const run=(extra:Record<string,string>={})=>spawnSync(process.execPath,[join(sandbox,'scripts','test-ci.mjs')],{cwd:sandbox,encoding:'utf8',env:{...env,...extra}});
@@ -172,7 +175,12 @@ test('the runner fails when a test file leaves residue and names the file; AC_CI
     assert.equal(dirty.status,1,dirty.stdout+dirty.stderr);
     assert.match(dirty.stderr,/sujo\.test\.ts: projeto .*ac-sobra/);
     assert.match(dirty.stderr,/sujo\.test\.ts: git versionado\.txt/);
-    assert.doesNotMatch(dirty.stderr,/limpo\.test\.ts:/);
+    assert.match(dirty.stderr,/sujo\.test\.ts: tmp .*\/ac-sobra-tmp/,'o TMPDIR isolado é só deste arquivo');
+    assert.match(dirty.stderr,/sujo\.test\.ts: referencia .*\/daemon\/ref\.json/);
+    assert.doesNotMatch(dirty.stderr,/limpo\.test\.ts:/,'o /tmp global não reprova: outro processo pode ter criado');
+    assert.match(dirty.stdout,/AVISO apareceram itens[^]*limpo\.test\.ts: tmp .*ac-de-fora/);
+    assert.deepEqual(readdirSync(join(sandbox,'base')).filter(name=>name.startsWith('c-')),[],'os TMPDIR isolados são apagados no fim');
+    rmSync(join(sandbox,'tmp','ac-de-fora'),{recursive:true});
     const off=run({AC_CI_LEAK_GUARD:'0'});
     assert.equal(off.status,0,off.stdout+off.stderr);
     assert.match(off.stdout,/guarda de resíduos desligada/);
@@ -182,5 +190,6 @@ test('the runner fails when a test file leaves residue and names the file; AC_CI
     git('-c','user.name=t','-c','user.email=t@example.invalid','commit','-qam','limpo');
     const clean=run();
     assert.equal(clean.status,0,clean.stdout+clean.stderr);
+    assert.doesNotMatch(clean.stderr,/sujo\.test\.ts:/);
   }finally{rmSync(sandbox,{recursive:true,force:true});}
 });

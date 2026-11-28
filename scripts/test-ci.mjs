@@ -5,7 +5,7 @@
 import {spawn,spawnSync} from 'node:child_process';
 import pg from 'pg';
 import {lstatSync,readdirSync} from 'node:fs';
-import {mkdir,writeFile} from 'node:fs/promises';
+import {mkdir,mkdtemp,rm,symlink,writeFile} from 'node:fs/promises';
 import {homedir,tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -44,6 +44,9 @@ async function databaseEnvironment(name){
 
 // Guarda de resíduos: a suíte não pode deixar nada em /tmp/ac-*, em .state/projects, nas referências
 // compartilhadas do Docker, nem mudar arquivo do repositório. AC_CI_LEAK_GUARD=0 desliga, só para depuração.
+// Cada arquivo roda com TMPDIR e AC_DOCKER_REFS_DIR próprios: o que sobra ali é com certeza dele e reprova.
+// O /tmp e as referências globais são do host inteiro (outros trabalhadores, a instalação viva), então o que
+// aparece neles só vira aviso, porque não dá para saber quem criou.
 const entries=directory=>{try{return readdirSync(directory);}catch{return [];}};
 const statKey=path=>{try{const info=lstatSync(path);return info.isFile()?`${info.size} ${info.mtimeMs}`:info.isSymbolicLink()?'link':'dir';}catch{return 'ausente';}};
 function gitChanges(root,ignored){
@@ -68,6 +71,36 @@ export function leakLocations(root,env=process.env){
     ignored:[],
   };
 }
+function referenceEntries(root){
+  const keys=[];
+  for(const daemon of entries(root)){
+    const directory=join(root,daemon);
+    const inside=statKey(directory)==='dir'?entries(directory):[];
+    if(inside.length===0)keys.push(`referencia ${directory}`);
+    for(const name of inside)keys.push(`referencia ${join(directory,name)}`);
+  }
+  return keys;
+}
+// Os caches do tsx e do Node ficam fora do TMPDIR isolado, senão cada arquivo recompilaria tudo.
+const sharedToolCaches=()=>['node-compile-cache',...(process.getuid?[`tsx-${process.getuid()}`]:[])];
+/**
+ * TMPDIR e pasta de referências do Docker só deste arquivo de teste. O prefixo é curto de propósito:
+ * os soquetes Unix dos testes ficam dentro do TMPDIR e o caminho tem limite de 108 bytes.
+ */
+export async function fileSandbox(base){
+  const sandbox={tmp:await mkdtemp(join(base,'c-')),refs:await mkdtemp(join(base,'c-refs-'))};
+  for(const name of sharedToolCaches()){
+    await mkdir(join(base,name),{recursive:true,mode:0o700});
+    await symlink(join(base,name),join(sandbox.tmp,name));
+  }
+  return sandbox;
+}
+/** O que o arquivo deixou no TMPDIR e nas referências isolados; tudo ali veio dele. */
+export function sandboxLeftovers(sandbox){
+  return [...entries(sandbox.tmp).filter(name=>name.startsWith('ac-')).map(name=>`tmp ${join(sandbox.tmp,name)}`),...referenceEntries(sandbox.refs)];
+}
+/** Diferença no /tmp ou nas referências globais: pode ser de outro processo do host. */
+export const sharedLeak=item=>item.startsWith('tmp ')||item.startsWith('referencia ');
 /** Foto do que a suíte poderia deixar para trás. Só nomes e tamanhos, sem ler conteúdo. */
 export function leakSnapshot(locations){
   const items=new Map();
@@ -81,12 +114,7 @@ export function leakSnapshot(locations){
     }
   }
   for(const name of entries(locations.projects))items.set(`projeto ${join(locations.projects,name)}`,'');
-  for(const daemon of entries(locations.dockerRefs)){
-    const directory=join(locations.dockerRefs,daemon);
-    const inside=statKey(directory)==='dir'?entries(directory):[];
-    if(inside.length===0)items.set(`referencia ${directory}`,'');
-    for(const name of inside)items.set(`referencia ${join(directory,name)}`,'');
-  }
+  for(const key of referenceEntries(locations.dockerRefs))items.set(key,'');
   for(const [path,state] of gitChanges(locations.root,locations.ignored))items.set(`git ${path}`,state);
   return items;
 }
@@ -98,9 +126,13 @@ export function leakReport(leaks){
   return ['A suíte deixou resíduos (cada teste deve apagar o que cria; AC_CI_LEAK_GUARD=0 desliga a guarda só para depuração):',
     ...leaks.map(({file,item})=>`  ${file}: ${item}`)].join('\n');
 }
+export function sharedLeakReport(leaks){
+  return ['AVISO apareceram itens no /tmp ou nas referências globais durante estes arquivos; outro processo do host pode ter criado:',
+    ...leaks.map(({file,item})=>`  ${file}: ${item}`)].join('\n');
+}
 
-async function runFile(name){
-  const env={...process.env,...await databaseEnvironment(name)};
+async function runFile(name,sandbox){
+  const env={...process.env,...await databaseEnvironment(name),...(sandbox?{TMPDIR:sandbox.tmp,AC_DOCKER_REFS_DIR:sandbox.refs}:{})};
   return new Promise(done=>{
     const child=spawn(process.execPath,['--import','tsx','--test','--test-reporter=tap',join('tests',name)],{cwd:root,env,detached:true,stdio:['ignore','pipe','pipe']});
     let output='',timedOut=false;
@@ -146,11 +178,16 @@ async function main(){
   if(!guard)console.log('AVISO guarda de resíduos desligada (AC_CI_LEAK_GUARD=0): só para depuração.');
   const locations=leakLocations(root);
   if(logDir)locations.ignored.push(logDir);
-  const leaks=[];
+  const leaks=[],sandboxes=[];
   for(const name of included){
     const before=guard?leakSnapshot(locations):null;
-    const started=Date.now(),result=await runFile(name);
-    if(guard)for(const item of leakDiff(before,leakSnapshot(locations)))leaks.push({file:name,item});
+    const sandbox=guard?await fileSandbox(tmpdir()):null;
+    if(sandbox)sandboxes.push(sandbox);
+    const started=Date.now(),result=await runFile(name,sandbox);
+    if(guard){
+      for(const item of leakDiff(before,leakSnapshot(locations)))leaks.push({file:name,item});
+      for(const item of sandboxLeftovers(sandbox))leaks.push({file:name,item});
+    }
     const status=fileVerdict(result),summary=tapSummary(result.output);
     const counts=summary?` (${summary.pass}/${summary.tests} aprovados${summary.skipped||summary.todo?`, ${summary.skipped+summary.todo} pulados`:''})`:'';
     console.log(`${status} ${name} ${Math.round((Date.now()-started)/1000)}s${counts}`);
@@ -167,13 +204,17 @@ async function main(){
   if(guard){
     for(let attempt=0;attempt<6;attempt++){
       if(attempt>0)await new Promise(done=>setTimeout(done,2000));
-      const remaining=leakSnapshot(locations);
+      const remaining=new Set([...leakSnapshot(locations).keys(),...sandboxes.flatMap(sandboxLeftovers)]);
       left=leaks.filter(({item})=>remaining.has(item));
       if(left.length===0)break;
     }
+    for(const sandbox of sandboxes)for(const directory of [sandbox.tmp,sandbox.refs])await rm(directory,{recursive:true,force:true});
   }
-  if(left.length)console.error(leakReport(left));
-  process.exitCode=failures.length||left.length?1:0;
+  const shared=left.filter(({item})=>sharedLeak(item)&&!sandboxes.some(sandbox=>item.includes(sandbox.tmp+'/')||item.includes(sandbox.refs+'/')));
+  const own=left.filter(leak=>!shared.includes(leak));
+  if(shared.length)console.log(sharedLeakReport(shared));
+  if(own.length)console.error(leakReport(own));
+  process.exitCode=failures.length||own.length?1:0;
 }
 
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url))await main();
