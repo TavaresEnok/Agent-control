@@ -1,4 +1,4 @@
-import {DISK_BLOCK_PERCENT} from './personal-disk.ts';
+import {DISK_BLOCK_PERCENT,type SpaceVerdict} from './personal-disk.ts';
 import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 
@@ -41,6 +41,16 @@ export function repeatedErrorNotices(log:string,threshold=ERROR_THRESHOLD):Healt
 export function diskNotice(usedPercent:number):HealthNotice|null{
  if(!Number.isFinite(usedPercent)||usedPercent<DISK_ALERT_PERCENT)return null;
  return {key:'disk',text:`Disco do servidor em ${Math.round(usedPercent)}%. ${usedPercent>=DISK_BLOCK_PERCENT?'Novos exames e trabalhadores estão bloqueados. ':''}Confira a retenção com npm run personal:maintenance -- <instalação.json> --retencao-automatica.`,repeatMs:6*hourMs};
+}
+
+/** Orçamento do próprio Agent Control (src/personal-space.ts). Medição ausente ou vencida avisa uma vez por dia, sem bloquear. */
+export function spaceNotice(verdict:SpaceVerdict,installationFile='<instalação.json>'):HealthNotice|null{
+ const gb=(bytes:number)=>(bytes/1e9).toFixed(1).replace('.',',');
+ const measure=`npm run personal:espaco -- ${installationFile}`;
+ if(verdict.state==='ok')return null;
+ if(verdict.state==='alerta'||verdict.state==='acima')return {key:'space:'+verdict.state,repeatMs:6*hourMs,
+  text:`O Agent Control ocupa ${gb(verdict.acBytes)} GB de ${gb(verdict.budgetGB*1e9)} GB do orçamento. ${verdict.state==='acima'?'Novos exames e trabalhadores estão bloqueados. ':''}Rode a retenção: npm run personal:maintenance -- ${installationFile} --retencao-automatica.`};
+ return {key:'space:stale',repeatMs:dayMs,text:`O orçamento de espaço do Agent Control está sem medição recente. Meça com ${measure}.`};
 }
 
 const providerName:Record<string,string>={claude:'Claude',grok:'Grok',codex:'Codex'};
