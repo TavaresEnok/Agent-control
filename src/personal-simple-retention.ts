@@ -1,7 +1,8 @@
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-import {lstat,readdir,readFile,readlink,realpath,rename} from 'node:fs/promises';
+import {lstat,mkdir,readdir,readFile,readlink,realpath,rename,writeFile} from 'node:fs/promises';
 import {join,sep} from 'node:path';
+import {randomUUID} from 'node:crypto';
 import {withInstallationImageLock} from './personal-image-lock.ts';
 import {Ledger} from './ledger.ts';
 import type {Installation} from './installation.ts';
@@ -80,6 +81,9 @@ export async function simpleJobRetention(config:JobInstallation,apply:boolean,mo
 
 /** Job directories removed per pass, so one pass after a long pause stays short. The rest follow on the next passes. */
 export const JOB_DIRECTORY_BATCH=300;
+/** What a trimmed job directory keeps: the product still reads them after the job ends (the security exam reuses a finished
+ * specialist job of the same commit from `output/execution-result.json` and `request.json`; the team feed shows the result). */
+export const KEPT_IN_JOB_DIRECTORY=new Set(['output','request.json']);
 const condemnedJob=/^\.removendo-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
 
 /** Paths at or under `root` that a live process holds as cwd, root or open file. One walk of /proc for the whole pass. */
@@ -108,21 +112,32 @@ export type JobDirectoryDeps={
  limit?:number;
 };
 
+/** Terminal jobs whose directory may be trimmed. A job that the physical retirement still has to close keeps its directory, because
+ * that retirement reads the terminal logs there: reviewer, judge and QA jobs until their containers are recorded as removed, and a
+ * managed programmer until its writer is revoked or neutralized (see {@link OPEN_EXECUTION_JOBS_SQL} in personal-maintenance). */
+export const TERMINAL_JOB_DIRECTORIES_SQL=`SELECT j.id::text FROM ac_native_execution_jobs j JOIN ac_intents i ON i.id=j.intent_id
+ WHERE j.id=ANY($1::uuid[]) AND j.state IN ('completed','failed')
+  AND (j.role NOT IN ('reviewer','judge','qa') OR EXISTS(SELECT 1 FROM ac_native_terminal_retirements t WHERE t.job_id=j.id AND t.state='removed'))
+  AND (j.role<>'programmer' OR i.parent_intent_id IS NULL
+   OR EXISTS(SELECT 1 FROM ac_native_writer_retirements w WHERE w.job_id=j.id AND w.state='revoked')
+   OR EXISTS(SELECT 1 FROM ac_worktree_writers w WHERE w.revocation_job_id=j.id AND w.state='neutralized'))
+ UNION SELECT id::text FROM ac_native_qa_jobs WHERE id=ANY($1::uuid[]) AND state IN ('completed','failed')`;
+
 async function defaultTerminalJobs(config:JobInstallation,ids:string[],each:(id:string)=>Promise<void>){
  const ledger=new Ledger(config.databaseUrl);
  try{
-  const rows=(await ledger.pool.query<{id:string}>(`SELECT id::text FROM ac_native_execution_jobs WHERE id=ANY($1::uuid[]) AND state IN ('completed','failed')
-   UNION SELECT id::text FROM ac_native_qa_jobs WHERE id=ANY($1::uuid[]) AND state IN ('completed','failed')`,[ids])).rows;
+  const rows=(await ledger.pool.query<{id:string}>(TERMINAL_JOB_DIRECTORIES_SQL,[ids])).rows;
   for(const {id} of rows)await ledger.tx(async c=>{
    if((await c.query('SELECT pg_try_advisory_xact_lock(hashtextextended($1,0)) ok',[terminalWorkLockKey(id)])).rows[0].ok)await each(id);
   });
  }finally{await ledger.close();}
 }
 
-/** Whole directories of native jobs that are terminal in the database and untouched for `storage.jobDirRetentionDays`. The receipt
- * stays in the database; `work/` and `review-artifact/` must already be gone (the work retention goes first). A job with no row,
- * a live container, a mount, an open file or anything newer stays. The directory is first renamed to `.removendo-<id>` in the
- * host root, so an interrupted removal is finished on the next pass and never mistaken for a live job. */
+/** Directories of native jobs that are terminal in the database, whose physical retirement is closed and that were untouched for
+ * `storage.jobDirRetentionDays` lose everything but {@link KEPT_IN_JOB_DIRECTORY}. The receipt stays in the database; `work/` and
+ * `review-artifact/` must already be gone (the work retention goes first). A job with no row, an open retirement, a live
+ * container, a mount, an open file or anything newer stays whole. What leaves is first moved into `.removendo-<id>` in the host
+ * root, so an interrupted removal is finished on the next pass and never mistaken for a live job. */
 export async function simpleJobDirectoryRetention(config:JobInstallation&{storage?:unknown},apply:boolean,deps:JobDirectoryDeps={}){
  const boot=config.nativeBootstrap;
  if(boot?.state!=='active')return [];
@@ -149,12 +164,13 @@ export async function simpleJobDirectoryRetention(config:JobInstallation&{storag
   const path=join(root,id);
   const info=await lstat(path).catch(()=>undefined/* gone meanwhile */);
   if(!info?.isDirectory()||info.uid!==process.getuid?.())continue;
-  let newest=info.mtimeMs,busy=false;
+  let newest=info.mtimeMs,busy=false,trimmable=false;
   for(const child of await readdir(path).catch(()=>['work']/* unreadable: treated as busy */)){
    if(child==='work'||child==='review-artifact'){busy=true;break;}
+   if(!KEPT_IN_JOB_DIRECTORY.has(child))trimmable=true;
    newest=Math.max(newest,(await lstat(join(path,child)).catch(()=>undefined))?.mtimeMs??Infinity);
   }
-  if(busy||now()-newest<retentionMs)continue;
+  if(busy||!trimmable||now()-newest<retentionMs)continue;
   if([...names2].some(name=>name.endsWith('-'+id))||mounts.some(source=>overlap(source,path))||held.some(target=>overlap(target,path))||mountedInside(mountText,path))continue;
   old.push(id);
  }
@@ -167,15 +183,18 @@ export async function simpleJobDirectoryRetention(config:JobInstallation&{storag
   try{
    const info=await lstat(path,{bigint:true});
    if(!info.isDirectory()||await realpath(path)!==path)return;
+   const leaving=(await readdir(path)).filter(child=>!KEPT_IN_JOB_DIRECTORY.has(child));
+   if(!leaving.length)return;
    const condemned=join(root,'.removendo-'+id);
-   await rename(path,condemned);
-   const moved=await lstat(condemned,{bigint:true});
-   if(moved.dev!==info.dev||moved.ino!==info.ino)throw Error('job directory changed');
+   await mkdir(condemned,{mode:0o700});
+   for(const child of leaving)await rename(join(path,child),join(condemned,child));
+   const after=await lstat(path,{bigint:true}),moved=await lstat(condemned,{bigint:true});
+   if(after.dev!==info.dev||after.ino!==info.ino||moved.dev!==info.dev)throw Error('job directory changed');
    await releaseRegisteredDirectory(condemned,{dev:String(moved.dev),ino:String(moved.ino)});
    done++;
   }catch{failed++;}
  });
- if(done||failed||old.length)lines.push(`Pastas de job terminais com mais de ${storageSettings(config).jobDirRetentionDays} dia(s): ${done} ${apply?'removida(s)':'elegível(is)'}${failed?`, ${failed} preservada(s) por falha ao remover`:''}${old.length>limit?`; as demais seguem nas próximas passagens`:''}. O recibo fica no banco.`);
+ if(done||failed||old.length)lines.push(`Pastas de job terminais com mais de ${storageSettings(config).jobDirRetentionDays} dia(s): ${done} ${apply?'limpa(s)':'elegível(is)'}${failed?`, ${failed} preservada(s) por falha ao remover`:''}${old.length>limit?`; as demais seguem nas próximas passagens`:''}. O recibo fica no banco; output/ e request.json ficam na pasta.`);
  return lines;
 }
 
@@ -212,13 +231,29 @@ export function removableSimpleContainer(container:Container,keep:ReadonlySet<st
  return Number.isFinite(since)&&now-since>DOCKER_MIN_AGE_MS;
 }
 
-/** A volume that no container uses (the caller lists only dangling volumes), created more than 24 h ago, and labelled by the AC:
+/** A volume that no container uses (the caller lists only dangling volumes and also waits 24 h from the first pass that saw it
+ * so, see {@link VOLUME_STATE_FILE}), created more than 24 h ago, and labelled by the AC:
  * `com.agent-control.*`, or a compose test database of the AC. A volume without a label is never attributed to the AC. */
 export function removableSimpleVolume(volume:{Name:string;CreatedAt:string;Labels?:Record<string,string>|null},now:number){
  const project=volume.Labels?.['com.docker.compose.project']??'';
  const logical=volume.Labels?.['com.docker.compose.volume']??'';
  const test=/^ac-(?:test|lab|implementation|continuation)(?:-|$)/.test(project)&&/^(?:sandbox-pg|test-db|test-postgres)$/.test(logical);
  return now-Date.parse(volume.CreatedAt)>DOCKER_MIN_AGE_MS&&(acLabel(volume.Labels)||test);
+}
+/** When each volume was first seen without any container, kept in the data directory: a volume leaves only 24 h after it lost
+ * its last container, not 24 h after it was created (the container that used it may have been removed a moment ago). */
+export const VOLUME_STATE_FILE='docker-retention-volumes.json';
+async function readDanglingSince(dataDirectory:string):Promise<Record<string,number>>{
+ try{
+  const state=JSON.parse(await readFile(join(dataDirectory,VOLUME_STATE_FILE),'utf8')) as {schemaVersion?:unknown;danglingSince?:unknown};
+  if(state.schemaVersion!==1||!state.danglingSince||typeof state.danglingSince!=='object')return {};
+  return Object.fromEntries(Object.entries(state.danglingSince).filter((entry):entry is [string,number]=>Number.isFinite(entry[1])));
+ }catch{return {};/* missing or unreadable: every volume starts its wait now */}
+}
+async function writeDanglingSince(dataDirectory:string,danglingSince:Record<string,number>){
+ const file=join(dataDirectory,VOLUME_STATE_FILE),temporary=`${file}.${randomUUID()}.tmp`;
+ await writeFile(temporary,JSON.stringify({schemaVersion:1,danglingSince})+'\n',{mode:0o600,flag:'wx'});
+ await rename(temporary,file);
 }
 /** Kept for callers of the former name: the compose test databases are one case of {@link removableSimpleVolume}. */
 export const oldTestVolume=removableSimpleVolume;
@@ -305,15 +340,20 @@ async function retainDockerResources(config:Installation,apply:boolean,deps:Simp
    lines.push((apply?'Imagem removida ':'Imagem elegível ')+image.Id);
   }catch{lines.push('Imagem preservada pelo Docker '+image.Id);}
  }
+ const seen=await readDanglingSince(config.dataDirectory),since:Record<string,number>={};
  for(const name of words(await run(['volume','ls','-q','--filter','dangling=true']))){
+  // A volume is unused since the first pass that saw it dangling; one that a container held until now starts waiting now.
+  since[name]=seen[name]!==undefined&&seen[name]<=now()?seen[name]:now();
   const [volume]=JSON.parse(await run(['volume','inspect',name]));
   if(!removableSimpleVolume(volume,now()))continue;
+  if(now()-since[name]<=DOCKER_MIN_AGE_MS){lines.push(`Volume sem uso há menos de 24 h preservado ${name}`);continue;}
   try{
    // Docker itself refuses a volume that a container started using meanwhile.
-   if(apply)await run(['volume','rm',name]);
+   if(apply){await run(['volume','rm',name]);delete since[name];}
    lines.push((apply?'Volume removido ':'Volume elegível ')+name);
   }catch{lines.push('Volume preservado pelo Docker '+name);}
  }
+ await writeDanglingSince(config.dataDirectory,since);
  // The daemon is shared with other projects: its build cache is never pruned here. Only the builder dedicated to the
  // installation is cleaned, by the weekly maintenance.
  lines.push('Cache de build: o do daemon compartilhado não é tocado; só o builder dedicado da instalação é limpo na manutenção semanal.');

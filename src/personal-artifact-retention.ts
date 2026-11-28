@@ -501,6 +501,12 @@ async function shareDaemonReferences(config:Installation,deps:RetentionDeps,dock
  return foreign;
 }
 
+/** Republishes this installation's pins for the other installations on the daemon, without removing anything. The maintenance
+ * calls it when retention is off, so a reference file never expires while its installation still runs. Best effort. */
+export async function publishDaemonReferences(config:Installation,deps:RetentionDeps={}){
+ await publishOwnReferences(config,deps,deps.docker??defaultDocker,false);
+}
+
 /** Keeps this installation's published pins fresh even when it has no candidate image of its own, so others can see them. */
 async function publishOwnReferences(config:Installation,deps:RetentionDeps,docker:NonNullable<RetentionDeps['docker']>,apply:boolean){
  try{await protectedDigests(config,deps,docker,{apply});}catch{/* best effort: a failed publication only means others keep treating this installation as unknown */}

@@ -1,5 +1,5 @@
 import {isArtifactCommand,runArtifactCommand} from './personal-artifact-commands.ts';
-import {runPersonalArtifactRetention} from './personal-artifact-retention.ts';
+import {publishDaemonReferences,runPersonalArtifactRetention} from './personal-artifact-retention.ts';
 import {spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {chmod,lstat,readFile,rename,unlink,writeFile} from 'node:fs/promises';
@@ -44,6 +44,8 @@ export type MaintenanceDeps={
  jobDirRetention?:(config:Installation,apply:boolean)=>Promise<string[]>;
  /** Retention of the product's own development worktrees (`storage.productRepo`). Tests replace it. */
  devWorktreeRetention?:(config:Installation,apply:boolean)=>Promise<string[]>;
+ /** Republishes the installation's image pins for other installations on the Docker daemon while retention is off. Tests replace it. */
+ publishReferences?:(config:Installation)=>Promise<void>;
  /** The published vulnerability database, or null when none. Used only to show its age. */
  currentDatabase?:(dataDirectory:string)=>Promise<{fetchedAt:string}|null>;
  now?:()=>Date;
@@ -622,7 +624,12 @@ async function runMaintenanceStages(config:Installation,file:string,deps:Mainten
   }catch{return {outcome:'failed',lines:['Bases de vulnerabilidade não atualizadas. A base anterior permanece.']};}
  });
  if(options.retention)await stage('retention',async()=>{
-  if(mode==='off')return {outcome:'skipped',lines:['Retenção automática desligada (modo off).']};
+  if(mode==='off'){
+   // The references this installation publishes expire after 7 days without a run; without them another installation on the
+   // daemon would remove the images it pins.
+   await (deps.publishReferences??publishDaemonReferences)(config);
+   return {outcome:'skipped',lines:['Retenção automática desligada (modo off).']};
+  }
   const out=await runRetentionStages(config,mode==='apply',deps);
   return {outcome:'ok',lines:mode==='apply'?out:[...out,'Retenção em modo prévia: nada é apagado. Use retention.automatic=apply para liberar espaço.']};
  });
@@ -660,7 +667,9 @@ export async function runPersonalMaintenance(argv:string[],deps:MaintenanceDeps=
   const scheduled=await loadInstallation(resolve(argv[0]!));
   if(scheduled.activation!=='personal')throw new Refusal('MAINTENANCE_PERSONAL_REQUIRED');
   const mode=scheduled.retention?.automatic??'preview';
-  return mode==='off'?['Retenção automática desligada.']:runRetentionStages(scheduled,mode==='apply',deps);
+  if(mode!=='off')return runRetentionStages(scheduled,mode==='apply',deps);
+  await (deps.publishReferences??publishDaemonReferences)(scheduled);
+  return ['Retenção automática desligada.'];
  }
  if(argv.length===2&&(argv[1]==='--manutencao-agendada'||argv[1]==='--estado-manutencao')){
   const scheduled=await loadInstallation(resolve(argv[0]!));

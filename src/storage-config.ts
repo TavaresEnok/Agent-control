@@ -15,7 +15,8 @@ export const StorageConfig = z.object({
   worktreeIdleHours: z.number().min(1).max(24 * 90).default(2),
   /** Temporários `/tmp/ac-*` de rodadas encerradas saem depois disso. */
   tmpHours: z.number().min(1).max(24 * 30).default(24),
-  /** Pastas de job nativo terminais saem depois disso; o recibo e `output/` ficam no banco e no relatório. */
+  /** Pastas de job nativo terminais e já retiradas são esvaziadas depois disso; o recibo fica no banco (só o digest da saída)
+   * e `output/` e `request.json` ficam na pasta, porque o exame de segurança e o painel ainda os leem. */
   jobDirRetentionDays: z.number().min(1).max(365).default(7),
   verifyDb: z.object({
     /** Versões das bases de vulnerabilidade mantidas, contando a atual. */
