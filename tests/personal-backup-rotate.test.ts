@@ -488,22 +488,37 @@ test('avulso velho com o prefixo da instalação sai só depois de um backup dat
  const prefix=dest.slice(defaultRoot.length+1);
  const now=new Date();
  const old=new Date(now.getTime()-10*24*60*60*1000),recent=new Date(now.getTime()-2*24*60*60*1000);
- const loose=async(name:string,when:Date,inner='agent-control-x')=>{
+ const age=async(paths:string[],when:Date)=>{for(const path of paths.reverse())await utimes(path,when,when);};
+ /** A copy of an installation in the personal:backup shape, owned by `id`. */
+ const loose=async(name:string,when:Date,id=env.id,dataDirectory=env.data)=>{
+  const folder=join(defaultRoot,name),inner=join(folder,'agent-control-IspAgent-202611200358');
+  await mkdir(inner,{recursive:true});
+  await writeFile(join(inner,'installation.json'),JSON.stringify({project:{id},dataDirectory}));
+  await age([folder,inner,join(inner,'installation.json')],when);
+  return folder;
+ };
+ /** A folder holding only the files given, by name. */
+ const files=async(name:string,when:Date,...names:string[])=>{
   const folder=join(defaultRoot,name);
-  await mkdir(join(folder,inner),{recursive:true});
-  await writeFile(join(folder,inner,'database.dump'),'x');
-  await utimes(join(folder,inner,'database.dump'),when,when);
-  await utimes(join(folder,inner),when,when);
-  await utimes(folder,when,when);
+  await mkdir(folder,{recursive:true});
+  for(const file of names)await writeFile(join(folder,file),'x');
+  await age([folder,...names.map(file=>join(folder,file))],when);
   return folder;
  };
  try{
   await mkdir(dest,{recursive:true});
   const gone=await loose(`${prefix}-antes-retirada-20261120`,old);
-  const dbOnly=await loose(`${prefix}-db-pre116-abc`,old);
+  const dbOnly=await files(`${prefix}-db-pre116-abc`,old,'database.dump');
   const fresh=await loose(`${prefix}-antes-hoje`,recent);
   const other=await loose('nexo-antes-imagem-20261120',old);
-  const otherInstallation=await loose(`${prefix}-outra`,old,'20261101-030000');
+  const otherKind=await files(`${prefix}-outra-coisa`,old,'database.dump');
+  const keys=await files(`${prefix}-antes-chaves`,old,'chaves.txt');
+  const mixed=await files(`${prefix}-db-com-nota`,old,'database.dump','LEIA.txt');
+  const foreign=await loose(`${prefix}-antes-alheia`,old,randomUUID());
+  const elsewhere=await loose(`${prefix}-antes-outro-dado`,old,env.id,join(env.root,'outro'));
+  const dated=join(defaultRoot,`${prefix}-antes-destino`);
+  await mkdir(join(dated,'20261101-030000'),{recursive:true});
+  await age([dated,join(dated,'20261101-030000')],old);
   const outside=join(env.root,'fora');
   await mkdir(outside);
   await utimes(outside,old,old);
@@ -516,9 +531,33 @@ test('avulso velho com o prefixo da instalação sai só depois de um backup dat
   assert.match(lines.join('\n'),/Removidos: 2/);
   await assert.rejects(lstat(gone));
   await assert.rejects(lstat(dbOnly));
-  for(const folder of [fresh,other,otherInstallation])assert.equal((await lstat(folder)).isDirectory(),true,folder);
+  for(const folder of [fresh,other,otherKind,keys,mixed,foreign,elsewhere,dated])assert.equal((await lstat(folder)).isDirectory(),true,folder);
+  assert.equal((await readFile(join(keys,'chaves.txt'),'utf8')),'x');
   assert.equal((await lstat(join(defaultRoot,`${prefix}-antes-link`))).isSymbolicLink(),true);
   await lstat(outside);
   assert.equal((await readdir(defaultRoot)).some(name=>name.startsWith('.removendo-')||name.startsWith('.retencao-')),false);
+ }finally{await rm(env.root,{recursive:true,force:true});}
+});
+
+test('storage.backups.keepLoose guarda o avulso pelo nome',async()=>{
+ const env=await fixture();
+ const defaultRoot=join(env.root,'padrao');
+ const prefix=personalBackupDefaultDestination(env.file,defaultRoot).slice(defaultRoot.length+1);
+ const kept=`${prefix}-antes-opus-high-20261120-035847`,dropped=`${prefix}-antes-t6-20261120-1751`;
+ const body=JSON.parse(await readFile(env.file,'utf8'));
+ body.storage={backups:{keepLoose:[kept]}};
+ await writeFile(env.file,JSON.stringify(body)+'\n',{mode:0o600});
+ const old=new Date(Date.now()-10*24*60*60*1000);
+ try{
+  for(const folder of [kept,dropped]){
+   const inner=join(defaultRoot,folder,'agent-control-IspAgent-202611200358');
+   await mkdir(inner,{recursive:true});
+   await writeFile(join(inner,'installation.json'),JSON.stringify({project:{id:env.id},dataDirectory:env.data}));
+   for(const path of [join(inner,'installation.json'),inner,join(defaultRoot,folder)])await utimes(path,old,old);
+  }
+  const lines=await runPersonalBackupRotate([env.file],{now:new Date(),dump,defaultRoot,listDump});
+  assert.match(lines.join('\n'),/Removidos: 1/);
+  await lstat(join(defaultRoot,kept));
+  await assert.rejects(lstat(join(defaultRoot,dropped)));
  }finally{await rm(env.root,{recursive:true,force:true});}
 });

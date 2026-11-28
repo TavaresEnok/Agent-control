@@ -257,13 +257,30 @@ async function latestBackupFolder(parent:string,projectId:string,dataDirectory:s
 }
 
 const looseName=/^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$/;
+const looseKinds=['antes-','db-'];
+const looseDump=/^[A-Za-z0-9][A-Za-z0-9._-]{0,200}\.(?:dump|sql|sql\.gz)$/;
+
+/**
+ * What a hand-made backup must hold to be recognized: one `agent-control-*` copy whose installation.json names this
+ * project and data directory, or only database dumps. Anything else (keys, notes, another tool's files) is never taken.
+ */
+async function recognizedLoose(literal:string,projectId:string,dataDirectory:string){
+ const entries=await readdir(literal,{withFileTypes:true});
+ if(entries.length===0)return false;
+ const only=entries[0]!;
+ if(entries.length===1&&only.isDirectory()&&only.name.startsWith('agent-control-')){
+  const raw=await readSmallJson(join(literal,only.name,'installation.json')) as {project?:{id?:unknown};dataDirectory?:unknown}|null;
+  return raw?.project?.id===projectId&&raw.dataDirectory===dataDirectory;
+ }
+ return entries.every(entry=>entry.isFile()&&looseDump.test(entry.name));
+}
 
 /**
  * Hand-made backups next to the default destination (`<nome>-antes-*`, `<nome>-db-*`): only this installation's prefix,
- * only after `looseDays` and only when the dated backup just checked is newer. A folder holding dated or pending entries is
- * another installation's destination and is never touched; folders with another prefix never are either.
+ * only with recognizable content, only after `looseDays` and only when the dated backup just checked is newer. Names in
+ * `keep` (storage.backups.keepLoose) stay. Other names and other prefixes are never touched.
  */
-async function pruneLooseBackups(parent:string,looseDays:number,checkedAt:Date,projectId:string,dataDirectory:string):Promise<{removed:number;failed:number}>{
+async function pruneLooseBackups(parent:string,looseDays:number,keep:readonly string[],checkedAt:Date,projectId:string,dataDirectory:string):Promise<{removed:number;failed:number}>{
  const root=dirname(parent),prefix=basename(parent)+'-';
  // Older than looseDays before the checked backup, so that backup is always the newer one.
  const limit=checkedAt.getTime()-looseDays*24*60*60*1000;
@@ -273,15 +290,14 @@ async function pruneLooseBackups(parent:string,looseDays:number,checkedAt:Date,p
   try{if(await finishPending(root,marker,projectId,dataDirectory))removed++;}catch{failed++;}
  }
  for(const name of await readdir(root)){
-  if(!name.startsWith(prefix)||name.length===prefix.length||!looseName.test(name))continue;
+  if(!looseKinds.some(kind=>name.startsWith(prefix+kind)&&name.length>prefix.length+kind.length)||!looseName.test(name)||keep.includes(name))continue;
   const literal=await realChild(root,name,looseName);
   if(!literal)continue;
   try{
+   if(!await recognizedLoose(literal,projectId,dataDirectory))continue;
    const entry=await lstat(literal,{bigint:true});
-   const children=await readdir(literal);
-   if(children.length===0||children.some(child=>stampName.test(child)||pendingName.test(child)||child.startsWith('.removendo-')))continue;
    let newest=Number(entry.mtimeMs);
-   for(const child of children)newest=Math.max(newest,Number((await lstat(join(literal,child),{bigint:true})).mtimeMs));
+   for(const child of await readdir(literal))newest=Math.max(newest,Number((await lstat(join(literal,child),{bigint:true})).mtimeMs));
    if(newest>=limit)continue;
    if(await retire(root,literal,entry,projectId,dataDirectory))removed++;
    else failed++;
@@ -407,7 +423,7 @@ async function rotateLocked(input:{installationFile:string;config:Awaited<Return
  }
  const result=await pruneBackups(parent,keep,stamp,config.project.id,config.dataDirectory,options);
  if(isDefault){
-  const loose=await pruneLooseBackups(parent,config.storage.backups.looseDays,at,config.project.id,config.dataDirectory).catch(()=>({removed:0,failed:1}));
+  const loose=await pruneLooseBackups(parent,config.storage.backups.looseDays,config.storage.backups.keepLoose,at,config.project.id,config.dataDirectory).catch(()=>({removed:0,failed:1}));
   result.removed+=loose.removed;
   result.failed+=loose.failed;
  }
