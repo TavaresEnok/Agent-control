@@ -87,7 +87,10 @@ const realDocker: DockerRun = args => new Promise(done => execFile('docker', arg
   (error, stdout) => done({ok: !error, stdout: String(stdout)})));
 
 /** Imagens do AC pelo nome (as mesmas da retenção) ou por qualquer rótulo com.agent-control.*. */
-const acImageName = /^(?:ac-|localhost:5000\/ac-|ac-design|agent-control-|mcr\.microsoft\.com\/playwright|moby\/buildkit|registry:2|hadolint)/;
+const acImageName = /^(?:ac-|localhost:5000\/ac-|agent-control-)/;
+/** Imagens de terceiros que o AC usa, mas que outro projeto do mesmo daemon também pode usar: só contam fixadas ou em uso por contêiner do AC. */
+const sharedImageName = /^(?:mcr\.microsoft\.com\/playwright|moby\/buildkit|registry:2|hadolint)/;
+const acLabel = (keys: Iterable<string>) => [...keys].some(key => key.startsWith('com.agent-control.'));
 const EMPTY_LAYER = 'sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef';
 
 /** Tamanho de "1.2GB", "185.7MB", "0B" do `docker system df`. */
@@ -137,14 +140,31 @@ export function alignLayers(rootLayers: readonly string[], history: readonly {si
     ?? pair(rootLayers, valid.filter(entry => entry.size > 0 || layerInstruction.test(entry.createdBy)).map(entry => entry.size));
 }
 
-type DockerSpace = {images: number; containers: number; volumes: number; projects: Map<string, {images: number; volumes: number}>};
+type DockerSpace = {images: number; containers: number; volumes: number; projects: Map<string, {images: number; containers: number; volumes: number}>};
+const gbText = (bytes: number) => (bytes / GB).toFixed(2).replace('.', ',') + ' GB';
 
-/** Imagens (união de camadas), contêineres e volumes do AC. Volume é do AC pelo nome ac-*, pelo rótulo ou por estar montado num contêiner ac-*. */
+/** Imagens (união de camadas), contêineres e volumes do AC. Volume é do AC só pelo nome ac-* ou pelo rótulo com.agent-control.*:
+ * um anônimo sem rótulo não é atribuído, nem montado num contêiner ac-*, e só aparece nos problemas. */
 export async function measureDocker(docker: DockerRun, pins: Set<string>, projectIds: Set<string>, problems: string[]): Promise<DockerSpace> {
   const result: DockerSpace = {images: 0, containers: 0, volumes: 0, projects: new Map()};
-  const project = (id: string) => { let entry = result.projects.get(id); if (!entry) result.projects.set(id, entry = {images: 0, volumes: 0}); return entry; };
+  const project = (id: string) => { let entry = result.projects.get(id); if (!entry) result.projects.set(id, entry = {images: 0, containers: 0, volumes: 0}); return entry; };
   const ids = await docker(['image', 'ls', '-q', '--no-trunc']);
   if (!ids.ok) { problems.push('Docker indisponível: imagens, contêineres e volumes não foram medidos'); return result; }
+  // Imagens em uso por contêiner do AC (nome ac-* ou rótulo com.agent-control.*), para as imagens de terceiros.
+  const acInUse = new Set<string>();
+  const containerIds = await docker(['container', 'ls', '-a', '-q', '--no-trunc']);
+  const cids = containerIds.ok ? [...new Set(containerIds.stdout.split('\n').map(line => line.trim()).filter(Boolean))] : [];
+  let containersRead = containerIds.ok;
+  if (cids.length) {
+    const inspected = await docker(['container', 'inspect', ...cids]);
+    try {
+      for (const info of inspected.ok ? JSON.parse(inspected.stdout) : []) {
+        if (String(info?.Name ?? '').replace(/^\//, '').startsWith('ac-') || acLabel(Object.keys(info?.Config?.Labels ?? {}))) acInUse.add(String(info.Image));
+      }
+    } catch { containersRead = false; }
+    containersRead &&= inspected.ok;
+  }
+  if (!containersRead) problems.push('não li os contêineres do Docker (docker container inspect): imagens de terceiros sem pin ficaram fora da conta');
   const unique = [...new Set(ids.stdout.split('\n').map(line => line.trim()).filter(Boolean))];
   const images: ImageLayers[] = [];
   const unaligned: {id: string; owner: string; layers: string[]; size: number}[] = [];
@@ -156,10 +176,15 @@ export async function measureDocker(docker: DockerRun, pins: Set<string>, projec
     for (const info of list) {
       const labels: Record<string, string> = info?.Config?.Labels ?? {};
       const label = labels['com.agent-control.project'];
+      const tags: string[] = info.RepoTags ?? [];
+      const pinned = pins.has(info.Id) || (info.RepoDigests ?? []).some((digest: string) => pins.has(digest.slice(digest.indexOf('@') + 1)));
+      const shared = tags.some(tag => sharedImageName.test(tag)) || (info.RepoDigests ?? []).some((digest: string) => sharedImageName.test(digest));
       const owner = label && projectIds.has(label) ? label
-        : (info.RepoTags ?? []).some((tag: string) => acImageName.test(tag)) || Object.keys(labels).some(key => key.startsWith('com.agent-control.'))
-          || pins.has(info.Id) || (info.RepoDigests ?? []).some((digest: string) => pins.has(digest.slice(digest.indexOf('@') + 1))) ? 'ac' : undefined;
-      if (!owner) continue;
+        : tags.some(tag => acImageName.test(tag)) || acLabel(Object.keys(labels)) || pinned || (shared && acInUse.has(info.Id)) ? 'ac' : undefined;
+      if (!owner) {
+        if (shared) problems.push(`imagem de terceiros ${tags[0] ?? info.Id.slice(7, 19)} fora da conta: sem pin e sem contêiner do AC usando`);
+        continue;
+      }
       const history = await docker(['history', '--no-trunc', '--human=false', '--format', '{{json .}}', info.Id]);
       const entries = history.ok ? history.stdout.split('\n').filter(Boolean).flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } }).reverse() : [];
       const layers = alignLayers(info.RootFS?.Layers ?? [], entries.map(entry => ({size: Number(entry.Size), createdBy: String(entry.CreatedBy ?? '')})));
@@ -184,21 +209,27 @@ export async function measureDocker(docker: DockerRun, pins: Set<string>, projec
   let usage: {Containers?: any[]; Volumes?: any[]} = {};
   try { usage = df.ok ? JSON.parse(df.stdout) : {}; } catch { /* abaixo */ }
   if (!df.ok || !usage.Volumes) { problems.push('não li contêineres e volumes do Docker (docker system df -v)'); return result; }
+  const projectLabel = (labels: string) => /(?:^|,)com\.agent-control\.project=([^,]+)/.exec(labels)?.[1];
   const acMounts = new Set<string>();
   for (const container of usage.Containers ?? []) {
-    const names = String(container.Names ?? '');
-    if (!names.split(',').some(name => name.startsWith('ac-')) && !String(container.Labels ?? '').includes('com.agent-control.')) continue;
+    const names = String(container.Names ?? ''), labels = String(container.Labels ?? '');
+    const owner = projectLabel(labels);
+    if (owner && projectIds.has(owner)) { project(owner).containers += parseDockerSize(container.Size); continue; }
+    if (!names.split(',').some(name => name.startsWith('ac-')) && !labels.includes('com.agent-control.')) continue;
     result.containers += parseDockerSize(container.Size);
     for (const mount of String(container.Mounts ?? '').split(',')) if (mount && !mount.startsWith('/')) acMounts.add(mount);
   }
+  let anonymous = 0, anonymousBytes = 0;
   for (const volume of usage.Volumes) {
     const name = String(volume.Name ?? ''), labels = String(volume.Labels ?? '');
-    const label = /(?:^|,)com\.agent-control\.project=([^,]+)/.exec(labels)?.[1];
+    const label = projectLabel(labels);
     const bytes = parseDockerSize(volume.Size);
     if (label && projectIds.has(label)) project(label).volumes += bytes;
-    // Volume anônimo sem rótulo do AC e sem contêiner do AC não é atribuído ao AC.
-    else if (name.startsWith('ac-') || labels.includes('com.agent-control.') || acMounts.has(name)) result.volumes += bytes;
+    else if (name.startsWith('ac-') || labels.includes('com.agent-control.')) result.volumes += bytes;
+    // Sem rótulo do AC não se atribui, nem montado num contêiner ac-*: pode ser de um projeto examinado.
+    else if (acMounts.has(name)) { anonymous += 1; anonymousBytes += bytes; }
   }
+  if (anonymous) problems.push(`${anonymous} volume(s) sem nome nem rótulo do AC montado(s) em contêiner ac-* (${gbText(anonymousBytes)}): fora da conta`);
   return result;
 }
 
@@ -302,7 +333,7 @@ export async function measureSpace(config: SpaceSource, deps: SpaceDeps = {}): P
   category('imagens', 'Imagens Docker do AC (união das camadas)', {bytes: docker.images});
   category('conteineres', 'Contêineres do AC (camada gravável)', {bytes: docker.containers});
   category('volumes', 'Volumes Docker do AC', {bytes: docker.volumes});
-  for (const [id, entry] of docker.projects) { add(id, 'imagens', entry.images); add(id, 'volumes', entry.volumes); }
+  for (const [id, entry] of docker.projects) { add(id, 'imagens', entry.images); add(id, 'conteineres', entry.containers); add(id, 'volumes', entry.volumes); }
 
   const acBytes = categories.reduce((sum, item) => sum + item.bytes, 0);
   return {
@@ -325,7 +356,7 @@ export async function writeSpaceRecord(dataDirectory: string, report: SpaceRepor
   return path;
 }
 
-const gb = (bytes: number) => (bytes / GB).toFixed(2).replace('.', ',') + ' GB';
+const gb = gbText;
 const stateText: Record<SpaceState, string> = {ok: 'dentro do orçamento', alerta: 'em alerta', acima: 'ACIMA do orçamento'};
 
 export function renderSpaceReport(report: SpaceReport, options: {byProject?: boolean; installationFile?: string} = {}): string[] {

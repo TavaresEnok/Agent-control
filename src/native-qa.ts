@@ -1,7 +1,7 @@
 import {terminalWorkLockKey} from './native-execution-shared.ts';
 import {addSimpleWorktree,readableCheckout,removeSimpleWorktree} from './simple-worktree.ts';
 import {demuxDockerLogs,qaEvidenceLogLine,qaGitIssues,qaLogIssues,type QaEvidenceIssue} from './qa-evidence.ts';
-import {assertDiskSpaceForLaunch} from './personal-disk.ts';
+import {assertDiskSpaceForLaunch,launchDataDirectory} from './personal-disk.ts';
 import {envMatches} from './native-execution-docker-observation.ts';
 import {setQaSnapshotPermissions} from './native-qa-snapshot.ts';
 import {ReconciliationHistory} from './reconciliation-history.ts';
@@ -181,7 +181,7 @@ export class NativeQa{
    if(!eligible)throw new Refusal('NATIVE_QA_GRANT_MISMATCH');return false;
   });
   if(previous)return this.reconcile(principal,authority,stage.id);
-  await assertDiskSpaceForLaunch([...(this.ledger.launchVolumes??[]),this.root]);
+  await assertDiskSpaceForLaunch([...(this.ledger.launchVolumes??[]),this.root],undefined,launchDataDirectory(this.ledger));
   if(!(await this.docker.imagePresent(this.contract.image))){
    const receipt={executionStarted:false,jobId:stage.id,containerId:null,synthetic:false,modelInference:false,reason:'native_image_missing'};
    await this.ledger.tx(async c=>{await this.authorize(c,principal,authority,intentId,true);

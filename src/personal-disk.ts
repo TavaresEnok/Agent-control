@@ -86,22 +86,30 @@ export function launchVolumesOf(source: {launchVolumes?: readonly string[]} | un
   return source?.launchVolumes && source.launchVolumes.length > 0 ? source.launchVolumes : [dataDirectory];
 }
 
-/** Gate for a new worker or exam only. Replays and reconciliation of existing jobs must not call it. */
-export async function assertDiskSpaceForLaunch(paths: string | readonly string[], measure: (paths: string | readonly string[]) => Promise<number> = diskUsedPercent): Promise<void> {
+/** The data directory behind a Ledger's volumes: installationVolumes lists it first. Undefined when the Ledger carries none. */
+export function launchDataDirectory(source: {launchVolumes?: readonly string[]} | undefined): string | undefined {
+  return source?.launchVolumes?.[0];
+}
+
+/** Gate for a new worker or exam only. Replays and reconciliation of existing jobs must not call it.
+ * `dataDirectory` is where personal:espaco records its reading; without it the budget is not checked and the gate warns. */
+export async function assertDiskSpaceForLaunch(paths: string | readonly string[], measure: (paths: string | readonly string[]) => Promise<number> = diskUsedPercent, dataDirectory?: string): Promise<void> {
   // Only configured volumes are measured. A supervisor without a host root (a unit fixture) has nothing to fill.
   const known = (typeof paths === 'string' ? [paths] : paths).filter((path): path is string => typeof path === 'string' && path.length > 0);
   if (!known.length) return;
   const used = await measure(known);
   if (!Number.isFinite(used)) throw new Refusal('PERSONAL_DISK_UNAVAILABLE', 503);
   if (used >= DISK_BLOCK_PERCENT) throw new Refusal('PERSONAL_DISK_FULL', 503);
-  // The first volume is the data directory (installationVolumes, launchVolumesOf), where personal:espaco records its last reading.
-  await assertSpaceBudgetForLaunch(known[0]!);
+  if (dataDirectory) await assertSpaceBudgetForLaunch(dataDirectory);
+  else warnOncePerHour('', 'Orçamento de espaço do Agent Control não conferido: este lançamento não conhece a pasta de dados da instalação.');
 }
 
 /** Last reading of `npm run personal:espaco`, in the data directory. */
 export const SPACE_RECORD_FILE = 'space-last.json';
 /** An older reading no longer blocks: the gate does not measure, so it only trusts a recent figure. */
 export const SPACE_RECORD_MAX_AGE_MS = 15 * 60 * 1000;
+/** The watch (every 2 min) measures again once the reading is this old, so a running installation always has a valid one. */
+export const SPACE_REFRESH_MS = 10 * 60 * 1000;
 const GB = 1e9;
 
 export type SpaceVerdict =
@@ -148,7 +156,17 @@ export class SpaceBudgetRefusal extends Refusal {
   constructor(readonly detail: string) { super('PERSONAL_SPACE_BUDGET_EXCEEDED', 503); }
 }
 
-const staleWarned = new Set<string>();
+const lastWarned = new Map<string, number>();
+const hourMs = 60 * 60 * 1000;
+/** Repeats a warning at most once an hour per key, also in a long-lived server. */
+function warnOncePerHour(key: string, text: string, now = Date.now()) {
+  const last = lastWarned.get(key);
+  if (last !== undefined && now - last < hourMs && now >= last) return;
+  lastWarned.set(key, now);
+  console.warn(text);
+}
+
+const unchecked: Record<string, string> = {ausente: 'ausente', vencida: 'vencida', ilegivel: 'ilegível'};
 /** Gate for a new worker or exam: a recent reading above the budget refuses. A missing, stale or unreadable reading only warns. */
 export async function assertSpaceBudgetForLaunch(dataDirectory: string, now = Date.now()): Promise<SpaceVerdict> {
   const verdict = await readSpaceVerdict(dataDirectory, now);
@@ -157,9 +175,6 @@ export async function assertSpaceBudgetForLaunch(dataDirectory: string, now = Da
     console.error(refusal.detail);
     throw refusal;
   }
-  if ((verdict.state === 'vencida' || verdict.state === 'ilegivel') && !staleWarned.has(dataDirectory)) {
-    staleWarned.add(dataDirectory);
-    console.warn(`Medição de espaço ${verdict.state === 'vencida' ? 'vencida' : 'ilegível'} em ${join(dataDirectory, SPACE_RECORD_FILE)}: o orçamento do Agent Control não está sendo conferido. Rode npm run personal:espaco -- <instalação.json>.`);
-  }
+  if (verdict.state in unchecked) warnOncePerHour(dataDirectory, `Medição de espaço ${unchecked[verdict.state]} em ${join(dataDirectory, SPACE_RECORD_FILE)}: o orçamento do Agent Control não está sendo conferido. Rode npm run personal:espaco -- <instalação.json>.`, now);
   return verdict;
 }

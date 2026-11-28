@@ -11,7 +11,7 @@ import {canonical,digest,Refusal,type Authority} from './contracts.ts';
 import {NativeExecutionSupervisor,NativeExecutionRequest} from './native-execution-supervisor.ts';
 import {withGrantLaunchLock,type NativeExecutionOutcome,type NativeExecutionRecovery} from './native-execution-shared.ts';
 import {NativeArtifactIdentity} from './native-artifact-finalizer.ts';
-import {assertDiskSpaceForLaunch} from './personal-disk.ts';
+import {assertDiskSpaceForLaunch,launchDataDirectory} from './personal-disk.ts';
 import {assertModelAllowed} from './model-policy.ts';
 import {requireProjectEnvironmentLaunch} from './project-environments.ts';
 import {removeSimpleWorktree,releaseIdleSharedWorktrees} from './simple-worktree.ts';
@@ -76,7 +76,7 @@ export class PersonalExecutionSupervisor extends NativeExecutionSupervisor{
    const concurrent=await this.hostRow(input.jobId);
    if(concurrent)return false;
    if(!this.active||!this.config.provider||input.model||input.effort)throw new Refusal('NATIVE_EXECUTION_NOT_ELIGIBLE');
-   await assertDiskSpaceForLaunch([...(this.ledger.launchVolumes??[]),this.config.hostRoot]);
+   await assertDiskSpaceForLaunch([...(this.ledger.launchVolumes??[]),this.config.hostRoot],undefined,launchDataDirectory(this.ledger));
    await this.diskGuard?.assertAdmission();
    signal?.throwIfAborted();
    const p=this.paths(input.jobId);

@@ -728,7 +728,7 @@ export async function beginPersonalVerification(input: PersonalVerificationInput
   const startedMs = Date.now();
   const plan = input.url !== undefined ? dynamicScanPlan(input.url) : undefined;
   const ready = requireReady(input);
-  await assertDiskSpaceForLaunch(launchVolumesOf(ready.ledger, ready.dataDirectory));
+  await assertDiskSpaceForLaunch(launchVolumesOf(ready.ledger, ready.dataDirectory), undefined, ready.dataDirectory);
   await assertVerificationAvailable(ready);
   const id = randomUUID();
   const networkRunner = input.networkRunner ?? defaultNetworkRunner;

@@ -5,12 +5,13 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
 import {Refusal} from '../src/contracts.ts';
-import type {Installation} from '../src/installation.ts';
-import {gatewayDownNotice,gatewayUpNotice,imagesRebuiltNotice,personalWatchImages,runPersonalWatch} from '../src/personal-watch.ts';
+import {loadInstallation, type Installation} from '../src/installation.ts';
+import {readSpaceVerdict,SPACE_RECORD_MAX_AGE_MS,SPACE_REFRESH_MS} from '../src/personal-disk.ts';
+import {defaultSpace,gatewayDownNotice,gatewayUpNotice,imagesRebuiltNotice,personalWatchImages,runPersonalWatch} from '../src/personal-watch.ts';
 
 const digest=(char:string)=>'sha256:'+char.repeat(64);
 /** No journal, a roomy disk and no login problem, unless a test says otherwise. */
-const quiet={retention:async()=>{},recentLog:async()=>'',diskUsedPercent:async()=>50,logins:async()=>[]};
+const quiet={retention:async()=>{},recentLog:async()=>'',diskUsedPercent:async()=>50,logins:async()=>[],space:async()=>[]};
 
 async function fixture(activation:'personal'|'locked'='personal'){
  const root=await mkdtemp(join(tmpdir(),'personal-watch-'));
@@ -162,7 +163,7 @@ test('repeated errors, a full disk and an expiring login notify at their own pac
  const sent:string[]=[];
  let now=new Date('2026-11-16T12:00:00Z'),log='',disk=50,logins:{key:string;text:string;repeatMs:number}[]=[];
  const run=()=>runPersonalWatch([env.file],{retention:async()=>{},now:()=>now,probe:async()=>true,notify:async(_dir,body)=>{sent.push(body);},images:()=>[],
-  recentLog:async()=>log,diskUsedPercent:async()=>disk,logins:async()=>logins});
+  recentLog:async()=>log,diskUsedPercent:async()=>disk,logins:async()=>logins,space:async()=>[]});
  try{
   const line='RECONCILIATION_FAILED NATIVE_JOB_RECONCILIATION_FAILED: d766dbd8-ebb9-4eb1-9c66-4445bdfd4481 NATIVE_EXECUTION_SUPERVISOR_UNAVAILABLE';
   log=Array(9).fill(line).join('\n');
@@ -186,7 +187,7 @@ test('repeated errors, a full disk and an expiring login notify at their own pac
   logins=[{key:'login:def',text:'O Grok está sem login válido.',repeatMs:24*3600_000}];
   let failing=true;
   const flaky=()=>runPersonalWatch([env.file],{retention:async()=>{},now:()=>now,probe:async()=>true,notify:async(_dir,body)=>{if(failing)throw new Error('push down');sent.push(body);},images:()=>[],
-   recentLog:async()=>'',diskUsedPercent:async()=>50,logins:async()=>logins});
+   recentLog:async()=>'',diskUsedPercent:async()=>50,logins:async()=>logins,space:async()=>[]});
   assert.equal(await flaky(),'watch gateway=up failures=0 images=ok');
   failing=false;
   assert.equal(await flaky(),'watch gateway=up failures=0 images=ok notice=login');
@@ -259,5 +260,36 @@ test('automatic retention defaults to preview and only apply enables deletion',a
   const body=JSON.parse(await readFile(env.file,'utf8'));
   for(const automatic of ['off','preview','apply']){body.retention={automatic};await writeFile(env.file,JSON.stringify(body));await invoke();}
   assert.deepEqual(observed,[false,false,true]);
+ }finally{await rm(env.root,{recursive:true,force:true});}
+});
+
+test('o vigia mede o espaço de novo quando a medição passa de 10 min e avisa o orçamento acima',async()=>{
+ const env=await fixture();
+ try{
+  const installation=await loadInstallation(env.file);
+  let now=new Date('2026-11-28T12:00:00Z'),measured=0,acBytes=25e9;
+  const measure=async()=>{measured+=1;return {schemaVersion:1 as const,measuredAt:now.toISOString(),budgetGB:20,alertRatio:0.9,acBytes,state:'acima' as const,categories:[],projects:[],problems:[]};};
+  // Sem medição: mede, grava space-last.json e avisa com a retenção.
+  let notices=await defaultSpace(installation,env.file,now,measure);
+  assert.equal(measured,1);
+  assert.match(notices[0]!.text,/25,0 GB de 20,0 GB.*bloqueados.*retencao-automatica/);
+  assert.equal((await readSpaceVerdict(env.data,now.getTime())).state,'acima');
+  // Medição recente: não mede de novo.
+  now=new Date(now.getTime()+5*60_000);
+  await defaultSpace(installation,env.file,now,measure);
+  assert.equal(measured,1);
+  // Passou do intervalo, antes de vencer para o portão: mede de novo.
+  now=new Date(now.getTime()+SPACE_REFRESH_MS);
+  acBytes=1e9;
+  notices=await defaultSpace(installation,env.file,now,measure);
+  assert.equal(measured,2);
+  assert.deepEqual(notices,[]);
+  assert.ok(SPACE_REFRESH_MS+2*60_000<SPACE_RECORD_MAX_AGE_MS);
+  // O aviso de espaço entra na lista de saúde do vigia.
+  const sent:string[]=[];
+  const status=await runPersonalWatch([env.file],{...quiet,probe:async()=>true,images:()=>[],notify:async(_dir,body)=>{sent.push(body);},
+   space:async()=>[{key:'space:acima',text:'O Agent Control ocupa 25,0 GB de 20,0 GB do orçamento.',repeatMs:3600_000}]});
+  assert.match(status,/notice=space/);
+  assert.deepEqual(sent,['O Agent Control ocupa 25,0 GB de 20,0 GB do orçamento.']);
  }finally{await rm(env.root,{recursive:true,force:true});}
 });

@@ -1,4 +1,4 @@
-import {installationVolumes} from './personal-disk.ts';
+import {installationVolumes,SpaceBudgetRefusal} from './personal-disk.ts';
 import {execFile} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {resolve} from 'node:path';
@@ -39,6 +39,7 @@ import {failAbandonedVerifyContext} from './verify-abandon.ts';
 const moduleActions = '[--esperar-cota | --corrigir <runId> <ACH-001...> | --medir-correcao <runId> | --reverificar <runId> <ACH-001...> | --descartar <runId>]';
 const messages: Record<string, string> = {
   PERSONAL_DISK_FULL: 'Disco em 95% ou mais. Libere espaço antes de iniciar outro exame.',
+  PERSONAL_SPACE_BUDGET_EXCEEDED: 'O Agent Control está acima do orçamento de espaço. Rode a retenção com npm run personal:maintenance -- <instalação.json> --retencao-automatica (prévia e depois --aplicar) e meça de novo com npm run personal:espaco -- <instalação.json>.',
   VERIFY_USAGE: `Uso: npm run personal:<modulo> -- <instalação.json> <projeto> ${moduleActions}`,
   PERSONAL_ACTIVATION_REQUIRED: 'O módulo de verificação só roda numa instalação pessoal.',
   NOT_FOUND: 'Projeto não encontrado.',
@@ -128,6 +129,7 @@ const recheckGuidance: Record<string, string> = {
 export function moduleCliFailureText(error: unknown, module?: VerificationModule): string {
   const code = error instanceof Refusal ? error.code : error instanceof Error ? error.message : '';
   if (code === 'MIGRATIONS_PENDING') return `${code}. ${migrationsPendingText}`;
+  if (error instanceof SpaceBudgetRefusal) return error.detail;
   const incomplete = (error as {examIncomplete?: ExamIncomplete} | null)?.examIncomplete;
   if (code === 'MODULE_EXAM_INCOMPLETE' && incomplete) {
     return `O modelo não examinou ${incomplete.unjudged} de ${incomplete.total} arquivos (código ${incomplete.code}). Relatório parcial em ${incomplete.directory}.`;

@@ -14,6 +14,7 @@ const docker: DockerRun = async args => {
     ['sha256:' + '1'.repeat(64)]: {tag: 'ac-module-qa:x', layers: [[layer(1), 300e6], [layer(2), 50e6]]},
     ['sha256:' + '2'.repeat(64)]: {tag: 'ac-module-banco:x', layers: [[layer(1), 300e6], [layer(3), 20e6]]},
   };
+  if (args[0] === 'container' && args[1] === 'ls') return {ok: true, stdout: ''};
   if (args[0] === 'image' && args[1] === 'ls') return {ok: true, stdout: Object.keys(images).join('\n')};
   if (args[0] === 'image' && args[1] === 'inspect') return {ok: true, stdout: JSON.stringify(args.slice(2).map(id => ({Id: id, RepoTags: [images[id]!.tag], RepoDigests: [],
     Size: images[id]!.layers.reduce((sum, [, n]) => sum + n, 0), Config: {Labels: null}, RootFS: {Layers: images[id]!.layers.map(([l]) => l)}})))};
@@ -52,10 +53,12 @@ test('aceitação: instalação sintética sem projetos fica dentro do orçament
     assert.ok(saved.acBytes <= saved.budgetGB * 1e9);
     // A base compartilhada conta uma vez: 300 + 50 + 20 MB, não 670.
     assert.equal(saved.categories.find(item => item.key === 'imagens')!.bytes, 370e6);
-    assert.equal(saved.categories.find(item => item.key === 'volumes')!.bytes, 100e6);
+    // O volume anônimo 'pg' não tem rótulo do AC: fica fora, mesmo montado em ac-personal-pg, e aparece como aviso.
+    assert.equal(saved.categories.find(item => item.key === 'volumes')!.bytes, 0);
+    assert.ok(saved.problems.some(problem => /volume\(s\) sem nome nem rótulo do AC/.test(problem)), saved.problems.join('; '));
     assert.equal(saved.projects[0]!.bytes, 0);
     assert.equal((await readSpaceVerdict(data)).state, 'ok');
-    await assertDiskSpaceForLaunch([data], async () => 50);
+    await assertDiskSpaceForLaunch([data], async () => 50, data);
     printed.length = 0;
     assert.equal(await runSpaceCommand([file, '--json'], deps), 0);
     assert.equal(JSON.parse(printed.join('\n')).schemaVersion, 1);
