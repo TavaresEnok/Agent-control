@@ -29,7 +29,9 @@ export const StorageConfig = z.object({
     dedupe: z.boolean().default(true),
     /** Backups avulsos com o prefixo da instalação saem depois disso, se houver um datado mais novo aprovado no restore-check. */
     looseDays: z.number().int().min(1).max(365).default(7),
-  }).strict().default({dedupe: true, looseDays: 7}),
+    /** Nomes de backups avulsos que nunca saem (por exemplo o ponto de volta de imagens ainda fixadas). */
+    keepLoose: z.array(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$/)).max(50).default([]),
+  }).strict().default({dedupe: true, looseDays: 7, keepLoose: []}),
 }).strict();
 
 export type StorageSettings = z.infer<typeof StorageConfig>;

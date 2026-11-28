@@ -1,7 +1,7 @@
 import {execFile,spawnSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {chmod,lstat,mkdir,open,readdir,readFile,realpath,rename,rm,unlink,writeFile} from 'node:fs/promises';
-import {join,relative,resolve,sep} from 'node:path';
+import {basename,dirname,join,relative,resolve,sep} from 'node:path';
 import {promisify} from 'node:util';
 import {releaseRegisteredDirectory} from './native-work-retention.ts';
 import {Refusal} from './contracts.ts';
@@ -222,15 +222,88 @@ async function pruneBackups(parent:string,keep:number,newName:string,projectId:s
   const literal=await realChild(root,name,stampName);
   const entry=literal&&await recognizedBackup(literal,projectId,dataDirectory,options);
   if(!literal||!entry)continue;
-  const id=randomUUID(),marker=`.retencao-${id}.json`;
-  try{
-   await writeFile(join(root,marker),JSON.stringify({projectId,dataDirectory,dev:String(entry.dev),ino:String(entry.ino)}),{flag:'wx',mode:0o600});
-   await rename(literal,join(root,'.removendo-'+id));
-   if(await finishPending(root,marker,projectId,dataDirectory))removed++;
-   else failed++;
-  }catch{failed+=1;}
+  if(await retire(root,literal,entry,projectId,dataDirectory))removed++;
+  else failed++;
  }
  return {kept:keepSet.size,removed,failed};
+}
+
+/** Rename aside, with the identity written first, then empty it under the removal guard. False when it could not finish. */
+async function retire(root:string,literal:string,entry:{dev:bigint;ino:bigint},projectId:string,dataDirectory:string){
+ const id=randomUUID(),marker=`.retencao-${id}.json`;
+ try{
+  await writeFile(join(root,marker),JSON.stringify({projectId,dataDirectory,dev:String(entry.dev),ino:String(entry.ino)}),{flag:'wx',mode:0o600});
+  await rename(literal,join(root,'.removendo-'+id));
+  return await finishPending(root,marker,projectId,dataDirectory);
+ }catch{return false;}
+}
+
+/** Newest dated backup of this installation in `parent`, by its layout only: dedupe compares every byte before linking. */
+async function latestBackupFolder(parent:string,projectId:string,dataDirectory:string){
+ const root=await realpath(parent);
+ const names=(await readdir(root)).filter(name=>stampName.test(name)).sort().reverse();
+ for(const name of names){
+  const literal=await realChild(root,name,stampName);
+  if(!literal)continue;
+  try{
+   const entries=await readdir(literal,{withFileTypes:true});
+   const entry=entries[0];
+   if(entries.length!==1||!entry?.isDirectory()||!entry.name.startsWith('agent-control-'))continue;
+   const raw=await readSmallJson(join(literal,entry.name,'installation.json')) as {project?:{id?:unknown};dataDirectory?:unknown}|null;
+   if(raw?.project?.id===projectId&&raw.dataDirectory===dataDirectory)return join(literal,entry.name);
+  }catch{/* not a backup of this installation */}
+ }
+ return undefined;
+}
+
+const looseName=/^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$/;
+const looseKinds=['antes-','db-'];
+const looseDump=/^[A-Za-z0-9][A-Za-z0-9._-]{0,200}\.(?:dump|sql|sql\.gz)$/;
+
+/**
+ * What a hand-made backup must hold to be recognized: one `agent-control-*` copy whose installation.json names this
+ * project and data directory, or only database dumps. Anything else (keys, notes, another tool's files) is never taken.
+ */
+async function recognizedLoose(literal:string,projectId:string,dataDirectory:string){
+ const entries=await readdir(literal,{withFileTypes:true});
+ if(entries.length===0)return false;
+ const only=entries[0]!;
+ if(entries.length===1&&only.isDirectory()&&only.name.startsWith('agent-control-')){
+  const raw=await readSmallJson(join(literal,only.name,'installation.json')) as {project?:{id?:unknown};dataDirectory?:unknown}|null;
+  return raw?.project?.id===projectId&&raw.dataDirectory===dataDirectory;
+ }
+ return entries.every(entry=>entry.isFile()&&looseDump.test(entry.name));
+}
+
+/**
+ * Hand-made backups next to the default destination (`<nome>-antes-*`, `<nome>-db-*`): only this installation's prefix,
+ * only with recognizable content, only after `looseDays` and only when the dated backup just checked is newer. Names in
+ * `keep` (storage.backups.keepLoose) stay. Other names and other prefixes are never touched.
+ */
+async function pruneLooseBackups(parent:string,looseDays:number,keep:readonly string[],checkedAt:Date,projectId:string,dataDirectory:string):Promise<{removed:number;failed:number}>{
+ const root=dirname(parent),prefix=basename(parent)+'-';
+ // Older than looseDays before the checked backup, so that backup is always the newer one.
+ const limit=checkedAt.getTime()-looseDays*24*60*60*1000;
+ let removed=0,failed=0;
+ for(const marker of await readdir(root)){
+  if(!pendingName.test(marker))continue;
+  try{if(await finishPending(root,marker,projectId,dataDirectory))removed++;}catch{failed++;}
+ }
+ for(const name of await readdir(root)){
+  if(!looseKinds.some(kind=>name.startsWith(prefix+kind)&&name.length>prefix.length+kind.length)||!looseName.test(name)||keep.includes(name))continue;
+  const literal=await realChild(root,name,looseName);
+  if(!literal)continue;
+  try{
+   if(!await recognizedLoose(literal,projectId,dataDirectory))continue;
+   const entry=await lstat(literal,{bigint:true});
+   let newest=Number(entry.mtimeMs);
+   for(const child of await readdir(literal))newest=Math.max(newest,Number((await lstat(join(literal,child),{bigint:true})).mtimeMs));
+   if(newest>=limit)continue;
+   if(await retire(root,literal,entry,projectId,dataDirectory))removed++;
+   else failed++;
+  }catch{failed++;}
+ }
+ return {removed,failed};
 }
 
 const stateText={
@@ -311,7 +384,8 @@ async function rotateLocked(input:{installationFile:string;config:Awaited<Return
   if(error instanceof Refusal)throw error;
   if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;
  }
- const lines=await runPersonalBackup([installationFile,dated],options);
+ const previous=config.storage.backups.dedupe?await latestBackupFolder(parent,config.project.id,config.dataDirectory).catch(()=>undefined):undefined;
+ const lines=await runPersonalBackup([installationFile,dated],{...options,linkFrom:previous});
  const copied=lines[0]?.startsWith('Backup em ')?lines[0].slice('Backup em '.length):'';
  const notify=options.notify??defaultNotify;
  const rsync=options.rsync??defaultRsync;
@@ -348,6 +422,11 @@ async function rotateLocked(input:{installationFile:string;config:Awaited<Return
   lines.push('Cópia externa feita.');
  }
  const result=await pruneBackups(parent,keep,stamp,config.project.id,config.dataDirectory,options);
+ if(isDefault){
+  const loose=await pruneLooseBackups(parent,config.storage.backups.looseDays,config.storage.backups.keepLoose,at,config.project.id,config.dataDirectory).catch(()=>({removed:0,failed:1}));
+  result.removed+=loose.removed;
+  result.failed+=loose.failed;
+ }
  const degradedRounds=result.failed>0?await previousDegradedRounds(config.dataDirectory)+1:0;
  const status:BackupRotateStatus={copy:'ok',offsite:destination?'ok':'not-configured',retention:result.failed>0?'degraded':'ok',removed:result.removed,failed:result.failed,degradedRounds};
  await publishStatus(config.dataDirectory,at,status);

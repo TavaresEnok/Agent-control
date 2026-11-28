@@ -55,7 +55,8 @@ function overlaps(left: string, right: string): boolean {
 }
 
 /** Separate step, with network, that only downloads vulnerability databases. */
-export function verifyDatabaseArguments({image, output}: {image: string; output: string}): readonly string[] {
+/** `javaDb: false` asks the fetch script to skip the Trivy Java database (about 1.5 GB); an older image ignores it and still downloads it. */
+export function verifyDatabaseArguments({image, output, javaDb = true}: {image: string; output: string; javaDb?: boolean}): readonly string[] {
   assertPinnedImage(image);
   const databases = assertHostPath(output);
   return [
@@ -68,6 +69,7 @@ export function verifyDatabaseArguments({image, output}: {image: string; output:
     '--tmpfs', '/tmp:rw,exec,nosuid,nodev,mode=1777,size=1g',
     '--env', 'HOME=/tmp',
     '--env', 'TMPDIR=/tmp',
+    ...(javaDb ? [] : ['--env', 'AC_VERIFY_JAVA_DB=0']),
     '--workdir', '/databases',
     '--mount', `type=bind,src=${databases},dst=/databases`,
     '--entrypoint', '/usr/local/bin/verify-db-fetch.sh',

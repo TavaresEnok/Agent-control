@@ -1,5 +1,5 @@
 import {availableSimpleToolsImage} from './simple-tools-image.ts';
-import {spawn as spawnProcess} from 'node:child_process';
+import {execFile, spawn as spawnProcess} from 'node:child_process';
 import {createHash, randomUUID} from 'node:crypto';
 import {constants, createReadStream} from 'node:fs';
 import {chmod, link, lstat, mkdir, open, readdir, readFile, rename, rm, unlink, writeFile} from 'node:fs/promises';
@@ -7,6 +7,7 @@ import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {Refusal} from './contracts.ts';
 import {VERIFY_RUNTIME_BIN, verifyDatabaseArguments} from './verify-image.ts';
 import {diskUsedPercent} from './personal-disk.ts';
+import {promisify} from 'node:util';
 
 export type VerifyDatabaseSnapshot = {
   directory: string;
@@ -20,8 +21,12 @@ export type RefreshVerifyDatabasesInput = {
   image?: string;
   spawn?: (args: readonly string[]) => Promise<number>;
   now?: Date;
-  /** Disk use of the data directory; tests replace it. Undefined keeps the normal retention of two recent stamps. */
+  /** Disk use of the data directory; tests replace it. Undefined keeps the normal retention (`keep`). */
   usedDiskPercent?: () => Promise<number | undefined>;
+  /** Stamps kept after publishing, the new one included (storage.verifyDb.keep). Older ones go in the same run. */
+  keep?: number;
+  /** False skips the Trivy Java database (storage.verifyDb.javaDb, see verifyJavaDatabaseWanted). */
+  javaDb?: boolean;
 };
 
 type ManifestFile = {path: string; sha256: string; bytes: number};
@@ -41,6 +46,8 @@ const DISCARD_NAME = /^\.descarte-(\d{8}-\d{6}(?:-\d+)?)-[0-9a-f-]{36}$/;
 const PRUNE_LOCK = '.poda.lock';
 const PRUNE_LOCK_STALE_MS = 60 * 60 * 1000;
 const CLAIM_MAX_BYTES = 8192;
+/** storage.verifyDb.keep default: the stamp just published (or the newest) plus current.json and the in-use ones. */
+const DEFAULT_KEEP = 1;
 
 type StampClaim = {stamp: string; pid: number; claimedAt: string};
 
@@ -296,7 +303,7 @@ async function publishStamp(
   image: string,
   fetchedAt: string,
 ): Promise<VerifyDatabaseSnapshot> {
-  const args = verifyDatabaseArguments({image, output: stamp});
+  const args = verifyDatabaseArguments({image, output: stamp, javaDb: input.javaDb !== false});
   const run = input.spawn ?? ((command) => runCommand(command, 'inherit', FETCH_TIMEOUT_MS));
   let code = 1;
   try {
@@ -314,6 +321,10 @@ async function publishStamp(
     // granted a+rX on those. Listing below is what proves the stamp is readable.
     await runCommand(['chmod', '-R', 'a+rX', stamp], 'ignore', DISCARD_TIMEOUT_MS);
     const files = await listRegularFiles(stamp);
+    if (input.javaDb === false && files.some((file) => file.path === JAVA_DB_FILE)) {
+      // The pinned image predates AC_VERIFY_JAVA_DB: the stamp is complete, only the saving did not happen.
+      console.error(JSON.stringify({event: 'VERIFY_DB_JAVA_SKIP_IGNORED'}));
+    }
     const manifestBytes = Buffer.from(JSON.stringify({fetchedAt, files}, null, 2) + '\n', 'utf8');
     await writeFile(join(stamp, 'manifest.json'), manifestBytes, {mode: 0o644, flag: 'wx'});
     snapshot = {
@@ -329,12 +340,47 @@ async function publishStamp(
   }
   // current.json is already published. A stubborn old stamp must not undo it or fail the refresh.
   try {
-    await pruneVerifyDatabaseStamps(root, image, undefined, {keepRecent: verifyDatabaseKeepRecent(await (input.usedDiskPercent ?? (() => measuredDiskPercent(root)))())});
+    await pruneVerifyDatabaseStamps(root, image, undefined, {keepRecent: verifyDatabaseKeepRecent(await (input.usedDiskPercent ?? (() => measuredDiskPercent(root)))(), input.keep)});
   } catch {
     console.error(JSON.stringify({event: 'VERIFY_DB_PRUNE_FAILED'}));
   }
   if (!snapshot) throw new Error('VERIFY_DB_FETCH_FAILED');
   return snapshot;
+}
+
+/** The Trivy Java database inside a stamp; verify-entrypoint.sh looks for the same file. */
+const JAVA_DB_FILE = 'trivy/java-db/trivy-java.db';
+
+/** True when the stamp carries the Trivy Java database. */
+export async function verifyDatabaseStampHasJava(stamp: string): Promise<boolean> {
+  return (await lstat(join(stamp, JAVA_DB_FILE)).catch(() => null))?.isFile() === true;
+}
+
+/** What makes a project "Java" for the Trivy Java database: Maven or Gradle builds, or a tracked archive. */
+const JAVA_PATHSPECS = [':(glob)**/pom.xml', ':(glob)**/build.gradle*', ':(glob)**/*.jar'];
+
+/** True when git lists a Java file in the repository. Throws when git cannot answer. */
+export async function repositoryHasJava(repository: string): Promise<boolean> {
+  const {stdout} = await promisify(execFile)('/usr/bin/git', [
+    '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-C', repository, 'ls-files', '-z', '--', ...JAVA_PATHSPECS,
+  ], {encoding: 'utf8', timeout: 30_000, maxBuffer: 16 * 1024 * 1024, env: {PATH: '/usr/bin:/bin', GIT_CONFIG_NOSYSTEM: '1', HOME: '/nonexistent'}});
+  return stdout.length > 0;
+}
+
+/**
+ * storage.verifyDb.javaDb: `always` and `never` decide alone; `auto` fetches the Java database only when some project of
+ * the installation has Java. A repository git cannot read counts as Java, so an error never takes coverage away.
+ */
+export async function verifyJavaDatabaseWanted(
+  mode: 'auto' | 'always' | 'never',
+  repositories: readonly string[],
+  hasJava: (repository: string) => Promise<boolean> = repositoryHasJava,
+): Promise<boolean> {
+  if (mode !== 'auto') return mode === 'always';
+  for (const repository of new Set(repositories)) {
+    if (await hasJava(repository).catch(() => true /* unknown: keep the Java database */)) return true;
+  }
+  return false;
 }
 
 /** The published stamp, or null when nothing has been published yet. */
@@ -577,8 +623,9 @@ export const VERIFY_DB_PRESSURE_PERCENT = 90;
  * Recent stamps kept besides the current one and the claimed ones (a run's claim, or the claim of a download in progress):
  * two normally, none under disk pressure.
  */
-export function verifyDatabaseKeepRecent(usedPercent: number | undefined): 0 | 2 {
-  return usedPercent !== undefined && Number.isFinite(usedPercent) && usedPercent >= VERIFY_DB_PRESSURE_PERCENT ? 0 : 2;
+export function verifyDatabaseKeepRecent(usedPercent: number | undefined, keep = DEFAULT_KEEP): number {
+  if (usedPercent !== undefined && Number.isFinite(usedPercent) && usedPercent >= VERIFY_DB_PRESSURE_PERCENT) return 0;
+  return Number.isInteger(keep) && keep >= 1 && keep <= 4 ? keep : DEFAULT_KEEP;
 }
 
 /** Disk use of the data directory, or undefined when it cannot be measured (then the normal retention applies). */
@@ -591,7 +638,7 @@ async function measuredDiskPercent(root: string): Promise<number | undefined> {
 }
 
 /** Stamps that a prune with `keepRecent` would discard. Null when current.json or the claims cannot be read: nothing is discarded. */
-export async function verifyDatabaseStampsToDiscard(dataDirectory: string, keepRecent: 0 | 2 = 2, mutate = true): Promise<string[] | null> {
+export async function verifyDatabaseStampsToDiscard(dataDirectory: string, keepRecent = DEFAULT_KEEP, mutate = true): Promise<string[] | null> {
   const root = assertDataDirectory(dataDirectory);
   const parent = join(root, 'verify-db');
   const names = await listStampNames(parent);
@@ -624,7 +671,7 @@ export async function verifyDatabaseStampsToDiscard(dataDirectory: string, keepR
 }
 
 /**
- * Delete stamp directories except the `keepRecent` newest names (two by default), the one current.json points at, and
+ * Delete stamp directories except the `keepRecent` newest names (storage.verifyDb.keep, one by default), the one current.json points at, and
  * any stamp claimed by a live pid. Names sort chronologically. A claim expires when process.kill(pid, 0) fails with
  * ESRCH; prune may remove that file. A failure to delete one stamp is logged and does not stop the others.
  * Null when current.json or a claim cannot be read: nothing was discarded. Each stamp is first renamed aside, so a
@@ -635,14 +682,14 @@ export async function pruneVerifyDatabaseStamps(
   dataDirectory: string,
   image: string | (() => Promise<string>),
   spawn?: CommandRunner,
-  options: {keepRecent?: 0 | 2; afterAside?: (name: string) => Promise<void>} = {},
+  options: {keepRecent?: number; afterAside?: (name: string) => Promise<void>} = {},
 ): Promise<string[] | null> {
   const root = assertDataDirectory(dataDirectory);
   const parent = join(root, 'verify-db');
   const lock = await takePruneLock(parent);
   if (lock === 'busy') throw new Refusal('VERIFY_DB_PRUNE_BUSY');
   try {
-    return await pruneHoldingLock(root, parent, image, spawn, options.keepRecent ?? 2, options.afterAside);
+    return await pruneHoldingLock(root, parent, image, spawn, options.keepRecent ?? DEFAULT_KEEP, options.afterAside);
   } finally {
     if (lock) await releasePruneLock(lock);
   }
@@ -750,7 +797,7 @@ async function pruneHoldingLock(
   parent: string,
   image: string | (() => Promise<string>),
   spawn: CommandRunner | undefined,
-  keepRecent: 0 | 2,
+  keepRecent: number,
   afterAside?: (name: string) => Promise<void>,
 ): Promise<string[] | null> {
   await settleDiscardOrphans(parent, image, spawn);
@@ -771,7 +818,7 @@ async function pruneHoldingLock(
     if (afterAside) await afterAside(name).catch(() => undefined /* a test hook; the second read below decides */);
     let claimed: boolean;
     try {
-      claimed = (await liveClaimStamps(parent, false, (options.keepRecent ?? 2) === 0)).some(stamp => directStampName(parent, stamp) === name);
+      claimed = (await liveClaimStamps(parent, false, options.keepRecent === 0)).some(stamp => directStampName(parent, stamp) === name);
     } catch {
       claimed = true;
     }
@@ -811,12 +858,13 @@ export async function verifyDatabaseStampPresent(stamp: string): Promise<boolean
 export async function runVerifyDatabaseRetention(
   dataDirectory: string,
   apply: boolean,
-  deps: {usedPercent?: number; image?: string; spawn?: CommandRunner} = {},
+  deps: {usedPercent?: number; image?: string; spawn?: CommandRunner; keep?: number} = {},
 ): Promise<string[]> {
   const root = assertDataDirectory(dataDirectory);
   const used = deps.usedPercent ?? await measuredDiskPercent(root);
-  const keepRecent = verifyDatabaseKeepRecent(used);
-  const rule = keepRecent === 0 ? `disco em ${VERIFY_DB_PRESSURE_PERCENT}% ou mais: fica só a base atual e as em uso` : 'fica a base atual, as em uso e as 2 mais recentes';
+  const keepRecent = verifyDatabaseKeepRecent(used, deps.keep);
+  const rule = keepRecent === 0 ? `disco em ${VERIFY_DB_PRESSURE_PERCENT}% ou mais: fica só a base atual e as em uso`
+    : keepRecent === 1 ? 'fica a base atual e as em uso' : `fica a base atual, as em uso e as ${keepRecent} mais recentes`;
   const discard = await verifyDatabaseStampsToDiscard(root, keepRecent, apply);
   if (discard === null) throw new Refusal('VERIFY_DB_PRUNE_FAILED');
   if (!apply) return [`Bases de vulnerabilidades (${rule}): ${discard.length} elegível(is)${discard.length ? ': ' + discard.join(', ') : ''}.`];

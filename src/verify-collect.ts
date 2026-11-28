@@ -204,6 +204,15 @@ async function judgeTool(
   return result(own.findings.length > 0 ? 'achado' : 'limpa', null, true, own.findings.length);
 }
 
+/** Left by the entrypoint when the databases have no Trivy Java database (storage.verifyDb.javaDb). */
+const TRIVY_WITHOUT_JAVA_DB = 'trivy-fs.sem-java-db';
+export const TRIVY_JAVA_DB_MISSING_NOTE = 'cobertura reduzida para Java: base Java do Trivy ausente, arquivos .jar/.war/.ear não examinados pelo Trivy';
+
+function withoutJavaDb(result: ToolResult): ToolResult {
+  const reason = result.reason ? `${result.reason}; ${TRIVY_JAVA_DB_MISSING_NOTE}` : TRIVY_JAVA_DB_MISSING_NOTE;
+  return ToolResult.parse({...result, reason: reason.slice(0, 300)});
+}
+
 export async function collectToolFindings(outputDirectory: string): Promise<{findings: RawFinding[]; rejected: number; files: string[]; tools: ToolResult[]}> {
   const root = resolve(outputDirectory);
   const present = new Set(await readdir(root));
@@ -215,7 +224,7 @@ export async function collectToolFindings(outputDirectory: string): Promise<{fin
   const ran = present.has('status.json');
   for (const spec of TOOL_SPECS) {
     const judged = await judgeTool(root, spec, present, ran, parts, files, counter);
-    if (judged) tools.push(judged);
+    if (judged) tools.push(judged.name === 'trivy-fs' && present.has(TRIVY_WITHOUT_JAVA_DB) ? withoutJavaDb(judged) : judged);
   }
   // The older checkov basename stays accepted. An unreadable one adds nothing and was never counted as a clean run.
   if (present.has('checkov.json') && !files.includes('results_json.json')) {

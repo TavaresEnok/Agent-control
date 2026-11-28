@@ -16,7 +16,7 @@ import {readonlyDesignExam,type NativeModuleExamRecovery,type ModuleExamWorkRele
 import {recoverPersonalOrphanedExams} from './personal-orphaned-exams.ts';
 import {inventoryJobWork,readRetentionCursor,rotateAfter,writeRetentionCursor} from './native-work-retention.ts';
 import {composePersonalExecutionSupervisors} from './personal-runtime.ts';
-import {readCurrentVerifyDatabase,refreshVerifyDatabases,runVerifyDatabaseRetention} from './verify-db.ts';
+import {readCurrentVerifyDatabase,refreshVerifyDatabases,runVerifyDatabaseRetention,verifyDatabaseStampHasJava,verifyJavaDatabaseWanted} from './verify-db.ts';
 import {checkPersonalDockerDependencies} from './personal-docker-dependencies.ts';
 
 
@@ -31,7 +31,8 @@ export type MaintenanceDeps={
  /** Planning calls not yet finished. Planning rows do not name their image, so any open call keeps every retired planning image. */
  openPlanningJobs?:()=>Promise<number>;
  /** Publishes a new vulnerability database. Failure must leave the previous stamp in place. */
- refreshDatabases?:(dataDirectory:string)=>Promise<void>;
+ /** Lines it returns are added to the stage's report. */
+ refreshDatabases?:(dataDirectory:string)=>Promise<void|string[]>;
  /** Retention of `work/` of terminal jobs. Tests replace it. */
  jobRetention?:(config:Installation,apply:boolean)=>Promise<string[]>;
  /** Retention of old vulnerability database stamps. Tests replace it. */
@@ -110,6 +111,30 @@ export async function runPersonalCapacityWaitRetention(config:Installation,apply
  }
 }
 
+/** storage.verifyDb for a refresh. `auto` looks at the installation's projects and the ones registered in the database;
+ * when the database cannot list them, the Java database is fetched, so an outage never reduces coverage. */
+export async function verifyDatabaseStorage(config:Installation,deps:{registeredRepos?:()=>Promise<string[]>;hasJava?:(repository:string)=>Promise<boolean>}={}){
+ const {keep,javaDb:mode}=config.storage.verifyDb;
+ if(mode!=='auto')return {keep,javaDb:mode==='always'};
+ let registered:string[];
+ try{
+  registered=await (deps.registeredRepos??(async()=>{
+   const ledger=new Ledger(config.databaseUrl,config.installationAuthority?.token);
+   try{return (await ledger.pool.query<{repo:string}>('SELECT repo FROM ac_project_repositories')).rows.map(row=>row.repo);}
+   finally{await ledger.close();}
+  }))();
+ }catch{return {keep,javaDb:true};}
+ return {keep,javaDb:await verifyJavaDatabaseWanted(mode,[config.project.repo,...config.projects.map(project=>project.repo),...registered],deps.hasJava)};
+}
+
+/** What the operator reads about the Trivy Java database after a refresh. An image built before AC_VERIFY_JAVA_DB
+ * ignores it and still downloads the base: the setting must not look effective while it is not. */
+export function javaSkipNotes(wanted:boolean,present:boolean):string[]{
+ if(wanted)return [];
+ if(present)return ['Base Java do Trivy baixada mesmo com storage.verifyDb.javaDb desligado: a imagem verify fixada é anterior a essa opção. Reconstrua a imagem verify (e a simple-tools, no modo simples), fixe os digests novos e registre as candidatas com --registrar-imagem para a economia valer.'];
+ return ['Base Java do Trivy não baixada (nenhum projeto com Java): arquivos .jar/.war/.ear ficam fora do exame de vulnerabilidades.'];
+}
+
 /** The AGENTS.md order: `work/` of terminal jobs first (the largest and most urgent under disk pressure), then whole old terminal job
  * directories, old vulnerability database stamps (several GB each), dead capacity waits, the product's development worktrees, then
  * worktrees, images and temporaries. The stages are independent: a damaged artifact registry, a database outage or any other failure
@@ -125,7 +150,7 @@ export async function runRetentionStages(config:Installation,apply:boolean,deps:
    }finally{await ledger.close();}
   }:runPersonalJobRetention)],
   ['job-dirs','pastas de jobs terminais',deps.jobDirRetention??((config,apply)=>simpleJobDirectoryRetention(config,apply))],
-  ['verify-db','bases de vulnerabilidades',deps.verifyDatabaseRetention??((config,apply)=>runVerifyDatabaseRetention(config.dataDirectory,apply))],
+  ['verify-db','bases de vulnerabilidades',deps.verifyDatabaseRetention??((config,apply)=>runVerifyDatabaseRetention(config.dataDirectory,apply,{keep:config.storage.verifyDb.keep}))],
   ['capacity-waits','esperas de capacidade',deps.capacityWaitRetention??runPersonalCapacityWaitRetention],
   ['dev-worktrees','worktrees do produto',deps.devWorktreeRetention??((config,apply)=>devWorktreeRetention(config,apply))],
   ['artifacts','artefatos (worktrees, imagens e temporários)',deps.artifactRetention??runPersonalArtifactRetention],
@@ -619,8 +644,12 @@ async function runMaintenanceStages(config:Installation,file:string,deps:Mainten
  });
  await stage('bases',async()=>{
   try{
-   await (deps.refreshDatabases??(async()=>{await refreshVerifyDatabases({dataDirectory:config.dataDirectory,simple:simpleIsolation(config)});}))(config.dataDirectory);
-   return {outcome:'ok',lines:['Bases de vulnerabilidade atualizadas.']};
+   const notes=await (deps.refreshDatabases??(async()=>{
+    const storage=await verifyDatabaseStorage(config);
+    const published=await refreshVerifyDatabases({dataDirectory:config.dataDirectory,simple:simpleIsolation(config),...storage});
+    return javaSkipNotes(storage.javaDb,await verifyDatabaseStampHasJava(published.directory));
+   }))(config.dataDirectory);
+   return {outcome:'ok',lines:['Bases de vulnerabilidade atualizadas.',...(notes??[])]};
   }catch{return {outcome:'failed',lines:['Bases de vulnerabilidade não atualizadas. A base anterior permanece.']};}
  });
  if(options.retention)await stage('retention',async()=>{

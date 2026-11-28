@@ -18,6 +18,9 @@ import {
   verifyDatabaseKeepRecent,
   verifyDatabaseStampPresent,
   verifyDatabaseStampsToDiscard,
+  repositoryHasJava,
+  verifyDatabaseStampHasJava,
+  verifyJavaDatabaseWanted,
 } from '../src/verify-db.ts';
 
 const execFileAsync = promisify(execFile);
@@ -254,7 +257,7 @@ test('a poda conserva o current, os dois mais novos e o carimbo em uso', async (
     await pruneVerifyDatabaseStamps(data, image, async () => {
       dockerCalls += 1;
       return 0;
-    });
+    }, {keepRecent: 2});
     const left = (await readdir(parent)).filter((name) => /^\d{8}-\d{6}/.test(name)).sort();
     assert.deepEqual(left, ['20261117-120000', '20261117-130000', '20261117-150000', '20261117-160000']);
     assert.equal(dockerCalls, 0);
@@ -329,7 +332,7 @@ test('claim de pid morto não segura o carimbo e a poda apaga o arquivo', async 
     await writeFile(claim, claimBody(join(parent, '20261117-130000'), unusedPid()), {mode: 0o600});
     await chmod(claim, 0o600);
     await writeFile(join(dir, 'notes.json'), '{"stamp":"/tmp/nope"}');
-    await pruneVerifyDatabaseStamps(data, image, async () => 0);
+    await pruneVerifyDatabaseStamps(data, image, async () => 0, {keepRecent: 2});
     const left = (await readdir(parent)).filter((name) => /^\d{8}-\d{6}/.test(name)).sort();
     assert.deepEqual(left, ['20261117-120000', '20261117-150000', '20261117-160000']);
     await assert.rejects(stat(claim));
@@ -371,7 +374,7 @@ test('nome fora de run ou caminho fora do carimbo não amplia a poda', async () 
       claimedAt: now.toISOString(),
     }) + '\n', {mode: 0o600});
     await writeFile(join(dir, `${runOther}.json`), '{', {mode: 0o600});
-    await pruneVerifyDatabaseStamps(data, image, async () => 0);
+    await pruneVerifyDatabaseStamps(data, image, async () => 0, {keepRecent: 2});
     const left = (await readdir(parent)).filter((name) => /^\d{8}-\d{6}/.test(name)).sort();
     assert.deepEqual(left, ['20261117-150000', '20261117-160000']);
     assert.equal(await readFile(secret, 'utf8'), 'secret');
@@ -427,7 +430,7 @@ test('depois de publicar, a poda apaga o que não é current, recente nem uso', 
     await mkdir(recent, {mode: 0o777});
     await writeFile(join(ancient, 'marker'), 'old');
     await claimVerifyDatabaseStamp(data, used, runLive);
-    const result = await refreshVerifyDatabases({dataDirectory: data, image, spawn: publishingSpawn(), now, usedDiskPercent: async () => 50});
+    const result = await refreshVerifyDatabases({dataDirectory: data, image, spawn: publishingSpawn(), now, usedDiskPercent: async () => 50, keep: 2});
     const left = (await readdir(parent)).filter((name) => /^\d{8}-\d{6}/.test(name)).sort();
     assert.deepEqual(left, ['20200101-000001', '20240101-000000', basename(result.directory)]);
     assert.equal(basename(result.directory), '20261117-150405');
@@ -604,11 +607,13 @@ record_tool absent /bin/true "$OUT/nope.json" sh -c 'exit 4'
 });
 
 test('sob pressão de disco a poda guarda só a base atual e as em uso', async () => {
-  assert.equal(verifyDatabaseKeepRecent(89.99), 2);
-  assert.equal(verifyDatabaseKeepRecent(90), 0);
+  assert.equal(verifyDatabaseKeepRecent(89.99), 1);
+  assert.equal(verifyDatabaseKeepRecent(89.99, 2), 2);
+  assert.equal(verifyDatabaseKeepRecent(90, 2), 0);
   assert.equal(verifyDatabaseKeepRecent(97), 0);
-  assert.equal(verifyDatabaseKeepRecent(undefined), 2);
-  assert.equal(verifyDatabaseKeepRecent(Number.NaN), 2);
+  assert.equal(verifyDatabaseKeepRecent(undefined), 1);
+  assert.equal(verifyDatabaseKeepRecent(Number.NaN, 2), 2);
+  assert.equal(verifyDatabaseKeepRecent(50, 9), 1, 'valor fora do intervalo volta ao padrão');
   const data = await privateDirectory();
   try {
     const parent = join(data, 'verify-db');
@@ -624,7 +629,7 @@ test('sob pressão de disco a poda guarda só a base atual e as em uso', async (
     }) + '\n', {mode: 0o600});
     // Sem pressão ficam a atual e as 2 mais recentes (a atual é uma delas): saem as de 20/11 e 21/11.
     assert.deepEqual(await verifyDatabaseStampsToDiscard(data, 2), ['20261120-052924', '20261121-040000']);
-    const preview = await runVerifyDatabaseRetention(data, false, {usedPercent: 50, image});
+    const preview = await runVerifyDatabaseRetention(data, false, {usedPercent: 50, image, keep: 2});
     assert.match(preview[0]!, /as 2 mais recentes\): 2 elegível\(is\): 20261120-052924, 20261121-040000\./);
     // Uma rodada viva ainda usa a de 21/11.
     await claimVerifyDatabaseStamp(data, join(parent, names[1]), runLive);
@@ -712,13 +717,13 @@ test('a base que ainda está sendo baixada não é podada por outra busca', asyn
   }
 });
 
-test('a busca nova com a medição do disco falhando mantém a regra das 2 recentes', async () => {
+test('a busca nova com a medição do disco falhando mantém a regra das recentes configuradas', async () => {
   const data = await privateDirectory();
   try {
     const parent = join(data, 'verify-db');
     await mkdir(parent, {mode: 0o700});
     await mkdir(join(parent, '20240101-000000'), {mode: 0o777});
-    const result = await refreshVerifyDatabases({dataDirectory: data, image, spawn: publishingSpawn(), now, usedDiskPercent: async () => undefined});
+    const result = await refreshVerifyDatabases({dataDirectory: data, image, spawn: publishingSpawn(), now, usedDiskPercent: async () => undefined, keep: 2});
     const left = (await readdir(parent)).filter((name) => /^\d{8}-\d{6}/.test(name)).sort();
     assert.deepEqual(left, ['20240101-000000', basename(result.directory)]);
   } finally {
@@ -841,5 +846,118 @@ test('uma base reivindicada entre a troca de nome e a segunda leitura volta com 
     assert.equal(await readFile(join(old, 'manifest.json'), 'utf8'), 'antiga');
   } finally {
     await rm(data, {recursive: true, force: true});
+  }
+});
+
+test('com keep 1 a busca nova apaga a anterior na mesma rodada e preserva a que está em uso', async () => {
+  const data = await privateDirectory();
+  try {
+    const parent = join(data, 'verify-db');
+    await mkdir(parent, {mode: 0o700});
+    const previous = join(parent, '20261110-040000');
+    const used = join(parent, '20261103-040000');
+    for (const stamp of [previous, used]) {
+      await mkdir(stamp, {mode: 0o777});
+      await writeFile(join(stamp, 'marker'), 'old');
+    }
+    await writeFile(join(parent, 'current.json'), JSON.stringify({directory: previous, fetchedAt: now.toISOString(), manifestSha256: 'abc'}) + '\n', {mode: 0o600});
+    await claimVerifyDatabaseStamp(data, used, runLive);
+    const result = await refreshVerifyDatabases({dataDirectory: data, image, spawn: publishingSpawn(), now, usedDiskPercent: async () => 50, keep: 1});
+    const left = (await readdir(parent)).filter((name) => /^\d{8}-\d{6}/.test(name)).sort();
+    assert.deepEqual(left, ['20261103-040000', basename(result.directory)], 'a anterior sai, a em uso fica');
+    assert.equal(await readFile(join(used, 'marker'), 'utf8'), 'old');
+    assert.equal((await readCurrentVerifyDatabase(data))?.directory, result.directory);
+    await releaseVerifyDatabaseStamp(data, used, runLive);
+    const preview = await runVerifyDatabaseRetention(data, false, {usedPercent: 50, image, keep: 1});
+    assert.match(preview[0]!, /fica a base atual e as em uso\): 1 elegível\(is\): 20261103-040000\./);
+  } finally {
+    await rm(data, {recursive: true, force: true});
+  }
+});
+
+test('sem keep a busca usa o padrão 1 de storage.verifyDb.keep', async () => {
+  const data = await privateDirectory();
+  try {
+    const parent = join(data, 'verify-db');
+    await mkdir(parent, {mode: 0o700});
+    await mkdir(join(parent, '20240101-000000'), {mode: 0o777});
+    const result = await refreshVerifyDatabases({dataDirectory: data, image, spawn: publishingSpawn(), now, usedDiskPercent: async () => 50});
+    const left = (await readdir(parent)).filter((name) => /^\d{8}-\d{6}/.test(name)).sort();
+    assert.deepEqual(left, [basename(result.directory)]);
+  } finally {
+    await rm(data, {recursive: true, force: true});
+  }
+});
+
+test('a busca só pede a base Java quando javaDb não é false', async () => {
+  const seen: (readonly string[])[] = [];
+  const recording = publishingSpawn();
+  const spawn = async (args: readonly string[]) => { seen.push(args); return recording(args); };
+  for (const javaDb of [false, true, undefined]) {
+    const data = await privateDirectory();
+    try {
+      await refreshVerifyDatabases({dataDirectory: data, image, spawn, now, usedDiskPercent: async () => 50, javaDb});
+    } finally {
+      await rm(data, {recursive: true, force: true});
+    }
+  }
+  assert.deepEqual(seen.map((args) => args.includes('AC_VERIFY_JAVA_DB=0')), [true, false, false]);
+  assert.equal(seen[0]!.indexOf('AC_VERIFY_JAVA_DB=0') < seen[0]!.indexOf(image), true, 'a variável vai antes da imagem');
+});
+
+test('base Java baixada por imagem antiga é detectada, sem quebrar a publicação', async () => {
+  for (const ignores of [false, true]) {
+    const data = await privateDirectory();
+    try {
+      const plain = publishingSpawn();
+      const spawn = async (args: readonly string[]) => {
+        const code = await plain(args);
+        if (ignores) {
+          await mkdir(join(mountedDatabase(args), 'trivy', 'java-db'), {recursive: true});
+          await writeFile(join(mountedDatabase(args), 'trivy', 'java-db', 'trivy-java.db'), 'java');
+        }
+        return code;
+      };
+      const published = await refreshVerifyDatabases({dataDirectory: data, image, spawn, now, usedDiskPercent: async () => 50, javaDb: false});
+      assert.equal(await verifyDatabaseStampHasJava(published.directory), ignores);
+    } finally {
+      await rm(data, {recursive: true, force: true});
+    }
+  }
+});
+
+test('javaDb auto: só baixa a base Java quando algum projeto tem Java', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'verify-java-'));
+  const git = (cwd: string, ...args: string[]) => execFileAsync('git', ['-C', cwd, ...args]);
+  try {
+    const plain = join(root, 'node');
+    const maven = join(root, 'maven');
+    const gradle = join(root, 'gradle');
+    const jar = join(root, 'jar');
+    const untracked = join(root, 'untracked');
+    for (const repo of [plain, maven, gradle, jar, untracked]) {
+      await mkdir(repo, {recursive: true});
+      await git(repo, 'init', '-q');
+      await writeFile(join(repo, 'package.json'), '{}\n');
+    }
+    await mkdir(join(maven, 'api'), {recursive: true});
+    await writeFile(join(maven, 'api', 'pom.xml'), '<project/>\n');
+    await writeFile(join(gradle, 'build.gradle.kts'), '\n');
+    await mkdir(join(jar, 'lib'), {recursive: true});
+    await writeFile(join(jar, 'lib', 'demo.jar'), 'PK');
+    await writeFile(join(untracked, 'pom.xml'), '<project/>\n');
+    for (const repo of [plain, maven, gradle, jar]) await git(repo, 'add', '-A');
+    assert.equal(await repositoryHasJava(plain), false);
+    assert.equal(await repositoryHasJava(maven), true);
+    assert.equal(await repositoryHasJava(gradle), true);
+    assert.equal(await repositoryHasJava(jar), true);
+    assert.equal(await repositoryHasJava(untracked), false, 'só o que o git rastreia vai para o exame');
+    assert.equal(await verifyJavaDatabaseWanted('auto', [plain, untracked]), false);
+    assert.equal(await verifyJavaDatabaseWanted('auto', [plain, maven]), true);
+    assert.equal(await verifyJavaDatabaseWanted('always', [plain]), true);
+    assert.equal(await verifyJavaDatabaseWanted('never', [maven]), false);
+    assert.equal(await verifyJavaDatabaseWanted('auto', [plain, join(root, 'ausente')]), true, 'repositório ilegível nunca tira cobertura');
+  } finally {
+    await rm(root, {recursive: true, force: true});
   }
 });

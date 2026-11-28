@@ -6,7 +6,9 @@ import {test} from 'node:test';
 import {randomUUID} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
-import {MaintenanceIncomplete,RetentionIncomplete,runPersonalCapacityWaitRetention,runPersonalMaintenance,runRetentionStages} from '../src/personal-maintenance.ts';
+import {MaintenanceIncomplete,RetentionIncomplete,runPersonalCapacityWaitRetention,runPersonalMaintenance,runRetentionStages,javaSkipNotes,verifyDatabaseStorage} from '../src/personal-maintenance.ts';
+import {StorageConfig} from '../src/storage-config.ts';
+import type {Installation} from '../src/installation.ts';
 import {personalTimerUnits} from '../src/personal-timers.ts';
 import {newestBackup} from '../src/personal-restore-proof.ts';
 import {Ledger} from '../src/ledger.ts';
@@ -254,4 +256,31 @@ test('retenção automática remove só esperas de capacidade mortas (intenção
   await database.close();
   await rm(env.base,{recursive:true,force:true});
  }
+});
+
+test('storage.verifyDb decide a base Java pelos projetos da instalação e do banco', async()=>{
+ const config=(javaDb:'auto'|'always'|'never',keep=1)=>({project:{repo:'/r/principal'},projects:[{repo:'/r/outro'}],databaseUrl:'postgresql://x@127.0.0.1:1/x',
+  storage:StorageConfig.parse({verifyDb:{javaDb,keep}})}) as unknown as Installation;
+ const asked:string[]=[];
+ const hasJava=async(repo:string)=>{asked.push(repo);return repo==='/r/java';};
+ assert.deepEqual(await verifyDatabaseStorage(config('auto'),{registeredRepos:async()=>['/r/outro'],hasJava}),{keep:1,javaDb:false});
+ assert.deepEqual(asked,['/r/principal','/r/outro'],'cada repositório uma vez');
+ assert.deepEqual(await verifyDatabaseStorage(config('auto',2),{registeredRepos:async()=>['/r/java'],hasJava}),{keep:2,javaDb:true});
+ assert.deepEqual(await verifyDatabaseStorage(config('auto'),{registeredRepos:async()=>{throw new Error('banco fora');},hasJava}),{keep:1,javaDb:true},'sem a lista do banco a base Java fica');
+ assert.deepEqual(await verifyDatabaseStorage(config('never'),{registeredRepos:async()=>['/r/java'],hasJava}),{keep:1,javaDb:false});
+ assert.deepEqual(await verifyDatabaseStorage(config('always'),{hasJava}),{keep:1,javaDb:true});
+});
+
+test('a manutenção não finge a economia da base Java quando a imagem fixada ainda a baixa', async()=>{
+ assert.deepEqual(javaSkipNotes(true,true),[]);
+ assert.match(javaSkipNotes(false,false).join('\n'),/não baixada.*\.jar/);
+ const stale=javaSkipNotes(false,true).join('\n');
+ assert.match(stale,/baixada mesmo com storage\.verifyDb\.javaDb desligado/);
+ assert.match(stale,/Reconstrua a imagem verify.*simple-tools.*--registrar-imagem/);
+ const env=await scheduledFixture('apply');
+ try{
+  const r=recorder();
+  const lines=await runPersonalMaintenance(installedMaintenanceArgs(env.file),{...r.deps,refreshDatabases:async()=>javaSkipNotes(false,true)});
+  assert.match(lines.join('\n'),/Bases de vulnerabilidade atualizadas\.\n.*baixada mesmo com/);
+ }finally{await rm(env.base,{recursive:true,force:true});}
 });

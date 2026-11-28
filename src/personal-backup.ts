@@ -1,7 +1,7 @@
 import {spawn} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {constants,createReadStream,createWriteStream} from 'node:fs';
-import {chmod,copyFile,lstat,mkdir,readdir,readFile,realpath,rm,stat,writeFile} from 'node:fs/promises';
+import {chmod,copyFile,link,lstat,mkdir,readdir,readFile,realpath,rm,stat,writeFile} from 'node:fs/promises';
 import {basename,dirname,join,relative,resolve,sep} from 'node:path';
 import {pipeline} from 'node:stream/promises';
 import {Refusal} from './contracts.ts';
@@ -18,6 +18,8 @@ export type PersonalBackupOptions={
  /** Test double. Writes `database.dump` without Docker or pg_dump. */
  dump?:(file:string,db:DatabaseEndpoint)=>Promise<void>;
  dockerPs?:()=>Promise<string>;
+ /** A previous backup folder (`agent-control-*`) of this installation. A data file identical to its copy there becomes a hardlink (storage.backups.dedupe). */
+ linkFrom?:string;
 };
 export type PersonalRestoreOptions={
  /** Test double. Resolves when `database.dump` is a readable custom-format archive. */
@@ -154,7 +156,33 @@ async function regularFiles(root:string,includeManifest:boolean){
  return found;
 }
 
-async function copyData(source:string,dest:string,depth:number,rel=''){
+/** The same entry in the previous backup, only through real directories: a symlink there never leads the link outside it. */
+async function previousEntry(previous:string|undefined,name:string,kind:'directory'|'file'){
+ if(!previous)return undefined;
+ const path=join(previous,name);
+ try{
+  const info=await lstat(path,{bigint:true});
+  if(info.isSymbolicLink())return undefined;
+  if(kind==='directory')return info.isDirectory()?{path,info}:undefined;
+  return info.isFile()?{path,info}:undefined;
+ }catch{return undefined;}
+}
+
+/** Hardlink `to` to the previous backup's copy when both hold the same bytes; false means copy instead. */
+async function linkIdentical(from:string,to:string,previous:string|undefined,name:string){
+ const old=await previousEntry(previous,name,'file');
+ if(!old)return false;
+ const uid=process.getuid?.();
+ const source=await lstat(from,{bigint:true});
+ // Same owner, private mode, same size, and never the live file itself (an inode shared with the data directory would follow its edits).
+ if((uid!==undefined&&old.info.uid!==BigInt(uid))||(old.info.mode&0o777n)!==0o600n||old.info.size!==source.size||(old.info.dev===source.dev&&old.info.ino===source.ino))return false;
+ if(await fileSha256(from)!==await fileSha256(old.path))return false;
+ try{await link(old.path,to);}
+ catch{return false;}
+ return true;
+}
+
+async function copyData(source:string,dest:string,depth:number,rel='',previous?:string,counter={linked:0}){
  await privateDir(dest);
  for(const entry of await readdir(source,{withFileTypes:true})){
   if(entry.isSymbolicLink())continue;
@@ -162,12 +190,26 @@ async function copyData(source:string,dest:string,depth:number,rel=''){
   const from=join(source,entry.name),to=join(dest,entry.name);
   const entryRel=rel?`${rel}/${entry.name}`:entry.name;
   if(entry.isDirectory()&&excludedCachePaths.has(entryRel))continue;
-  if(entry.isDirectory())await copyData(from,to,depth+1,entryRel);
+  if(entry.isDirectory())await copyData(from,to,depth+1,entryRel,(await previousEntry(previous,entry.name,'directory'))?.path,counter);
   else if(entry.isFile()){
+   if(await linkIdentical(from,to,previous,entry.name)){counter.linked++;continue;}
    await copyFile(from,to,constants.COPYFILE_EXCL);
    await chmod(to,0o600);
   }
  }
+ return counter;
+}
+
+/** `data/` of a previous backup next to the new one, or undefined: dedupe is best effort and never fails the backup. */
+async function previousData(linkFrom:string|undefined,destination:string){
+ if(!linkFrom)return undefined;
+ try{
+  const real=await realpath(join(linkFrom,'data'));
+  const info=await lstat(real);
+  // Only a sibling folder in the same backup destination is a link source.
+  if(!info.isDirectory()||!isInside(dirname(destination),real))return undefined;
+  return real;
+ }catch{return undefined;}
 }
 
 export function spawnCollected(command:string,args:string[],env:NodeJS.ProcessEnv,stdinFile:string|null,stdoutFile:string|null,timeoutMs:number){
@@ -295,7 +337,7 @@ export async function runPersonalBackup(argv:string[],options:PersonalBackupOpti
   await privateDir(destination);
   await privateDir(backup);
   await privateFile(join(backup,'installation.json'),await readFile(resolve(installationArg)));
-  await copyData(dataReal,join(backup,'data'),0);
+  const {linked}=await copyData(dataReal,join(backup,'data'),0,'',await previousData(options.linkFrom,destination));
   await writeDump(join(backup,'database.dump'),db,options);
   await privateFile(join(backup,'RESTAURAR.md'),restoreSteps);
   const listed=await regularFiles(backup,false);
@@ -303,7 +345,7 @@ export async function runPersonalBackup(argv:string[],options:PersonalBackupOpti
   for(const rel of listed)lines.push(`${await fileSha256(join(backup,rel))}  ${rel}`);
   await privateFile(join(backup,'MANIFEST.txt'),lines.join('\n')+'\n');
   const size=await treeBytes(backup);
-  return [`Backup em ${backup}`,`Tamanho: ${size} bytes`,'O backup contém segredos (chave da conversa, logins e chave SSH). Guarde-o fora do servidor.'];
+  return [`Backup em ${backup}`,`Tamanho: ${size} bytes`,...(linked?[`Deduplicação: ${linked} arquivo(s) iguais ao backup anterior ligados por hardlink.`]:[]),'O backup contém segredos (chave da conversa, logins e chave SSH). Guarde-o fora do servidor.'];
  }catch(error){
   await rm(backup,{recursive:true,force:true});
   if(createdParent)await rm(destination,{recursive:true,force:true});
