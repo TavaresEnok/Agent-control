@@ -13,6 +13,8 @@ import {deliverPersonalPush} from './personal-push.ts';
 import {diskNotice,dueNotices,ERROR_WINDOW_MINUTES,loginNotices,agentConfigNotices,personalAccountRoot,repeatedErrorNotices,type HealthNotice} from './personal-health.ts';
 import {containFailure} from './failure-log.ts';
 import {checkPersonalDockerDependencies} from './personal-docker-dependencies.ts';
+import {MIGRATION_EXIT_STATUS,migrationRefusal} from './installation-readiness.ts';
+import {storageSettings} from './storage-config.ts';
 
 const hourMs=60*60*1000;
 const imageId=/^sha256:[a-f0-9]{64}$/;
@@ -20,8 +22,13 @@ const imageId=/^sha256:[a-f0-9]{64}$/;
 export const gatewayDownNotice='Agent Control fora do ar no servidor.';
 export const gatewayUpNotice='Agent Control voltou.';
 export const imagesRebuiltNotice='Imagens do Agent Control reconstruídas.';
+export const migrationsNotice=(installationFile:string)=>`Migração pendente no banco do Agent Control: o gateway não foi reiniciado. Rode npm run personal:update -- ${installationFile}`;
+/** A login file not refreshed for this long after its access token expired is reported as expired. */
+export const LOGIN_STALE_DAYS=7;
+/** The watch runs the retention itself only when the AC is over budget, at most this often; the hourly timer does the rest. */
+const RETENTION_REPEAT_MS=30*60*1000;
 
-type WatchState={consecutiveFailures:number;downNotified:boolean;lastImageRebuildAt:string|null;sent:Record<string,string>};
+type WatchState={consecutiveFailures:number;downNotified:boolean;lastImageRebuildAt:string|null;lastRetentionAt:string|null;sent:Record<string,string>};
 export type PersonalWatchDeps={
  dockerDependencies?:typeof checkPersonalDockerDependencies;
  retention?:(file:string,apply:boolean)=>Promise<unknown>;
@@ -32,6 +39,10 @@ export type PersonalWatchDeps={
  inspectImage?:(image:string)=>Promise<boolean>;
  rebuildImages?:(installationFile:string)=>Promise<void>;
  restartGateway?:(unit:string)=>Promise<void>;
+ /** ExecMainStatus of a gateway unit that is stopped (failed or inactive); null while it runs or when unknown. */
+ gatewayExitStatus?:(unit:string)=>Promise<number|null>;
+ /** Refusal code when the database schema does not match the code (MIGRATIONS_PENDING and the like), null when it matches. */
+ migrations?:(config:Installation)=>Promise<string|null>;
  /** Gateway log lines from the last few minutes. */
  recentLog?:(unit:string,minutes:number)=>Promise<string>;
  /** Highest percent in use among the installation's volumes. */
@@ -40,7 +51,7 @@ export type PersonalWatchDeps={
  logins?:(config:Installation,installationFile:string,now:Date)=>Promise<HealthNotice[]>;
 };
 
-const emptyState=():WatchState=>({consecutiveFailures:0,downNotified:false,lastImageRebuildAt:null,sent:{}});
+const emptyState=():WatchState=>({consecutiveFailures:0,downNotified:false,lastImageRebuildAt:null,lastRetentionAt:null,sent:{}});
 
 export function personalServiceName(installationFile:string){
  const name=basename(dirname(resolve(installationFile))).replace(/[^A-Za-z0-9_-]/g,'-');
@@ -64,9 +75,11 @@ function parseState(value:unknown):WatchState{
  if(typeof failures!=='number'||!Number.isInteger(failures)||failures<0||failures>1_000_000)return emptyState();
  if(typeof down!=='boolean')return emptyState();
  if(at!==null&&(typeof at!=='string'||Number.isNaN(Date.parse(at))))return emptyState();
+ // Added later: an older state file without it keeps its other fields.
+ const retention=typeof row.lastRetentionAt==='string'&&!Number.isNaN(Date.parse(row.lastRetentionAt))?row.lastRetentionAt:null;
  const sent:Record<string,string>={};
  if(row.sent&&typeof row.sent==='object')for(const [key,value] of Object.entries(row.sent as Record<string,unknown>).slice(0,200))if(typeof value==='string'&&!Number.isNaN(Date.parse(value)))sent[key.slice(0,200)]=value;
- return {consecutiveFailures:failures,downNotified:down,lastImageRebuildAt:at,sent};
+ return {consecutiveFailures:failures,downNotified:down,lastImageRebuildAt:at,lastRetentionAt:retention,sent};
 }
 
 async function readState(path:string){
@@ -129,6 +142,68 @@ async function defaultRestart(unit:string){
  await runCommand('systemctl',['--user','restart',unit],120_000,true);
 }
 
+const gatewayUnit=/^agent-control-gateway-[A-Za-z0-9_-]+$/;
+
+async function defaultGatewayExitStatus(unit:string){
+ if(!gatewayUnit.test(unit))return null;
+ return new Promise<number|null>(resolvePromise=>{
+  const child=spawn('systemctl',['--user','show','-p','ActiveState','-p','ExecMainStatus',unit],{stdio:['ignore','pipe','ignore']});
+  let text='';
+  const timer=setTimeout(()=>child.kill(),30_000);
+  child.stdout.on('data',chunk=>{if(text.length<10_000)text+=chunk;});
+  child.on('error',()=>{clearTimeout(timer);resolvePromise(null);});
+  child.on('close',()=>{
+   clearTimeout(timer);
+   const value=(key:string)=>new RegExp(`^${key}=(.*)$`,'m').exec(text)?.[1]?.trim();
+   const status=Number(value('ExecMainStatus'));
+   resolvePromise(['failed','inactive'].includes(value('ActiveState')??'')&&Number.isInteger(status)?status:null);
+  });
+ });
+}
+
+async function defaultMigrations(config:Installation){
+ const pool=new pg.Pool({connectionString:config.databaseUrl,max:1,connectionTimeoutMillis:5000});
+ try{return await migrationRefusal(()=>pool.query('SELECT version,digest FROM ac_schema_migrations ORDER BY version'))??null;}
+ finally{await pool.end();}
+}
+
+/** Grok keeps a short access token and a refresh token. A file whose access token expired days ago was never refreshed:
+ * the CLI cannot sign in with it any more, although the refresh token is still written there. */
+export function staleGrokLogin(raw:unknown,now:Date):Date|null{
+ if(!raw||typeof raw!=='object')return null;
+ let latest:number|null=null;
+ for(const entry of Object.values(raw as Record<string,unknown>)){
+  if(!entry||typeof entry!=='object')continue;
+  const at=Date.parse(String((entry as Record<string,unknown>).expires_at??''));
+  if(Number.isFinite(at))latest=Math.max(latest??at,at);
+ }
+ if(latest===null||now.getTime()-latest<LOGIN_STALE_DAYS*24*hourMs)return null;
+ return new Date(latest);
+}
+
+export async function staleLoginNotices(accountRoot:string,accounts:readonly {id:string;provider:string}[],now:Date,installationFile:string,read:(path:string)=>Promise<string>=path=>readFile(path,'utf8')):Promise<HealthNotice[]>{
+ const notices:HealthNotice[]=[];
+ for(const account of accounts){
+  if(account.provider!=='grok'||!/^[0-9a-f-]{36}$/.test(account.id))continue;
+  let raw:unknown;
+  try{raw=JSON.parse(await read(join(accountRoot,account.id,'.grok/auth.json')));}catch{continue;/* a missing file is already reported by loginNotices */}
+  const since=staleGrokLogin(raw,now);
+  if(!since)continue;
+  const day=`${String(since.getUTCDate()).padStart(2,'0')}/${String(since.getUTCMonth()+1).padStart(2,'0')}`;
+  notices.push({key:'login:'+account.id,repeatMs:24*hourMs,
+   text:`O login do Grok (conta ${account.id.slice(0,8)}) está vencido desde ${day} e a conta continua habilitada. Entre de novo: npm run gateway -- account-add ${installationFile} grok Grok, ou desabilite a conta.`});
+ }
+ return notices;
+}
+
+/** Bytes the AC uses without projects, from the last space measurement (<dataDirectory>/space-last.json). Absent or unreadable: unknown. */
+export async function lastMeasuredSpace(dataDirectory:string):Promise<number|null>{
+ try{
+  const value=JSON.parse(await readFile(join(dataDirectory,'space-last.json'),'utf8')) as {acBytes?:unknown};
+  return typeof value.acBytes==='number'&&Number.isFinite(value.acBytes)&&value.acBytes>=0?value.acBytes:null;
+ }catch{return null;}
+}
+
 async function defaultRecentLog(unit:string,minutes:number){
  if(!/^agent-control-gateway-[A-Za-z0-9_-]+$/.test(unit))return '';
  return new Promise<string>(resolvePromise=>{
@@ -146,18 +221,20 @@ async function defaultLogins(config:Installation,installationFile:string,now:Dat
  const pool=new pg.Pool({connectionString:config.databaseUrl,max:1,connectionTimeoutMillis:5000});
  try{
   const rows=(await pool.query("SELECT id,provider FROM ac_accounts WHERE enabled AND mode='subscription_cli'")).rows as {id:string;provider:string}[];
-  return [...await loginNotices(accountRoot,rows,now,installationFile),...await agentConfigNotices(accountRoot,rows)];
+  return [...await loginNotices(accountRoot,rows,now,installationFile),...await staleLoginNotices(accountRoot,rows,now,installationFile),...await agentConfigNotices(accountRoot,rows)];
  }finally{await pool.end();}
 }
 
-function due(at:string|null,now:Date){
+function due(at:string|null,now:Date,every=hourMs){
  if(!at)return true;
  const then=Date.parse(at);
  if(Number.isNaN(then))return true;
- return now.getTime()-then>=hourMs;
+ return now.getTime()-then>=every;
 }
 
-/** One check. Two health failures notify; recovery notifies once. At most one image rebuild per hour. */
+/** One check. Two health failures notify; recovery notifies once. At most one image rebuild per hour.
+ * A gateway stopped on exit 78 or a schema that does not match the code is reported, never restarted.
+ * Retention has its own hourly timer; the watch runs it only when the last measurement puts the AC over its budget. */
 export async function runPersonalWatch(argv:string[],deps:PersonalWatchDeps={}){
  const [installationArg]=argv;
  if(!installationArg||installationArg.startsWith('--')||argv.length!==1)throw new Refusal('WATCH_USAGE');
@@ -171,14 +248,20 @@ export async function runPersonalWatch(argv:string[],deps:PersonalWatchDeps={}){
  const rebuild=deps.rebuildImages??defaultRebuild;
  const restart=deps.restartGateway??defaultRestart;
  const statePath=join(config.dataDirectory,'watch-state.json');
+ const unit=`agent-control-gateway-${personalServiceName(installationFile)}`;
+ const health:HealthNotice[]=[];
+ const migrationNotice=():HealthNotice=>({key:'migrations',text:migrationsNotice(installationFile),repeatMs:hourMs});
+ const acBytes=await lastMeasuredSpace(config.dataDirectory);
+ const overBudget=acBytes!==null&&acBytes>storageSettings(config).budgetGB*1024**3;
+ let loaded:WatchState|undefined;
  // Sampled first: a full disk can break every write below, and the figure must predate the cleanup.
  let usedPercent:number|undefined;
  try{usedPercent=await (deps.diskUsedPercent?.()??diskUsedPercent(installationVolumes(config)));}catch{/* health checks can continue while a volume is unavailable */}
- let retentionFailed=false,stateUnsaved=false,summary='',tail='';
+ let retentionFailed=false,retentionRan=false,stateUnsaved=false,summary='',tail='';
  // A failed write (ENOSPC included) must not stop alerts or the cleanup that frees the space.
  const persist=async(value:WatchState)=>{try{await writeState(statePath,value);return true;}catch{stateUnsaved=true;return false;}};
  try{
- const state=await readState(statePath).catch(async error=>{
+ const state=loaded=await readState(statePath).catch(async error=>{
   const alert=usedPercent===undefined?undefined:diskNotice(usedPercent);
   if(alert)await notify(config.dataDirectory,alert.text).catch(containFailure('WATCH_DISK_ALERT_NOT_SENT',undefined));
   throw error;
@@ -193,6 +276,10 @@ export async function runPersonalWatch(argv:string[],deps:PersonalWatchDeps={}){
  }else{
   state.consecutiveFailures+=1;
   if(state.consecutiveFailures>=2&&!state.downNotified)healthNotice=gatewayDownNotice;
+  // systemd does not restart exit 78 (RestartPreventExitStatus); only personal:update fixes the schema.
+  let exit:number|null=null;
+  try{exit=await (deps.gatewayExitStatus??defaultGatewayExitStatus)(unit);}catch{/* unknown, like a running unit */}
+  if(exit===MIGRATION_EXIT_STATUS)health.push(migrationNotice());
  }
  if(healthNotice===gatewayDownNotice)state.downNotified=true;
  if(healthNotice===gatewayUpNotice)state.downNotified=false;
@@ -202,7 +289,7 @@ export async function runPersonalWatch(argv:string[],deps:PersonalWatchDeps={}){
  }
  await persist(state);
  const wanted=(deps.images??personalWatchImages)(config).filter(image=>imageId.test(image));
- let imageStatus:'ok'|'skipped'|'rebuilt'|'failed'='ok';
+ let imageStatus:'ok'|'skipped'|'rebuilt'|'failed'='ok',restartSkipped=false;
  if(wanted.length>0&&dependencies.failed)imageStatus='skipped';
  else if(wanted.length>0){
   let missing=false;
@@ -219,16 +306,22 @@ export async function runPersonalWatch(argv:string[],deps:PersonalWatchDeps={}){
    if(!await persist(state))imageStatus='skipped';
    else try{
     await rebuild(installationFile);
-    await restart(`agent-control-gateway-${personalServiceName(installationFile)}`);
-    try{await notify(config.dataDirectory,imagesRebuiltNotice);}catch{/* rebuild already happened */}
-    imageStatus='rebuilt';
+    // A restart onto a schema that does not match would only crash the gateway; tell the owner instead.
+    let pending:string|null;
+    try{pending=await (deps.migrations??defaultMigrations)(config);}catch{pending='MIGRATIONS_UNKNOWN';}
+    if(pending){health.push(migrationNotice());imageStatus='rebuilt';restartSkipped=true;}
+    else{
+     await restart(unit);
+     try{await notify(config.dataDirectory,imagesRebuiltNotice);}catch{/* rebuild already happened */}
+     imageStatus='rebuilt';
+    }
    }catch{imageStatus='failed';}
   }
  }
  // Repeated errors, a full disk and logins about to expire. Each notice repeats at most at its own pace.
- const health:HealthNotice[]=[...dependencies.notices];
+ health.push(...dependencies.notices);
  try{
-  const log=await (deps.recentLog??defaultRecentLog)(`agent-control-gateway-${personalServiceName(installationFile)}`,ERROR_WINDOW_MINUTES);
+  const log=await (deps.recentLog??defaultRecentLog)(unit,ERROR_WINDOW_MINUTES);
   health.push(...repeatedErrorNotices(log));
   if(log.includes(`[${PERSONAL_EGRESS_DISABLED}] Warning: ${PERSONAL_EGRESS_DISABLED_MESSAGE}`))
    health.push({key:'egress',text:PERSONAL_EGRESS_DISABLED_MESSAGE,repeatMs:hourMs});
@@ -243,18 +336,21 @@ export async function runPersonalWatch(argv:string[],deps:PersonalWatchDeps={}){
   catch{/* not recorded, so the next check tries again */}
  }
  await persist(state);
- const tags=[healthNotice===gatewayDownNotice?'down':'',healthNotice===gatewayUpNotice?'up':'',imageStatus==='rebuilt'?'images':'',...delivered.map(item=>item.key.split(':')[0]!)].filter(Boolean);
+ const tags=[healthNotice===gatewayDownNotice?'down':'',healthNotice===gatewayUpNotice?'up':'',imageStatus==='rebuilt'&&!restartSkipped?'images':'',...delivered.map(item=>item.key.split(':')[0]!)].filter(Boolean);
  const notice=tags.length?` notice=${tags.join('+')}`:'';
  const dockerStatus=dependencies.failed?' docker=failed':config.dockerDependencies?' docker=ok':'';
- summary=`watch gateway=${up?'up':'down'} failures=${state.consecutiveFailures} images=${imageStatus}${dockerStatus}`;tail=notice;
+ summary=`watch gateway=${up?'up':'down'} failures=${state.consecutiveFailures} images=${imageStatus}${restartSkipped?' restart=skipped':''}${dockerStatus}`;tail=notice;
  }finally{
-  // Always, after the alerts: the figure above was taken before this frees anything.
+  // Only over budget, after the alerts (the figure above predates the cleanup), and even when the state cannot be read or written:
+  // that is when space is short. Below the budget the hourly retention timer is enough.
   try{
-   if((config.retention?.automatic??'preview')!=='off'){
+   if(overBudget&&(config.retention?.automatic??'preview')!=='off'&&(!loaded||due(loaded.lastRetentionAt,now,RETENTION_REPEAT_MS))){
+    if(loaded){loaded.lastRetentionAt=now.toISOString();await persist(loaded);}
+    retentionRan=true;
     if(deps.retention)await deps.retention(installationFile,config.retention?.automatic==='apply');
     else await runPersonalMaintenance([installationFile,'--retencao-automatica',...(config.retention?.automatic==='apply'?['--aplicar']:[])]);
    }
   }catch{retentionFailed=true;}
  }
- return `${summary}${retentionFailed?' retention=failed':''}${stateUnsaved?' state=unsaved':''}${tail}`;
+ return `${summary}${retentionRan?` retention=${retentionFailed?'failed':'over-budget'}`:''}${stateUnsaved?' state=unsaved':''}${tail}`;
 }
