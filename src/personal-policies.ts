@@ -17,7 +17,7 @@ export async function shareProjectAccounts(ledger:Ledger, owner:string, sourcePr
 
 /**
  * Publishes the first capacity and quality revisions when the project has none.
- * A project with no capacity revision is born on the intermediário combo. Missing Claude, Grok
+ * A project with no capacity revision is born on the intermediário combo. Missing Claude
  * or Codex accounts leave that revision unpublished. An existing revision is left alone.
  * Quality is still copied from the source project when that revision exists.
  */

@@ -30,34 +30,34 @@ const slot=(provider:ComboSlot['provider'],model:string,effort:ComboSlot['effort
  ({provider,model,effort,count,...(reserve?{reserve}:{})});
 
 const sol=(effort:ComboSlot['effort']):ComboReserve=>({provider:'codex',model:'gpt-6.1-sol',effort});
-const grokReserve=(effort:ComboSlot['effort']):ComboReserve=>({provider:'grok',model:'grok-4.6',effort});
 const sonnet=(effort:ComboSlot['effort']):ComboReserve=>({provider:'claude',model:'claude-sonnet-5-5',effort});
-/** The three teams the owner asked for. Counts are explicit so the JSON stays stable. */
+const opus=(effort:ComboSlot['effort']):ComboReserve=>({provider:'claude',model:'claude-opus-5-5',effort});
+/** The three teams the owner asked for, with Claude and Codex only. Counts are explicit so the JSON stays stable. */
 export const builtinCombos:PersonalCombo[]=[
  {name:'complexo',roles:{
   manager:slot('claude','claude-opus-5-5','high',1,sol('high')),
-  reviewer:slot('claude','claude-opus-5-5','high',1,grokReserve('high')),
+  reviewer:slot('claude','claude-opus-5-5','high',1,sonnet('high')),
   programmer:{
-   standard:[slot('codex','gpt-6.1-sol','high',3,grokReserve('high'))],
-   basic:[slot('grok','grok-4.6','high',1,sol('high'))],
+   standard:[slot('codex','gpt-6.1-sol','high',3,sonnet('high'))],
+   basic:[slot('claude','claude-sonnet-5-5','high',1,sol('high'))],
   },
-  qa:slot('grok','grok-4.6','high',1,sonnet('medium')),
+  qa:slot('claude','claude-sonnet-5-5','high',1,opus('medium')),
  }},
  {name:'intermediário',roles:{
   manager:slot('claude','claude-sonnet-5-5','high',1,sol('medium')),
   reviewer:slot('codex','gpt-6.1-sol','high',1,sonnet('high')),
   programmer:{standard:[
-   slot('grok','grok-4.6','medium',2,sol('medium')),
-   slot('codex','gpt-6.1-sol','medium',1,grokReserve('medium')),
+   slot('claude','claude-sonnet-5-5','medium',2,sol('medium')),
+   slot('codex','gpt-6.1-sol','medium',1,sonnet('medium')),
   ]},
-  qa:slot('claude','claude-sonnet-5-5','medium',1,grokReserve('medium')),
+  qa:slot('claude','claude-sonnet-5-5','medium',1,opus('medium')),
  }},
  {name:'economia',roles:{
-  manager:slot('claude','claude-sonnet-5-5','medium',1,grokReserve('medium')),
+  manager:slot('claude','claude-sonnet-5-5','medium',1,opus('medium')),
   reviewer:slot('codex','gpt-6.1-terra','high',1,sonnet('low')),
   programmer:{standard:[
-   slot('grok','grok-4.6','medium',2,{provider:'codex',model:'gpt-6.1-terra',effort:'medium'}),
-   slot('codex','gpt-6.1-terra','medium',1,grokReserve('medium')),
+   slot('claude','claude-sonnet-5-5','medium',2,{provider:'codex',model:'gpt-6.1-terra',effort:'medium'}),
+   slot('codex','gpt-6.1-terra','medium',1,sonnet('medium')),
   ]},
  }},
 ].map(combo=>PersonalCombo.parse(combo));
@@ -181,7 +181,7 @@ export async function requireCodexAuthFile(accountHome:string){
 }
 
 /** Profile ids named by a capacity snapshot, including emergency and programmer-tier reserves. */
-function snapshotProfileIds(snapshot:unknown):string[]{
+export function snapshotProfileIds(snapshot:unknown):string[]{
  const parsed=CapacityPolicy.safeParse(snapshot);
  if(!parsed.success)return [];
  const ids:string[]=[];

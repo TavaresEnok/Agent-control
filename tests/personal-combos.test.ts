@@ -10,7 +10,7 @@ import {Ledger} from '../src/ledger.ts';
 import {applyPersonalCombo,builtinCombos,findPersonalCombo,readOwnerCombos,setPersonalEvaluators,writeOwnerCombo} from '../src/personal-combos.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
-test('complexo keeps Opus regular, Sol emergency and four programmers',()=>{
+test('complexo keeps Opus regular, Sol emergency and four programmers, and no combo uses Grok',()=>{
  const combo=builtinCombos.find(item=>item.name==='complexo');
  assert.ok(combo);
  assert.equal(combo.roles.manager.model,'claude-opus-5-5');
@@ -18,23 +18,33 @@ test('complexo keeps Opus regular, Sol emergency and four programmers',()=>{
  assert.deepEqual(combo.roles.manager.reserve,{provider:'codex',model:'gpt-6.1-sol',effort:'high'});
  assert.equal(combo.roles.programmer.standard[0]?.count,3);
  assert.equal(combo.roles.programmer.standard[0]?.model,'gpt-6.1-sol');
- assert.equal(combo.roles.programmer.standard[0]?.reserve?.model,'grok-4.6');
+ assert.equal(combo.roles.programmer.standard[0]?.reserve?.model,'claude-sonnet-5-5');
+ assert.equal(combo.roles.programmer.standard[0]?.reserve?.effort,'high');
  assert.equal(combo.roles.programmer.basic?.[0]?.count,1);
- assert.equal(combo.roles.programmer.basic?.[0]?.model,'grok-4.6');
+ assert.equal(combo.roles.programmer.basic?.[0]?.model,'claude-sonnet-5-5');
+ assert.equal(combo.roles.programmer.basic?.[0]?.effort,'high');
  assert.equal(combo.roles.programmer.basic?.[0]?.reserve?.model,'gpt-6.1-sol');
- assert.equal(combo.roles.reviewer.reserve?.model,'grok-4.6');
- assert.equal(combo.roles.qa?.model,'grok-4.6');
- assert.equal(combo.roles.qa?.reserve?.model,'claude-sonnet-5-5');
+ assert.equal(combo.roles.reviewer.reserve?.model,'claude-sonnet-5-5');
+ assert.equal(combo.roles.qa?.model,'claude-sonnet-5-5');
+ assert.equal(combo.roles.qa?.effort,'high');
+ assert.equal(combo.roles.qa?.reserve?.model,'claude-opus-5-5');
  assert.equal(combo.roles.qa?.reserve?.effort,'medium');
  const middle=builtinCombos.find(item=>item.name==='intermediário')!;
  assert.equal(middle.roles.programmer.standard[0]?.count,2);
  assert.equal(middle.roles.programmer.standard[0]?.reserve?.model,'gpt-6.1-sol');
  assert.equal(middle.roles.programmer.standard[1]?.count,1);
- assert.equal(middle.roles.programmer.standard[1]?.reserve?.model,'grok-4.6');
+ assert.equal(middle.roles.programmer.standard[0]?.model,'claude-sonnet-5-5');
+ assert.equal(middle.roles.programmer.standard[1]?.reserve?.model,'claude-sonnet-5-5');
+ assert.equal(middle.roles.qa?.reserve?.model,'claude-opus-5-5');
  const cheap=builtinCombos.find(item=>item.name==='economia')!;
  assert.equal(cheap.roles.qa,undefined);
  assert.equal(cheap.roles.programmer.standard[1]?.model,'gpt-6.1-terra');
  assert.equal(cheap.roles.reviewer.reserve?.effort,'low');
+ assert.equal(cheap.roles.manager.reserve?.model,'claude-opus-5-5');
+ assert.equal(cheap.roles.programmer.standard[0]?.model,'claude-sonnet-5-5');
+ const providers=builtinCombos.flatMap(item=>[item.roles.manager,item.roles.reviewer,...(item.roles.qa?[item.roles.qa]:[]),...item.roles.programmer.standard,...(item.roles.programmer.basic??[])])
+  .flatMap(slot=>[slot.provider,...(slot.reserve?[slot.reserve.provider]:[])]);
+ assert.deepEqual([...new Set(providers)].sort(),['claude','codex']);
  assert.equal(findPersonalCombo('Complexo',[]).name,'complexo');
  assert.deepEqual(builtinCombos.map(item=>item.name).sort(),['complexo','economia','intermediário'].sort());
 });
@@ -78,7 +88,7 @@ test('complexo refuses without Codex and publishes Opus regular, Sol emergency a
    await capacity.addAccount(principal,project,{id,provider,label:provider,resourceIdentity:provider+':'+id,mode:'synthetic',eligibility:'documented_supported',eligibilitySource:'synthetic://combos',maxConcurrent:4});
    return id;
   };
-  await add('claude');await add('grok');
+  await add('claude');
   const context=await db.createContext(principal,project,randomUUID());
   const counts=async()=>{
    const profiles=Number((await db.pool.query('SELECT count(*)::int n FROM ac_profiles')).rows[0].n);
@@ -136,7 +146,7 @@ test('applying a combo on one project leaves a profile that another project stil
   await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[projectB,principal]);
   await db.pool.query('INSERT INTO ac_control_admins VALUES($1)',[principal]);
   await capacity.configure(principal,{programmingLimit:10,evaluationLimit:4});
-  for(const provider of ['claude','grok','codex'] as const){
+  for(const provider of ['claude','codex'] as const){
    const id=randomUUID();
    await capacity.addAccount(principal,projectA,{id,provider,label:provider,resourceIdentity:provider+':'+id,mode:'synthetic',eligibility:'documented_supported',eligibilitySource:'synthetic://combos',maxConcurrent:4});
    await capacity.shareAccount(principal,id,projectB);

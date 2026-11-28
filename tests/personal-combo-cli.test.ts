@@ -21,8 +21,8 @@ test('listed combo names each role and marks the current one',()=>{
  assert.match(text,/^complexo\n/);
  assert.match(text,/Gerente: 1 × claude · claude-opus-5-5 · high; reserva: codex · gpt-6\.1-sol · high/);
  assert.match(text,/Programadores padrão: 3 × codex · gpt-6\.1-sol · high/);
- assert.match(text,/Programadores básicos: 1 × grok · grok-4\.6 · high/);
- assert.match(text,/QA: 1 × grok · grok-4\.6 · high/);
+ assert.match(text,/Programadores básicos: 1 × claude · claude-sonnet-5-5 · high/);
+ assert.match(text,/QA: 1 × claude · claude-sonnet-5-5 · high/);
  const current=formatListedCombo(builtinCombos.find(item=>item.name==='economia')!,true);
  assert.match(current,/^economia \(em uso\)/);
  assert.match(current,/QA: script automático do projeto \(sem modelo\)/);

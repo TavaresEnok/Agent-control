@@ -17,7 +17,7 @@
 //   npm run personal:project -- --remover <instalação.json> <id|rótulo> [--apagar-dados] [--sim]
 //
 // --import-logins copies (never moves) the CLI logins that already exist in this user's home
-// (~/.claude/.credentials.json, ~/.grok/auth.json, ~/.codex/auth.json). Without it the script stops
+// (~/.claude/.credentials.json, ~/.codex/auth.json). Without it the script stops
 // after writing the installation file and prints the account-add commands for a device login.
 // The database must be empty and used by this project only. Images come from AC_NATIVE_*_IMAGE or,
 // if unset, from the local tags ac-native-{planning,execution,tools}:personal.
@@ -86,7 +86,7 @@ for(const [name,tag] of [['AC_NATIVE_PLANNING_IMAGE','ac-native-planning:persona
 say('preparando o ledger');
 run('node',['scripts/personal-setup.mjs',installation],images);
 
-const logins=[['claude','Claude',join(homedir(),'.claude/.credentials.json')],['grok','Grok',join(homedir(),'.grok/auth.json')],['codex','Codex',join(homedir(),'.codex/auth.json')]];
+const logins=[['claude','Claude',join(homedir(),'.claude/.credentials.json')],['codex','Codex',join(homedir(),'.codex/auth.json')]];
 const gateway=(...a)=>['--import','tsx','src/server-main.ts',...a];
 const registered=JSON.parse(capture('node',gateway('native-setup',installation),images).replace(/^[^{]*/,'')||'{}');
 if(registered.state==='account_required'){
