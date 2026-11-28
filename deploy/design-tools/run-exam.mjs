@@ -903,7 +903,7 @@ async function openAuthenticatedExam(chromium, chrome, origin, login) {
           if (audit) await current.setBypassServiceWorker(true);
           if (isPublic) return await run(current, async () => false);
           navigation = watchNavigationFailure(current);
-          const unauthorized = async () => navigation.failed() || await pageShowsLogin(page, requestedUrl, login.designLogin);
+          const unauthorized = async () => navigation.failed() || await pageShowsLogin(page, requestedUrl, login.designLogin, true);
           const result = await run(current, unauthorized);
           // Uma passagem que caiu no login não substitui o estado de sessão da última aba válida.
           if (!await unauthorized()) {

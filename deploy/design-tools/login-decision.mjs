@@ -84,12 +84,17 @@ async function formVisible(frame, selectors) {
   return false;
 }
 
-export async function pageShowsLogin(page, requestedUrl, login) {
+/**
+ * sessionRequired: quem chama abriu a página num contexto que só tem sentido com sessão (a célula
+ * "auth" do exame na imagem). Aí nem a tela de login escapa da verificação completa.
+ * Sem ele (a captura do host, que só tem um contexto), a tela de login pedida de propósito mostra
+ * o formulário com ou sem sessão, e isso não é sessão perdida; as outras rotas continuam verificadas.
+ */
+export async function pageShowsLogin(page, requestedUrl, login, sessionRequired = false) {
   const final = new URL(page.url());
   const requested = new URL(requestedUrl);
   if (final.origin !== requested.origin) return true;
-  // A própria tela de login, pedida de propósito, não é sessão perdida.
-  if (publicRoute(requestedUrl, login)) return false;
+  if (!sessionRequired && publicRoute(requestedUrl, login)) return false;
   const finalRoute = loginRoute(final);
   const path = loginPath(login, final.origin);
   if (finalRoute === path && loginRoute(requested) !== path) return true;

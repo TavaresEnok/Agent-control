@@ -98,8 +98,8 @@ test('login.path com barra final ainda reconhece a perda de sessão; a própria 
     locator: (selector: string) => ({filter: () => ({count: () => Number(shown.has(selector)), nth: () => ({evaluate: async () => true})})}),
     childFrames: () => [],
   };
-  const check = (requested: string, final: string) => pageShowsLogin(
-    {...frame, mainFrame: () => frame, url: () => origin + final}, origin + requested, login);
+  const check = (requested: string, final: string, sessionRequired = false) => pageShowsLogin(
+    {...frame, mainFrame: () => frame, url: () => origin + final}, origin + requested, login, sessionRequired);
   assert.equal(await check('/painel', '/entrar'), true, 'redirecionado ao login sem formulário visível');
   assert.equal(await check('/painel', '/entrar/?volta=painel'), true);
   assert.equal(await check('/painel', '/painel'), false);
@@ -107,6 +107,10 @@ test('login.path com barra final ainda reconhece a perda de sessão; a própria 
   assert.equal(await check('/entrar', '/entrar'), false, 'a tela de login pedida mostra o formulário');
   assert.equal(await check('/entrar/', '/entrar'), false);
   assert.equal(await check('/painel', '/painel'), true, 'o formulário numa rota protegida continua sendo login');
+  // Célula com sessão na própria rota de login: o atalho não vale, a sessão perdida aparece.
+  assert.equal(await check('/entrar', '/entrar', true), true, 'com sessão exigida, o formulário na tela de login é sessão perdida');
+  shown.clear();
+  assert.equal(await check('/entrar', '/entrar', true), false, 'com sessão exigida e sem formulário, a sessão continua');
 });
 
 const playwrightCore = new URL('../upstream/cezar/node_modules/playwright-core/index.mjs', import.meta.url);
