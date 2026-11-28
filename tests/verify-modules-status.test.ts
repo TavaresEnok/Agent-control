@@ -79,7 +79,7 @@ test('rota de módulos: autenticação, dono, projeto e só leitura', async () =
   } finally { await rm(root, {recursive: true, force: true}); }
 });
 
-test('rota de módulos: sem dados devolve os dez módulos vazios, em ordem, com o design sem andamento ao vivo', async () => {
+test('rota de módulos: sem dados devolve os dez módulos vazios, em ordem, todos com andamento ao vivo', async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'ac-modules-empty-')));
   try {
     const response = await api(root).request(url, {headers});
@@ -87,7 +87,7 @@ test('rota de módulos: sem dados devolve os dez módulos vazios, em ordem, com 
     const body = await response.json() as StatusBody;
     assert.deepEqual(body.modulos.map(item => item.modulo), ORDER);
     assert.ok(body.modulos.every(item => item.atual === null && item.ultima === null));
-    assert.deepEqual(body.modulos.filter(item => !item.andamentoDisponivel).map(item => item.modulo), ['design']);
+    assert.deepEqual(body.modulos.filter(item => !item.andamentoDisponivel).map(item => item.modulo), []);
   } finally { await rm(root, {recursive: true, force: true}); }
 });
 
@@ -173,6 +173,23 @@ test('estado: arquivo de andamento só vale com o gerente vivo e a linha ainda e
   } finally { await rm(root, {recursive: true, force: true}); }
 });
 
+test('estado: o andamento do design vale com o processo vivo e nunca vira andamento da segurança', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'ac-modules-design-')));
+  try {
+    const directory = await projectDirectory(root);
+    const startedAt = new Date(Date.now() - 30_000).toISOString();
+    await progress(directory, 'eeeeeeee-0000-4000-8000-000000000001', {status: 'running', phase: 'exame', startedAt, module: 'design', pid: process.pid, judged: 1, total: 4, modelCalls: 2});
+    const input: ModuleStatusInput = {dataDirectory: root, projectId: primaryProjectId, securityProjectId: primaryProjectId, security: [], modules: [], design: []};
+    const by = Object.fromEntries((await readModuleStatuses(fakeLedger([]), input)).map(item => [item.modulo, item]));
+    assert.equal(by.design!.atual?.total, 4);
+    assert.equal(by.design!.atual?.modelCalls, 2);
+    assert.equal(by.seguranca!.atual, null);
+    // PID morto: o arquivo running do design não conta como em andamento
+    await progress(directory, 'eeeeeeee-0000-4000-8000-000000000001', {status: 'running', phase: 'exame', startedAt, module: 'design', pid: 2 ** 22 + 1});
+    assert.equal((await readModuleStatuses(fakeLedger([]), input)).find(item => item.modulo === 'design')!.atual, null);
+  } finally { await rm(root, {recursive: true, force: true}); }
+});
+
 test('estado: o relatório mais novo de cada módulo e a situação', async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'ac-modules-last-')));
   try {
@@ -202,7 +219,7 @@ test('estado: o relatório mais novo de cada módulo e a situação', async () =
     assert.equal(by.qa!.ultima?.situacao, 'concluida');
     assert.equal(by.arquitetura!.ultima?.situacao, 'com-falhas');
     assert.equal(by.design!.ultima?.directoryName, '20261124-025251-design');
-    assert.equal(by.design!.andamentoDisponivel, false);
+    assert.equal(by.design!.andamentoDisponivel, true);
     assert.equal(by.banco!.ultima, null);
     const partial = await readModuleStatuses(fakeLedger([]), {...input, security: [{...input.security[1]!, partial: true}]});
     assert.equal(partial[0]!.ultima?.situacao, 'parcial');
