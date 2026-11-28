@@ -1,5 +1,7 @@
+import {execFile} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
-import {chmod,lstat,readFile,realpath,rename,rm,writeFile} from 'node:fs/promises';
+import {constants} from 'node:fs';
+import {chmod,lstat,open,readdir,readFile,realpath,rename,rm,writeFile} from 'node:fs/promises';
 import {basename,dirname,join,resolve,sep} from 'node:path';
 import type pg from 'pg';
 import {Id,Refusal} from './contracts.ts';
@@ -13,13 +15,15 @@ import {personalAccountRoot} from './personal-health.ts';
  *
  * Without `apply` it only reports what would change. With `apply` it refuses while the account has live work (a capacity grant
  * not released, a native or QA job `uncertain`/`running`, an installation reservation or refresh still open, a read-only quota run
- * in progress), while the vigente policy of an active project names a profile of the account and no other enabled account of the
- * same provider serves that project, while a manager context of installation.json runs on one of its profiles, or when it is the
+ * in progress, a planning job or a quota collection open), while the vigente policy of an active project names a profile of the
+ * account (unless it also names an enabled profile of another enabled account of the same provider), while a running container
+ * mounts its home (or Docker cannot say), while a manager context of installation.json runs on one of its profiles, or when it is the
  * last account of a project's `allowedAccountIds` or of `nativeBootstrap.accounts`. Otherwise, in one transaction, the account
  * is disabled, its project access is revoked, its installation domain row goes and one `account.retired` audit row is written;
- * receipts, profiles and history stay. After the commit installation.json (backup first) stops listing the account, and its home
- * `<accountHomesDirectory>/<accountId>` is removed when it is the very directory the ledger registered: no link is followed and
- * nothing outside the accounts folder is touched.
+ * receipts, profiles and history stay. After the commit installation.json (backup first, and only if it did not change meanwhile)
+ * stops listing the account (allowedAccountIds, nativeBootstrap.accounts, codexQuota.bindings), and its home
+ * `<accountHomesDirectory>/<accountId>` is emptied when it is the very directory the ledger registered: credentials and files go,
+ * the empty directory stays (see {@link emptyHome}), no link is followed and nothing outside the accounts folder is touched.
  */
 
 const USAGE='Uso: npm run gateway -- account-remove <instalação.json> <id-ou-nome-da-conta> [--sim]';
@@ -29,7 +33,9 @@ const messages:Record<string,string>={
  ACCOUNT_NOT_FOUND:'Conta não encontrada no banco.',
  ACCOUNT_AMBIGUOUS:'Há mais de uma conta com esse nome. Informe o UUID da conta.',
  ACCOUNT_REMOVE_ACTIVE:'A conta tem trabalho em curso. Espere terminar (ou encerre) e repita.',
- ACCOUNT_REMOVE_POLICY_IN_USE:'A política vigente de um projeto ativo ainda usa a conta e não há outra conta habilitada do mesmo provedor. Aplique antes um combo sem esse provedor (npm run personal:combo -- <instalação.json> <projeto> apply <combo>) e repita.',
+ ACCOUNT_REMOVE_POLICY_IN_USE:'A política vigente de um projeto ativo ainda usa perfis da conta. Reaplique antes o combo nesse projeto (npm run personal:combo -- <instalação.json> <projeto> apply <combo>) e repita.',
+ ACCOUNT_REMOVE_HOME_MOUNTED:'Um contêiner em execução monta a home da conta, ou o Docker não respondeu. Espere terminar e repita.',
+ INSTALLATION_CHANGED:'O installation.json mudou durante a retirada e não foi regravado. O banco já foi atualizado; rode o mesmo comando de novo.',
  ACCOUNT_REMOVE_MANAGER_IN_USE:'Um contexto do gerente no installation.json usa um perfil dessa conta.',
  ACCOUNT_REMOVE_LAST_ALLOWED:'A conta é a única em allowedAccountIds de um projeto. Acrescente outra conta a esse projeto antes.',
  ACCOUNT_REMOVE_LAST_BOOTSTRAP:'A conta é a única em nativeBootstrap.accounts. Registre outra conta e rode native-setup antes.',
@@ -69,16 +75,20 @@ const liveSql=`SELECT
  (SELECT count(*)::int FROM ac_native_qa_jobs q JOIN ac_capacity_grants g ON g.id=q.grant_id WHERE g.account_id=$1 AND q.state IN ('uncertain','running')) AS qa,
  (SELECT count(*)::int FROM ac_installation_reservations WHERE account_id=$1 AND state<>'released') AS reservations,
  (SELECT count(*)::int FROM ac_installation_refreshes WHERE account_id=$1 AND state<>'finished') AS refreshes,
- (SELECT count(*)::int FROM ac_readonly_quota_runs WHERE account_id=$1 AND state='uncertain') AS quota`;
+ (SELECT count(*)::int FROM ac_native_planning_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id WHERE g.account_id=$1 AND j.state IN ('prepared','uncertain','running')) AS planning,
+ (SELECT count(*)::int FROM ac_readonly_quota_runs WHERE account_id=$1 AND state='uncertain') AS quota,
+ (SELECT count(*)::int FROM ac_provider_bindings WHERE account_id=$1 AND lease_until>clock_timestamp()) AS bindings,
+ (SELECT count(*)::int FROM ac_provider_observations WHERE account_id=$1 AND state='collecting') AS observations`;
 async function liveWork(db:Pick<pg.Pool,'query'>,accountId:string){
  const row=(await db.query(liveSql,[accountId])).rows[0] as Record<string,number>;
  const names:Record<string,string>={grants:'vaga(s) de capacidade não liberada(s)',jobs:'job(s) nativo(s) em curso',qa:'job(s) de QA em curso',
-  reservations:'reserva(s) da instalação abertas',refreshes:'renovação(ões) de login abertas',quota:'leitura(s) de cota em curso'};
+  planning:'job(s) de planejamento em curso',reservations:'reserva(s) da instalação abertas',refreshes:'renovação(ões) de login abertas',
+  quota:'leitura(s) de cota em curso',bindings:'coleta(s) de cota com licença ativa',observations:'observação(ões) de cota em coleta'};
  return Object.entries(names).filter(([key])=>row[key]).map(([key,text])=>`${row[key]} ${text}`).join(', ');
 }
 
-/** Active projects whose vigente policy (latest revision, or one assigned to an open context) names a profile of the account
- * while no other enabled account of the same provider has access to the project. */
+/** Active projects whose vigente policy (latest revision, or one assigned to an open context) names a profile of the account,
+ * unless the same policy also names an enabled profile of another enabled account of the same provider that serves the project. */
 async function policyUses(db:Pick<pg.Pool,'query'>,account:Account){
  const archived=Boolean((await db.query("SELECT 1 FROM information_schema.columns WHERE table_name='ac_projects' AND column_name='archived_at' AND table_schema=current_schema()")).rowCount);
  const profiles=new Set((await db.query('SELECT id::text AS id FROM ac_profiles WHERE account_id=$1',[account.id])).rows.map(row=>String(row.id)));
@@ -90,8 +100,9 @@ async function policyUses(db:Pick<pg.Pool,'query'>,account:Account){
  const blocked=new Map<string,string>();
  for(const row of rows){
   if(blocked.has(String(row.id))||!snapshotProfileIds(row.snapshot).some(id=>profiles.has(id)))continue;
-  const other=await db.query(`SELECT 1 FROM ac_accounts a JOIN ac_account_access x ON x.account_id=a.id
-   WHERE x.project_id=$1 AND a.provider=$2 AND a.enabled AND a.id<>$3 LIMIT 1`,[row.id,account.provider,account.id]);
+  const other=await db.query(`SELECT 1 FROM ac_profiles p JOIN ac_accounts a ON a.id=p.account_id JOIN ac_account_access x ON x.account_id=a.id
+   WHERE x.project_id=$1 AND a.provider=$2 AND a.enabled AND p.enabled AND a.id<>$3 AND p.id=ANY($4::uuid[]) LIMIT 1`,
+   [row.id,account.provider,account.id,snapshotProfileIds(row.snapshot)]);
   if(!other.rowCount)blocked.set(String(row.id),`${row.label} (${row.id})`);
  }
  return [...blocked.values()];
@@ -101,7 +112,7 @@ type FileEdit={next?:string;changes:string[];refusal?:Blocked};
 /** The installation.json without the account. Nothing is written here. */
 function editInstallation(original:string,accountId:string,profiles:Set<string>):FileEdit{
  const raw=JSON.parse(original) as {project?:{label?:string;allowedAccountIds?:string[]};projects?:{label?:string;allowedAccountIds?:string[]}[];
-  nativeBootstrap?:{accounts?:{accountId?:string}[]};managerTransport?:{contexts?:{projectId?:string;profileId?:string}[]}};
+  nativeBootstrap?:{accounts?:{accountId?:string}[]};codexQuota?:{state?:string;bindings?:{accountId?:string}[]};managerTransport?:{contexts?:{projectId?:string;profileId?:string}[]}};
  const changes:string[]=[];
  const manager=raw.managerTransport?.contexts?.filter(item=>typeof item?.profileId==='string'&&profiles.has(item.profileId))??[];
  if(manager.length)return {changes,refusal:new Blocked('ACCOUNT_REMOVE_MANAGER_IN_USE',`Projeto(s): ${manager.map(item=>item.projectId).join(', ')}.`)};
@@ -116,6 +127,13 @@ function editInstallation(original:string,accountId:string,profiles:Set<string>)
   boot.accounts=boot.accounts.filter(item=>item?.accountId!==accountId);
   if(!boot.accounts.length)return {changes,refusal:new Blocked('ACCOUNT_REMOVE_LAST_BOOTSTRAP','')};
   changes.push('nativeBootstrap.accounts');
+ }
+ const quota=raw.codexQuota;
+ if(quota?.bindings?.some(item=>item?.accountId===accountId)){
+  quota.bindings=quota.bindings.filter(item=>item?.accountId!==accountId);
+  // The schema asks for at least one binding: with none left the quota registry is simply off.
+  if(!quota.bindings.length){raw.codexQuota={state:'disabled'};changes.push('codexQuota (que fica desligado)');}
+  else changes.push('codexQuota.bindings');
  }
  if(!changes.length)return {changes};
  if(!Installation.safeParse(raw).success)return {changes,refusal:new Blocked('INVALID_INSTALLATION','')};
@@ -146,7 +164,43 @@ async function checkHome(home:{path:string;device:string;inode:string;uid:string
  return undefined;
 }
 
-export async function removeProviderAccount(installationPath:string,token:string,options:{apply:boolean;now?:Date}):Promise<AccountRemoveResult>{
+export type DockerRun=(args:string[])=>Promise<{code:number;stdout:string}>;
+const defaultDocker:DockerRun=args=>new Promise(done=>execFile('docker',args,{encoding:'utf8',maxBuffer:16*1024*1024,timeout:60_000},
+ (error,stdout)=>done({code:error?(typeof (error as {code?:unknown}).code==='number'?(error as unknown as {code:number}).code:1):0,stdout:stdout??''})));
+/** Running containers that mount the home or something inside it. Undefined when Docker cannot answer. */
+async function homeMounts(docker:DockerRun,home:string):Promise<string[]|undefined>{
+ const listed=await docker(['container','ls','-q','--no-trunc']);
+ if(listed.code!==0)return undefined;
+ const ids=[...new Set(listed.stdout.split('\n').map(line=>line.trim()).filter(Boolean))];
+ if(!ids.length)return [];
+ const inspected=await docker(['container','inspect','--format','{{.Id}}{{range .Mounts}} {{.Source}}{{end}}',...ids]);
+ if(inspected.code!==0)return undefined;
+ const found:string[]=[];
+ for(const line of inspected.stdout.split('\n')){
+  const [id,...sources]=line.trim().split(' ');
+  if(id&&sources.some(source=>source===home||source.startsWith(home+sep)))found.push(id.slice(0,12));
+ }
+ return found;
+}
+
+/** Removes everything inside the registered home and keeps the empty directory. ac_account_homes is immutable and unique on
+ * (device, inode): freeing the inode would let the file system hand it to the next account's home and refuse that registration.
+ * The directory is opened without following links and checked by its descriptor; entries are removed through that descriptor,
+ * so a link put in place of the home is never followed, and links inside are unlinked, not followed. */
+async function emptyHome(home:{path:string;device:string;inode:string;uid:string}):Promise<string>{
+ const handle=await open(home.path,constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW).catch(()=>undefined/* gone or a link */);
+ if(!handle)return 'mudou durante a retirada; não foi esvaziada';
+ try{
+  const info=await handle.stat();
+  if(!info.isDirectory()||String(info.dev)!==home.device||String(info.ino)!==home.inode||String(info.uid)!==home.uid)
+   return 'mudou durante a retirada; não foi esvaziada';
+  const anchored=join('/proc/self/fd',String(handle.fd));
+  for(const name of await readdir(anchored))await rm(join(anchored,name),{recursive:true,force:true});
+  return 'credenciais e arquivos removidos; o diretório vazio fica registrado';
+ }finally{await handle.close();}
+}
+
+export async function removeProviderAccount(installationPath:string,token:string,options:{apply:boolean;now?:Date;docker?:DockerRun}):Promise<AccountRemoveResult>{
  const file=resolve(installationPath);
  const config=await loadInstallation(file);
  if(config.activation!=='personal')throw new Refusal('PERSONAL_ACTIVATION_REQUIRED',403);
@@ -169,6 +223,9 @@ export async function removeProviderAccount(installationPath:string,token:string
   const edit=editInstallation(original,accountId,profiles);
   const home=await homeOf(ledger.pool,config,accountId);
   const homeState='path' in home?await checkHome(home):home.skip;
+  const docker=options.docker??defaultDocker;
+  const mounted='path' in home&&!homeState?await homeMounts(docker,home.path):[];
+  const mountText=mounted===undefined?'o Docker não respondeu':mounted.length?`montada pelo(s) contêiner(es) ${mounted.join(', ')}`:'';
   const will=(now:string,later:string)=>options.apply?now:later;
 
   say(`Conta ${account.label} (${account.provider}, ${accountId})${account.enabled?'':', já desabilitada'}.`);
@@ -177,7 +234,7 @@ export async function removeProviderAccount(installationPath:string,token:string
   if(edit.refusal)say(accountRemoveFailureText(edit.refusal));
   say(`Banco: conta ${account.enabled?will('desabilitada','seria desabilitada'):'já desabilitada'}; ${access.length} acesso(s) de projeto ${will('revogado(s)','seriam revogados')}${access.length?` (${access.join(', ')})`:''}${domain?`; domínio da instalação ${will('retirado','seria retirado')}`:''}; recibos, perfis e histórico ficam.`);
   say(edit.changes.length?`installation.json: a conta ${will('sai','sairia')} de ${edit.changes.join(' e ')} (com backup).`:'installation.json: nada a mudar.');
-  say('path' in home?`Home ${home.path}: ${homeState??will('removida','seria removida')}.`:`Home: ${home.skip}.`);
+  say('path' in home?`Home ${home.path}: ${homeState??(mountText?`${mountText}; a retirada é recusada`:will('esvaziada','seria esvaziada (credenciais e arquivos saem; o diretório vazio fica)'))}.`:`Home: ${home.skip}.`);
 
   if(!options.apply){
    say(`Prévia, nada foi alterado. Para aplicar: npm run gateway -- account-remove ${file} ${accountId} --sim`);
@@ -188,6 +245,7 @@ export async function removeProviderAccount(installationPath:string,token:string
   if(busy)throw new Blocked('ACCOUNT_REMOVE_ACTIVE',busy+'.');
   if(uses.length)throw new Blocked('ACCOUNT_REMOVE_POLICY_IN_USE',`Projeto(s): ${uses.join('; ')}.`);
   if(edit.refusal)throw edit.refusal;
+  if(mountText)throw new Blocked('ACCOUNT_REMOVE_HOME_MOUNTED',`Home ${'path' in home?home.path:''}: ${mountText}.`);
   lines.length=0;
   say(`Conta ${account.label} (${account.provider}, ${accountId}).`);
   await ledger.tx(async c=>{
@@ -208,6 +266,8 @@ export async function removeProviderAccount(installationPath:string,token:string
 
   let backupPath:string|undefined;
   if(edit.next){
+   // A change made while the ledger was updated wins: nothing is written and the rerun (idempotent) edits the new file.
+   if(await readFile(file,'utf8')!==original)throw new Refusal('INSTALLATION_CHANGED',409);
    const stamp=stampOf(options.now??new Date());
    for(let index=1;;index++){
     backupPath=join(dirname(file),`installation.json.before-account-remove-${stamp}${index===1?'':'-'+index}`);
@@ -222,22 +282,17 @@ export async function removeProviderAccount(installationPath:string,token:string
 
   if('path' in home){
    const why=await checkHome(home);
+   const late=why?[]:await homeMounts(docker,home.path);
    if(why)say(`Home ${home.path}: ${why}.`);
-   else{
-    // Moved aside first, then checked again: what is removed is the directory that was judged, never a link put in its place.
-    const aside=join(dirname(home.path),`.retired-${accountId}-${randomUUID().slice(0,8)}`);
-    await rename(home.path,aside);
-    const info=await lstat(aside);
-    if(info.isSymbolicLink()||!info.isDirectory()||String(info.dev)!==home.device||String(info.ino)!==home.inode)
-     say(`Home ${home.path}: mudou durante a retirada; ficou em ${aside} e não foi removida.`);
-    else{await rm(aside,{recursive:true});say(`Home ${home.path}: removida.`);}
-   }
+   else if(late===undefined||late.length)
+    say(`Home ${home.path}: ${late===undefined?'o Docker não respondeu':`montada pelo(s) contêiner(es) ${late.join(', ')}`}; não foi removida. Rode o mesmo comando de novo quando terminar.`);
+   else say(`Home ${home.path}: ${await emptyHome(home)}.`);
   }else say(`Home: ${home.skip}.`);
   return {accountId,label:account.label,applied:true,lines,...(backupPath?{backupPath}:{}),restart};
  }finally{await ledger.close();}
 }
 
-export async function runAccountRemoveCli(path:string|undefined,extra:readonly string[],options?:{now?:Date}):Promise<string[]>{
+export async function runAccountRemoveCli(path:string|undefined,extra:readonly string[],options?:{now?:Date;docker?:DockerRun}):Promise<string[]>{
  const flags=extra.filter(item=>item.startsWith('--'));
  const positionals=extra.filter(item=>!item.startsWith('--'));
  if(!path||positionals.length!==1||flags.some(item=>item!=='--sim')||flags.length>1)throw new Refusal('ACCOUNT_REMOVE_USAGE',400);
