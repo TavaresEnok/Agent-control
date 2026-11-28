@@ -10,6 +10,12 @@
 // same conversation key). It does not create a database or copy a login.
 //   npm run personal:project -- --add <instalação.json> <repositório> --label <nome>
 //
+// --remover takes a secondary project out of the installation. Without --sim it only previews (with sizes). With --sim it refuses
+// while the project has an active job, a held grant or an exam in progress, backs up installation.json, archives the project in
+// the ledger and revokes its account access. --apagar-dados also removes the job folders, qa-cache, verificacoes, registered
+// artifacts, shared checkouts and Docker resources labelled com.agent-control.project=<id>. The repository is never removed.
+//   npm run personal:project -- --remover <instalação.json> <id|rótulo> [--apagar-dados] [--sim]
+//
 // --import-logins copies (never moves) the CLI logins that already exist in this user's home
 // (~/.claude/.credentials.json, ~/.grok/auth.json, ~/.codex/auth.json). Without it the script stops
 // after writing the installation file and prints the account-add commands for a device login.
@@ -32,6 +38,11 @@ if(args[0]==='--add'){
  if(!file||!repo||!label||file.startsWith('--')||repo.startsWith('--')){console.log('Uso: npm run personal:project -- --add <instalação.json> <repositório> --label <nome>');process.exit(1);}
  const root=resolve(import.meta.dirname,'..');
  const result=spawnSync(process.execPath,['--import','tsx','src/personal-project-add.ts',file,repo,'--label',label],{cwd:root,stdio:'inherit'});
+ process.exit(exitCodeOf(result));
+}
+if(args[0]==='--remover'){
+ const root=resolve(import.meta.dirname,'..');
+ const result=spawnSync(process.execPath,['--import','tsx','src/personal-project-remove.ts',...args],{cwd:root,stdio:'inherit'});
  process.exit(exitCodeOf(result));
 }
 if(args[0]==='--contas'){

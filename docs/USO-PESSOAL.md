@@ -74,6 +74,16 @@ npm run personal:project -- --contas ~/.agent-control/ispagent/installation.json
 
 Antes de atualizar o `installation.json`, o comando grava uma cópia em `installation.json.before-contas-<AAAAMMDD-HHMMSS>` e recusa qualquer UUID inválido ou que não seja uma conta ativa da instalação. Com a restrição ativa, o examinador e o revisor dos módulos 1 a 10 (incluindo `personal:verify`, a espera de cota `--esperar-cota` e o design em `preparar`, exame, crítica visual, confirmação e `criar`) usam apenas a interseção entre as contas do runtime e `allowedAccountIds`. Se a conta permitida estiver ocupada ou sem cota, a execução espera ou recusa sem cair para outra conta; se a interseção ficar vazia para o papel pedido, recusa com `PROJECT_ACCOUNTS_UNAVAILABLE`. Com uma só conta permitida, a segunda opinião dos achados altos vem de outra sessão da mesma conta (Opus 5.5 `medium`), o que basta para fechar um achado alto. A cópia de segurança ganha um sufixo `-2`, `-3`… quando há duas gravações no mesmo segundo. A conta precisa ter acesso ao projeto; uma conta ativa sem acesso é gravada, mas o exame recusa com `PROJECT_ACCOUNTS_UNAVAILABLE`.
 
+### Remover um projeto
+
+Para tirar da instalação um projeto que não é o principal (pelo UUID ou pelo rótulo):
+
+```bash
+npm run personal:project -- --remover ~/.agent-control/ispagent/installation.json outro [--apagar-dados] [--sim]
+```
+
+Sem `--sim` o comando só mostra a prévia, com tamanhos, e não muda nada. Com `--sim` ele recusa enquanto o projeto tiver job nativo ativo, vaga ou reserva não liberada, ou exame em andamento; grava `installation.json.before-remove-<AAAAMMDD-HHMMSS>`, tira o projeto de `projects[]` (e de `managerTransport.contexts` e `remoteDevelopment.projects`; o bloco `remoteDevelopment` sai se ficar sem projeto) só depois que o banco confirmou, marca o projeto como arquivado no banco (`ac_projects.archived_at`, migração 124), arquiva os contextos e revoga os acessos de conta. Recibos e histórico ficam. Com `--apagar-dados` remove também as pastas de job nativo do projeto, `qa-cache/<id>`, `verificacoes/<id>`, os worktrees, imagens, temporários e rodadas do registro de artefatos, os worktrees compartilhados e os contêineres, volumes e imagens com o rótulo `com.agent-control.project=<id>`; o que não der para provar livre fica e aparece no relatório, que termina com o comando exato para repetir, pelo UUID (o rótulo de um projeto arquivado não o encontra mais). O repositório do projeto nunca é apagado. Um projeto que já saiu do `installation.json` mas ainda está no banco é removido pelo UUID. O relatório fica em `project-removals/` na pasta de dados. Depois, reinicie o gateway.
+
 ### Pastas que o painel pode abrir
 
 O painel só lista pastas dentro das raízes gravadas em `projectRoots`. Nada fora delas aparece.

@@ -127,9 +127,10 @@ export async function defaultProcessInside(path:string){
  return false;
 }
 
-async function defaultVerifyRunImages(config:Installation){
+/** `excludeProject`: the runs of a project being removed no longer pin anything; every other project's runs still do. */
+async function defaultVerifyRunImages(config:Installation,excludeProject?:string){
  const pool=new pg.Pool({connectionString:config.databaseUrl,max:1,connectionTimeoutMillis:5000});
- try{return (await pool.query<{collector_image:string}>('SELECT DISTINCT collector_image FROM ac_verify_runs WHERE collector_image IS NOT NULL')).rows.map(row=>row.collector_image);}
+ try{return (await pool.query<{collector_image:string}>('SELECT DISTINCT collector_image FROM ac_verify_runs WHERE collector_image IS NOT NULL AND ($1::uuid IS NULL OR project_id<>$1::uuid)',[excludeProject??null])).rows.map(row=>row.collector_image);}
  finally{await pool.end();}
 }
 
@@ -414,13 +415,19 @@ const here=resolve(dirname(fileURLToPath(import.meta.url)),'..');
  * `retired`: images the native bootstrap still lists as retired (`execution.retiredImages`, `planning.retiredImageIds`) because a job may still need them.
  * `foreign`: digests pinned by OTHER installations on the same Docker daemon, read from the per-daemon reference registry.
  * Any read failure other than a missing file throws, including an unreadable reference file of another installation. */
-export async function protectedDigests(config:Installation,deps:RetentionDeps,docker:NonNullable<RetentionDeps['docker']>,options:{apply?:boolean}={}){
+/** `releasedProject`: the project being removed, whose own registered images are judged by every other pin.
+ * `publish:false` reads the other installations' pins without rewriting this installation's own file: a removal preview must
+ * not announce a reduced pin set while the project it leaves out is still installed. `apply` lets expired foreign files go. */
+export async function protectedDigests(config:Installation,deps:RetentionDeps,docker:NonNullable<RetentionDeps['docker']>,options:{apply?:boolean;releasedProject?:string;publish?:boolean}={}){
+ const releasedProject=options.releasedProject;
  const pinned=new Set<string>(digestsIn(JSON.stringify(config)));
  const retired=new Set<string>();
  const boot=config.nativeBootstrap as {planning?:{retiredImageIds?:string[]};execution?:{retiredImages?:{workerImage?:string;toolsImage?:string}[]}}|undefined;
  for(const text of [...(boot?.planning?.retiredImageIds??[]),...(boot?.execution?.retiredImages??[]).flatMap(pair=>[pair.workerImage??'',pair.toolsImage??''])])for(const digest of digestsIn(text))retired.add(digest);
  const owners=projectsOf(config);
  for(const entry of (await loadRegistry(config)).images){
+  // The images of a project being removed are judged by every other pin, not kept merely because their owner is gone.
+  if(entry.projectId===releasedProject)continue;
   const owner=owners.find(project=>project.id===entry.projectId);
   // A retired project (absent from the installation) no longer pins its candidates: they go like any unpinned image.
   if(owner?.economy?.imageRetention===false)pinned.add(entry.imageId);
@@ -443,9 +450,9 @@ export async function protectedDigests(config:Installation,deps:RetentionDeps,do
   if(typeof text!=='string'||!digestsIn(text).size)throw new Refusal('RETENTION_IMAGE_PIN_INVALID');
   for(const digest of digestsIn(text))pinned.add(digest);
  }
- for(const image of await (deps.verifyRunImages??defaultVerifyRunImages)(config))for(const digest of digestsIn(image))pinned.add(digest);
+ for(const image of await (deps.verifyRunImages??(current=>defaultVerifyRunImages(current,releasedProject)))(config))for(const digest of digestsIn(image))pinned.add(digest);
  let foreign:Set<string>;
- try{foreign=await shareDaemonReferences(config,deps,docker,[...pinned],[...retired],options.apply===true);}catch{throw new SharedReferencesUnreadable();}
+ try{foreign=await shareDaemonReferences(config,deps,docker,[...pinned],[...retired],options.apply===true,options.publish??true);}catch{throw new SharedReferencesUnreadable();}
  return {pinned,retired,foreign};
 }
 
@@ -462,11 +469,11 @@ export const SHARED_REFS_EXPIRY_MS=7*24*60*60*1000;
 const sharedRefsRoot=(deps:RetentionDeps)=>deps.sharedRefsRoot??process.env.AC_DOCKER_REFS_DIR??join(homedir(),'.agent-control-docker-refs');
 const installationKey=(config:Installation)=>createHash('sha256').update(resolve(config.dataDirectory)).digest('hex').slice(0,32);
 
-async function shareDaemonReferences(config:Installation,deps:RetentionDeps,docker:NonNullable<RetentionDeps['docker']>,pinned:string[],retired:string[],apply=false){
+async function shareDaemonReferences(config:Installation,deps:RetentionDeps,docker:NonNullable<RetentionDeps['docker']>,pinned:string[],retired:string[],apply=false,publish=true){
  const daemonId=await dockerDaemonId(docker);
  if(!daemonId)return new Set<string>();// no daemon identity: proveImage refuses every image anyway
  const directory=join(sharedRefsRoot(deps),daemonId),own=installationKey(config)+'.json';
- await mkdir(directory,{recursive:true,mode:0o755});
+ if(publish)await mkdir(directory,{recursive:true,mode:0o755});
  const mine=[...new Set([...pinned,...retired])].filter(digest=>imageIdPattern.test(digest)).sort();
  const file=join(directory,own);
  const now=(deps.now??Date.now)();
@@ -475,13 +482,15 @@ async function shareDaemonReferences(config:Installation,deps:RetentionDeps,dock
   const current=SharedRefs.parse(JSON.parse(await readFile(file,'utf8')));
   fresh=current.dataDirectory===resolve(config.dataDirectory)&&now-current.publishedAt<SHARED_REFS_REFRESH_MS&&now>=current.publishedAt&&JSON.stringify(current.pinned)===JSON.stringify(mine);
  }catch{fresh=false;}
- if(!fresh){
+ if(publish&&!fresh){
   const temporary=`${file}.${randomUUID()}.tmp`;
   await writeFile(temporary,JSON.stringify({schemaVersion:1,dataDirectory:resolve(config.dataDirectory),publishedAt:now,pinned:mine})+'\n',{mode:0o644,flag:'wx'});
   await rename(temporary,file);
  }
  const foreign=new Set<string>();
- for(const name of await readdir(directory)){
+ let names:string[];
+ try{names=await readdir(directory);}catch(error){if(!publish&&errno(error,'ENOENT'))return foreign;throw error;}
+ for(const name of names){
   if(name===own||!name.endsWith('.json'))continue;
   // Any entry that is not a well-formed inventory means an owner without a usable inventory: nothing may be removed.
   const parsed=SharedRefs.parse(JSON.parse(await readFile(join(directory,name),'utf8')));
@@ -529,7 +538,7 @@ async function dockerDaemonId(docker:NonNullable<RetentionDeps['docker']>){
 
 type ImageFacts={digests:string[];size:number|undefined};
 /** Judged again right before removal. Every doubt preserves; `docker image rm` is later run by id and never forced. */
-async function proveImage(entry:ImageEntry,guard:{pinned:Set<string>;retired:Set<string>;foreign:Set<string>},docker:NonNullable<RetentionDeps['docker']>,now:number):Promise<Verdict<ImageFacts>|{ok:false;reason:string;absent:true}>{
+async function proveImage(entry:ImageEntry,guard:{pinned:Set<string>;retired:Set<string>;foreign:Set<string>},docker:NonNullable<RetentionDeps['docker']>,now:number,minAge=IMAGE_MIN_AGE_MS):Promise<Verdict<ImageFacts>|{ok:false;reason:string;absent:true}>{
  if(!entry.daemonId)return no('registro antigo sem identidade do daemon Docker');
  const daemonId=await dockerDaemonId(docker);
  if(!daemonId)return no('identidade do daemon Docker indisponível');
@@ -555,7 +564,7 @@ async function proveImage(entry:ImageEntry,guard:{pinned:Set<string>;retired:Set
  if(digests.some(digest=>guard.foreign.has(digest)))return no('digest fixado por outra instalação neste daemon');
  if(digests.some(digest=>guard.pinned.has(digest)))return no('digest fixado ou referenciado por exame');
  const age=now-entry.registeredAt;
- if(age<IMAGE_MIN_AGE_MS)return no(`registrada há ${hours(Math.max(age,0))} h (mínimo ${hours(IMAGE_MIN_AGE_MS)} h)`);
+ if(age<minAge)return no(`registrada há ${hours(Math.max(age,0))} h (mínimo ${hours(minAge)} h)`);
  // Any container, running or stopped, created from this image or from one built on it.
  const containers=await docker(['container','ls','-a','--no-trunc','-q','--filter','ancestor='+entry.imageId]);
  if(containers.code!==0)return no('não foi possível listar contêineres');
@@ -601,8 +610,9 @@ export async function mountedByContainer(docker:NonNullable<RetentionDeps['docke
  return inspected.stdout.split('\n').some(source=>source===path||source.startsWith(path+sep)||(source!==''&&path.startsWith(source+sep)));
 }
 
-async function proveTemp(config:Installation,registry:ArtifactRegistry,entry:TempEntry,deps:Required<Pick<RetentionDeps,'now'|'processInside'|'docker'>>&{root:string}):Promise<Verdict<{idleHours:number;resumed:boolean}>|{ok:false;reason:string;absent:true}>{
- // A retired project's temporaries keep every other proof (marker, identity, closed round, idleness, no process or mount).
+/** `released`: the project is being removed, so the end of its round is not asked for. A retired project's temporaries
+ * keep every other proof (marker, identity, idleness, no process or mount). */
+async function proveTemp(config:Installation,registry:ArtifactRegistry,entry:TempEntry,deps:Required<Pick<RetentionDeps,'now'|'processInside'|'docker'>>&{root:string;released?:boolean}):Promise<Verdict<{idleHours:number;resumed:boolean}>|{ok:false;reason:string;absent:true}>{
  if(!validTempPath(entry.path,deps.root))return no('caminho fora do diretório temporário');
  const info=await lstat(entry.path,{bigint:true}).catch(error=>errno(error,'ENOENT')?null:undefined);
  if(info===null)return {ok:false,reason:'o diretório já não existe',absent:true};
@@ -623,11 +633,14 @@ async function proveTemp(config:Installation,registry:ArtifactRegistry,entry:Tem
   if(!(entry.removing&&errno(error,'ENOENT')))return no('marca de propriedade ausente');
  }
  if(marker&&(marker.entryId!==entry.id||typeof marker.nonce!=='string'||createHash('sha256').update(marker.nonce).digest('hex')!==entry.nonceDigest))return no('marca de propriedade não confere');
- const round=registry.rounds.find(item=>item.projectId===entry.projectId&&item.roundId===entry.roundId);
- if(!round)return no('rodada sem prova de encerramento');
- if(round.endedAt<entry.registeredAt)return no('encerramento anterior ao registro');
- const idle=deps.now()-round.endedAt;
- if(idle<TEMP_IDLE_MS)return no(`rodada encerrada há ${hours(Math.max(idle,0))} h (mínimo ${hours(TEMP_IDLE_MS)} h)`);
+ let idle=0;
+ if(!deps.released){
+  const round=registry.rounds.find(item=>item.projectId===entry.projectId&&item.roundId===entry.roundId);
+  if(!round)return no('rodada sem prova de encerramento');
+  if(round.endedAt<entry.registeredAt)return no('encerramento anterior ao registro');
+  idle=deps.now()-round.endedAt;
+  if(idle<TEMP_IDLE_MS)return no(`rodada encerrada há ${hours(Math.max(idle,0))} h (mínimo ${hours(TEMP_IDLE_MS)} h)`);
+ }
  try{if(!await sameDeviceTree(entry.path,entry.dev))return no('há montagem ou árvore grande demais dentro do diretório');}catch{return no('não foi possível varrer o diretório');}
  try{if(await deps.processInside(entry.path))return no('há processo usando o diretório');}catch{return no('não foi possível provar que nenhum processo usa o diretório');}
  try{if(await mountedByContainer(deps.docker,entry.path))return no('há contêiner com este diretório montado');}catch{return no('não foi possível provar que nenhum contêiner monta o diretório');}
@@ -819,4 +832,112 @@ export async function runPersonalArtifactRetention(config:Installation,apply:boo
  const verb=apply?'removido(s)':'elegível(is)';
  lines.push(`${apply?'Retenção de artefatos aplicada':'Prévia, nada foi alterado'}: worktrees ${total.worktree.done} ${verb} e ${total.worktree.kept} preservado(s); imagens ${total.image.done} ${verb} e ${total.image.kept} preservada(s); temporários ${total.temp.done} ${verb} e ${total.temp.kept} preservado(s).`);
  return lines;
+}
+
+/** Artifacts a removed project left in the registry: its worktrees, candidate images, round temporaries and rounds. Without
+ * `apply` nothing changes. Only the age rules and the "owner is still installed" rule are lifted; every proof that the artifact
+ * is ours and unused is still required, the worktree goes with a plain `git worktree remove` (git refuses changes) and the image by
+ * id without force. Whatever cannot be proved stays in the registry and is reported. The installation's own published pins are
+ * refreshed afterwards, so other installations on the daemon stop honouring the project's images. */
+export async function releaseProjectArtifacts(config:Installation,projectId:string,repo:string|undefined,apply:boolean,deps:RetentionDeps={}):Promise<{lines:string[];kept:number}>{
+ if(!z.uuid().safeParse(projectId).success)throw new Refusal('PROJECT_ID_INVALID',400);
+ if(projectsOf(config).some(item=>item.id===projectId))throw new Refusal('PROJECT_STILL_INSTALLED',409);
+ const git=deps.git??defaultGit,docker=deps.docker??defaultDocker,now=deps.now??Date.now,processInside=deps.processInside??defaultProcessInside,mountInfo=deps.mountInfo??defaultMountInfo;
+ const registry=await loadRegistry(config);
+ const lines:string[]=[];
+ let kept=0;
+ const keep=(label:string,reason:string)=>{kept++;lines.push(`${label}: preservado (${reason}).`);};
+ const forget=(kind:'worktree'|'image'|'temp',id:string,action:'removed'|'dropped')=>mutateRegistry(config,current=>{
+  const list=kind==='worktree'?current.worktrees:kind==='image'?current.images:current.temps;
+  const index=list.findIndex(item=>item.id===id);
+  if(index>=0)list.splice(index,1);
+  remember(current,kind,id,action,now());
+ });
+ const verb=apply?'removido':'seria removido';
+
+ for(const entry of registry.worktrees.filter(item=>item.projectId===projectId)){
+  const label=`worktree ${entry.path}`;
+  try{
+   const info=await lstat(entry.path,{bigint:true}).catch(error=>errno(error,'ENOENT')?null:Promise.reject(error));
+   if(info===null){if(apply)await forget('worktree',entry.id,'dropped');lines.push(`${label}: registro ${apply?'retirado':'seria retirado'} (o diretório já não existe).`);continue;}
+   if(entry.quarantine){keep(label,`quarentena registrada em ${entry.quarantine}; verificação manual necessária`);continue;}
+   if(!repo){keep(label,'repositório do projeto desconhecido');continue;}
+   if(info.isSymbolicLink()||!info.isDirectory()||await realpath(entry.path)!==entry.path){keep(label,'o caminho não é um diretório canônico');continue;}
+   if(mountedInside(await mountInfo(),entry.path)){keep(label,'há montagem dentro do diretório');continue;}
+   if(await mountedByContainer(docker,entry.path)){keep(label,'há contêiner com este diretório montado');continue;}
+   if(await processInside(entry.path)){keep(label,'há processo usando o diretório');continue;}
+   if(!apply){lines.push(`${label}: ${verb} (git worktree remove, sem --force; o ramo ${entry.branch} fica).`);continue;}
+   const removed=await git(repo,['worktree','remove',entry.path]);
+   if(removed.code!==0){keep(label,'o git recusou a remoção (há mudança ou arquivo fora do controle)');continue;}
+   await forget('worktree',entry.id,'removed');
+   lines.push(`${label}: removido (o ramo ${entry.branch} fica).`);
+  }catch{keep(label,'falha ao verificar; repita depois');}
+ }
+
+ const images=registry.images.filter(item=>item.projectId===projectId);
+ if(images.length){
+  let guard:Awaited<ReturnType<typeof protectedDigests>>|undefined;
+  try{guard=await protectedDigests(config,deps,docker,{releasedProject:projectId,apply,publish:apply});}catch{guard=undefined;}
+  for(const entry of images){
+   const label=`imagem ${entry.imageId.slice(0,19)} (${entry.module})`;
+   if(!guard){keep(label,'não foi possível ler os digests fixados, os exames e as referências compartilhadas');continue;}
+   try{
+    const proof=await proveImage(entry,guard,docker,now(),0);
+    if(!proof.ok){
+     if('absent' in proof){if(apply)await forget('image',entry.id,'dropped');lines.push(`${label}: registro ${apply?'retirado':'seria retirado'} (${proof.reason}).`);}
+     else keep(label,proof.reason);
+     continue;
+    }
+    const size=proof.facts.size===undefined?'tamanho desconhecido':`${(proof.facts.size/1e9).toFixed(3)} GB nominais`;
+    if(!apply){lines.push(`${label}: ${verb} (${size}).`);continue;}
+    const again=await proveImage(entry,await protectedDigests(config,deps,docker,{releasedProject:projectId,apply:true}),docker,now(),0);
+    if(!again.ok){keep(label,'mudou durante a remoção: '+again.reason);continue;}
+    const removed=await docker(['image','rm',entry.imageId]);
+    if(removed.code!==0){keep(label,'o Docker recusou a remoção');continue;}
+    if((await docker(['image','inspect','--format','{{.Id}}',entry.imageId])).code===0){keep(label,'a imagem continua no Docker após a remoção');continue;}
+    await forget('image',entry.id,'removed');
+    lines.push(`${label}: removida (${size}).`);
+   }catch{keep(label,'falha ao verificar; repita depois');}
+  }
+ }
+
+ let root:string|undefined;
+ try{root=await realpath(tempRoot(deps));}catch{root=undefined;}
+ for(const entry of registry.temps.filter(item=>item.projectId===projectId)){
+  const label=`temporário ${entry.path}`;
+  if(!root){keep(label,'diretório temporário indisponível');continue;}
+  try{
+   const proof=await proveTemp(config,registry,entry,{now,processInside,docker,root,released:true});
+   if(!proof.ok){
+    if('absent' in proof){if(apply)await forget('temp',entry.id,'dropped');lines.push(`${label}: registro ${apply?'retirado':'seria retirado'} (${proof.reason}).`);}
+    else keep(label,proof.reason);
+    continue;
+   }
+   if(!apply){lines.push(`${label}: ${verb}.`);continue;}
+   if(!entry.removing){
+    const birth=String((await lstat(entry.path,{bigint:true})).birthtimeNs);
+    const journal=await mutateRegistry(config,current=>{
+     const stored=current.temps.find(item=>item.id===entry.id);
+     if(!stored||stored.dev!==entry.dev||stored.ino!==entry.ino)throw new Refusal('RETENTION_REGISTRY_CHANGED',409);
+     return stored.removing??={since:now(),birth};
+    });
+    if(journal.birth!==birth)throw new Refusal('RETENTION_REGISTRY_CHANGED',409);
+   }
+   await releaseRegisteredDirectory(entry.path,entry);
+   await forget('temp',entry.id,'removed');
+   lines.push(`${label}: removido.`);
+  }catch{keep(label,'falha ao remover; repita depois');}
+ }
+
+ const rounds=registry.rounds.filter(item=>item.projectId===projectId).length;
+ if(rounds){
+  if(apply)await mutateRegistry(config,current=>{
+   // A round still referenced by a kept temporary stays, so that temporary keeps its proof of ending.
+   const held=new Set(current.temps.filter(item=>item.projectId===projectId).map(item=>item.roundId));
+   current.rounds=current.rounds.filter(item=>item.projectId!==projectId||held.has(item.roundId));
+  });
+  lines.push(`rodadas registradas do projeto: ${rounds} ${apply?'retirada(s) do registro (as que ainda têm temporário preservado ficam)':'seriam retiradas do registro'}.`);
+ }
+ if(apply)await publishOwnReferences(config,deps,docker,true);
+ return {lines,kept};
 }
