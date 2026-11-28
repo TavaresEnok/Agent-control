@@ -284,7 +284,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
   // The run is the round of its temporaries. The round is closed only where this function proves the run ended.
   const retention: ModuleRetention = {dataDirectory: input.dataDirectory, projectId: input.projectId, roundId: runId};
   const createdAt = input.createdAt ?? new Date();
-  await assertDiskSpaceForLaunch(launchVolumesOf(input.ledger, input.dataDirectory));
+  await assertDiskSpaceForLaunch(launchVolumesOf(input.ledger, input.dataDirectory), undefined, input.dataDirectory);
   const preparedDir = join(await requireDataDirectory(input.dataDirectory), 'verificacoes', input.projectId,
     moduleReportDirectoryName(createdAt, runId, input.module));
   const timeoutMs = input.timeoutMs ?? DEFAULT_COLLECTOR_TIMEOUT_MS;

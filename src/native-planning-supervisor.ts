@@ -1,4 +1,4 @@
-import {assertDiskSpaceForLaunch} from './personal-disk.ts';
+import {assertDiskSpaceForLaunch,launchDataDirectory} from './personal-disk.ts';
 import {personalEgressEnabled} from './personal-egress.ts';
 import {assertModelAllowed} from './model-policy.ts';
 import {pinNativeProtocolForNewAttempt} from './native-protocol-compatibility.ts';
@@ -74,7 +74,7 @@ export class NativePlanningSupervisor{
   });
   if(identity.exists){const result=await this.reconcile(input);if(!result)throw new Refusal('PLANNING_RESULT_UNCERTAIN');return result;}
   // Only a new planning job is admitted here; the replay above already reconciled.
-  await assertDiskSpaceForLaunch([...(this.ledger.launchVolumes??[]),this.config.hostRoot,this.config.accountRoot]);
+  await assertDiskSpaceForLaunch([...(this.ledger.launchVolumes??[]),this.config.hostRoot,this.config.accountRoot],undefined,launchDataDirectory(this.ledger));
   assertModelAllowed(input.profile.model);
   const personal=Boolean((await this.ledger.pool.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'")).rowCount);
   if(!personal||this.config.syntheticFixture){

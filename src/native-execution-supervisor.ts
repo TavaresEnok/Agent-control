@@ -1,4 +1,4 @@
-import {assertDiskSpaceForLaunch} from './personal-disk.ts';
+import {assertDiskSpaceForLaunch,launchDataDirectory} from './personal-disk.ts';
 import {personalEgressEnabled} from './personal-egress.ts';
 import {pinRetainedArtifact} from './native-work-retention.ts';
 import {moduleExamSocket,startModuleExamEgress} from './module-exam-egress.ts';
@@ -49,7 +49,7 @@ export class NativeExecutionSupervisor extends NativeExecutionTerminalWork{
  private async startLocked(principal:string,authority:Authority,raw:z.input<typeof NativeExecutionRequest>,signal?:AbortSignal){
   const input=NativeExecutionRequest.parse(raw),hash=digest(input),prior=(await this.ledger.pool.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1',[input.jobId])).rows[0];
   if(prior){await this.validateReplay(principal,authority,input,prior);return this.reconcile(principal,authority,input);}
-  await assertDiskSpaceForLaunch([...(this.ledger.launchVolumes??[]),this.config.hostRoot,this.config.accountRoot]);
+  await assertDiskSpaceForLaunch([...(this.ledger.launchVolumes??[]),this.config.hostRoot,this.config.accountRoot],undefined,launchDataDirectory(this.ledger));
   if(!this.active)throw new Refusal('NATIVE_EXECUTOR_RETIRED');
   const checkAbort=()=>{if(signal?.aborted)throw new Refusal('EXAM_INTERRUPTED');};
   checkAbort();

@@ -1,4 +1,5 @@
-import {DISK_BLOCK_PERCENT,diskUsedPercent,installationVolumes} from './personal-disk.ts';
+import {DISK_BLOCK_PERCENT,diskUsedPercent,installationVolumes,readSpaceVerdict,SPACE_REFRESH_MS} from './personal-disk.ts';
+import {measureSpace,writeSpaceRecord} from './personal-space.ts';
 import {PERSONAL_EGRESS_DISABLED,PERSONAL_EGRESS_DISABLED_MESSAGE} from './personal-egress.ts';
 import {runPersonalMaintenance} from './personal-maintenance.ts';
 import {spawn} from 'node:child_process';
@@ -10,7 +11,7 @@ import {fileURLToPath} from 'node:url';
 import {Refusal} from './contracts.ts';
 import {loadInstallation, type Installation} from './installation.ts';
 import {deliverPersonalPush} from './personal-push.ts';
-import {diskNotice,dueNotices,ERROR_WINDOW_MINUTES,loginNotices,agentConfigNotices,personalAccountRoot,repeatedErrorNotices,type HealthNotice} from './personal-health.ts';
+import {diskNotice,spaceNotice,dueNotices,ERROR_WINDOW_MINUTES,loginNotices,agentConfigNotices,personalAccountRoot,repeatedErrorNotices,type HealthNotice} from './personal-health.ts';
 import {containFailure} from './failure-log.ts';
 import {checkPersonalDockerDependencies} from './personal-docker-dependencies.ts';
 
@@ -36,6 +37,8 @@ export type PersonalWatchDeps={
  recentLog?:(unit:string,minutes:number)=>Promise<string>;
  /** Highest percent in use among the installation's volumes. */
  diskUsedPercent?:()=>Promise<number>;
+ /** Space budget notices; by default measures again (personal:espaco) when the last reading is older than SPACE_REFRESH_MS. */
+ space?:(config:Installation,installationFile:string,now:Date)=>Promise<HealthNotice[]>;
  /** Health notices about logins. */
  logins?:(config:Installation,installationFile:string,now:Date)=>Promise<HealthNotice[]>;
 };
@@ -157,6 +160,18 @@ function due(at:string|null,now:Date){
  return now.getTime()-then>=hourMs;
 }
 
+/** Keeps <dataDirectory>/space-last.json fresh for the launch gate and turns its verdict into a notice. */
+export async function defaultSpace(config:Installation,installationFile:string,now:Date,measure=(c:Installation)=>measureSpace(c,{now:()=>now})):Promise<HealthNotice[]>{
+ let verdict=await readSpaceVerdict(config.dataDirectory,now.getTime());
+ const age='measuredAt' in verdict&&verdict.measuredAt?now.getTime()-Date.parse(verdict.measuredAt):Infinity;
+ if(!(verdict.state==='ok'||verdict.state==='alerta'||verdict.state==='acima')||!(age<SPACE_REFRESH_MS)){
+  await writeSpaceRecord(config.dataDirectory,await measure(config));
+  verdict=await readSpaceVerdict(config.dataDirectory,now.getTime());
+ }
+ const notice=spaceNotice(verdict,installationFile);
+ return notice?[notice]:[];
+}
+
 /** One check. Two health failures notify; recovery notifies once. At most one image rebuild per hour. */
 export async function runPersonalWatch(argv:string[],deps:PersonalWatchDeps={}){
  const [installationArg]=argv;
@@ -234,6 +249,7 @@ export async function runPersonalWatch(argv:string[],deps:PersonalWatchDeps={}){
    health.push({key:'egress',text:PERSONAL_EGRESS_DISABLED_MESSAGE,repeatMs:hourMs});
  }catch{/* no log, no notice */}
  if(usedPercent!==undefined){const disk=diskNotice(usedPercent);if(disk)health.push(disk);}
+ try{health.push(...await (deps.space??defaultSpace)(config,installationFile,now));}catch{/* a failed measurement leaves the last reading; the gate only warns once it expires */}
  try{health.push(...await (deps.logins??defaultLogins)(config,installationFile,now));}catch{/* database or files unavailable */}
  const planned=dueNotices(health,state.sent,now);
  state.sent=planned.sent;

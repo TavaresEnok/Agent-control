@@ -42,7 +42,8 @@
     "personal:conformidade": "node scripts/personal-conformidade.mjs",
     "personal:tokens": "node --import tsx src/personal-tokens-cli.ts",
     "personal:mapa": "node scripts/personal-mapa.mjs",
-    "personal:economia": "node scripts/personal-economia.mjs"
+    "personal:economia": "node scripts/personal-economia.mjs",
+    "personal:espaco": "node scripts/personal-space.mjs"
   },
   "dependencies": {
     "@hono/node-server": "1.19.9",

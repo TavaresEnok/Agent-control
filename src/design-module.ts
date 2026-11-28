@@ -153,7 +153,7 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     throw new Refusal('DESIGN_MODULE_INVALID', 400);
   }
   const target = assertDesignTarget(input.targetUrl);
-  await assertDiskSpaceForLaunch(launchVolumesOf({launchVolumes: input.launchVolumes}, input.dataDirectory));
+  await assertDiskSpaceForLaunch(launchVolumesOf({launchVolumes: input.launchVolumes}, input.dataDirectory), undefined, input.dataDirectory);
   const rawDesignConfig = await readRepoDesignConfig(input.repo, input.files);
   const projectConfig = parseDesignProjectConfig(rawDesignConfig);
   const hasProjectConfig = rawDesignConfig !== undefined && rawDesignConfig.trim().length > 0;
