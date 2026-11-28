@@ -258,7 +258,7 @@ export async function selectModuleCollector(input: VerificationModuleRunInput): 
   if (!simple) return {image: image ?? await readPinnedModuleImage(input.module, input.rootDir)};
 
   if (image) {
-    const common = await availableSimpleToolsImage(input.dataDirectory).catch(() => undefined);
+    const common = await availableSimpleToolsImage(input.dataDirectory).catch(() => undefined /* sem imagem comum fixada e presente: segue o pin do módulo */);
     return {image, commonTools: image === common || await isInstalledCommonImage(image)};
   }
   const common = await availableSimpleToolsImage(input.dataDirectory);

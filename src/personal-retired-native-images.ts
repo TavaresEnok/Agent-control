@@ -52,7 +52,7 @@ export async function gatewayStartTimes(installationFile:string,proc='/proc'):Pr
    argv=(await readFile(join(proc,name,'cmdline'),'utf8')).split('\0');
    const at=argv.findIndex(arg=>arg.endsWith('/server-main.ts')||arg==='server-main.ts');
    if(at<0||argv[at+1]!=='serve'||!argv[at+2])continue;
-   const cwd=await readlink(join(proc,name,'cwd')).catch(()=>undefined);
+   const cwd=await readlink(join(proc,name,'cwd')).catch(()=>undefined/* processo já saiu ou de outro usuário: não é este gateway */);
    const file=argv[at+2]!;
    if(cwd!==undefined||file.startsWith('/')){
     try{

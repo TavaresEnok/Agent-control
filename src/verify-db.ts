@@ -989,7 +989,7 @@ function processAlive(pid: number): boolean {
 
 async function treeBytes(path: string): Promise<number> {
   let total = 0;
-  for (const entry of await readdir(path, {withFileTypes: true}).catch(() => [])) {
+  for (const entry of await readdir(path, {withFileTypes: true}).catch(() => [] /* pasta ausente ou ilegível: não conta tamanho */)) {
     const child = join(path, entry.name);
     if (entry.isDirectory()) total += await treeBytes(child);
     else if (entry.isFile() && entry.name !== RESERVATION) total += await lstat(child).then(info => info.size, () => 0);
@@ -1071,7 +1071,7 @@ async function archivesIntact(stamp: string, pack: StampPack): Promise<boolean> 
 
 /** Whether every file of the manifest is on disk as an original, with its manifest size. */
 async function originalsPresent(stamp: string): Promise<boolean> {
-  const manifest = await readManifest(stamp).catch(() => undefined);
+  const manifest = await readManifest(stamp).catch(() => undefined /* sem manifesto legível: originais não são considerados presentes */);
   if (!manifest) return false;
   for (const file of manifest.files) {
     const size = await lstat(join(stamp, file.path)).then(info => info.isFile() ? info.size : -1, () => -1);
@@ -1090,7 +1090,7 @@ async function dropPackedOriginals(stamp: string, pack: StampPack, openForHost: 
       try { await unlink(path); break; } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
         if (code === 'ENOENT') break;
-        if ((code === 'EACCES' || code === 'EPERM') && !opened) { opened = true; if (await openForHost().catch(() => false)) continue; }
+        if ((code === 'EACCES' || code === 'EPERM') && !opened) { opened = true; if (await openForHost().catch(() => false /* sem contêiner de permissão: o original fica e entra na contagem dos que sobraram */)) continue; }
         left += 1;
         break;
       }
@@ -1114,7 +1114,7 @@ export async function compactVerifyDatabaseStamps(dataDirectory: string, apply: 
   for (const name of names) {
     const stamp = join(parent, name);
     if (!await verifyDatabaseStampPresent(stamp)) continue;
-    let pack = await readStampPack(stamp).catch(() => null);
+    let pack = await readStampPack(stamp).catch(() => null /* pacote ilegível: a base fica como está e o exame confere na expansão */);
     if (pack && !await archivesIntact(stamp, pack)) pack = null;
     if (pack === null) {
       if (await originalsPresent(stamp)) {
@@ -1182,7 +1182,7 @@ type ExpandDeps = {tmpRoot?: string; track?: (path: string) => Promise<unknown>;
  * during the compaction, or the pack broke later): each one is read against the manifest digest and the stamp is mounted as it
  * is. Otherwise the original refusal stands. */
 async function verifiedOriginals(stamp: string, refusal: unknown): Promise<ExpandedDatabases> {
-  const manifest = await readManifest(stamp).catch(() => undefined);
+  const manifest = await readManifest(stamp).catch(() => undefined /* sem manifesto: a recusa original do pacote prevalece */);
   if (!manifest || !await originalsPresent(stamp)) throw refusal;
   for (const file of manifest.files) {
     const hash = createHash('sha256');
