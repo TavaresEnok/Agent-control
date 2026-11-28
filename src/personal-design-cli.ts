@@ -434,6 +434,8 @@ async function main() {
         const runId = randomUUID();
         // andamento/<runId>.json with this node's PID, phase and counts: `personal:status` follows the exam without pgrep.
         const tracked = trackExamProgress(resolved.dataDirectory, resolved.projectId, runId, 'design');
+        // On stderr, so the two final stdout lines (runId and report directory) stay as they were for scripts that read them.
+        console.error(`Exame de design ${runId} em andamento (${join(resolved.dataDirectory, 'verificacoes', resolved.projectId, 'andamento', `${runId}.json`)}). Acompanhe com: npm run personal:status -- <instalação.json> ${runId} --esperar`);
         const preflight = resolved.preflight ? () => resolved.preflight!([pinnedImage]) : undefined;
         try {
         const files = await readDesignRepository(resolved.repo);
