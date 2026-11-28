@@ -118,7 +118,8 @@ function benchDesignSupervisor(accountIds: readonly string[]) {
       if (task.startsWith('Pedido de crítica visual.')) {
         return {
           state: 'completed',
-          output: JSON.stringify({kind: 'visual', score: 9, notes: ['Bom contraste.'], findings: []}),
+          output: JSON.stringify({kind: 'visual', scores: ['hierarquia', 'tipografia', 'cor', 'ritmo', 'grade', 'densidade', 'componentes', 'marca', 'polimento']
+            .map(axis => ({axis, score: 9, region: 'tela inteira', suggestion: 'Manter.'}))}),
         };
       }
       return {
@@ -403,7 +404,8 @@ test('verificação pessoal via CLI usa contexto dedicado verify, convive com ge
     // tools between exams, in the same installation.
     const bin=join(root,'bin');
     await mkdir(bin);
-    await writeFile(join(bin,'docker'),'#!/bin/sh\nexit 1\n',{mode:0o700});
+    // Only the security image is present: the exam's dependency check finds it, the common image is still missing.
+    await writeFile(join(bin,'docker'),'#!/bin/sh\ncase "$*" in *'+legacyImage+'*) echo '+legacyImage+'; exit 0;; esac\nexit 1\n',{mode:0o700});
     process.env.PATH=bin+':'+previousPath;
     await mkdir(databasesDirectory, {recursive: true, mode: 0o700});
     // A published stamp has its manifest; the exam confirms it after claiming the stamp.
@@ -502,6 +504,8 @@ test('verificação pessoal via CLI usa contexto dedicado verify, convive com ge
     assert.equal(mainManager?.active, true);
 
     await writeFile(join(bin,'docker'),'#!/bin/sh\necho '+commonImage+'\n');
+    // The common image only counts once personal:tools-image proved and pinned it; a local image alone is not trusted.
+    await writeFile(join(dataDirectory,'simple-tools-image.json'),JSON.stringify({image:commonImage}),{mode:0o600});
     const second = await resolvePersonalVerification([installationPath, projectId], {composeRuntime});
     try {
       assert.equal(second.input.simple,true);

@@ -356,7 +356,7 @@ const JAVA_DB_FILE = 'trivy/java-db/trivy-java.db';
 
 /** True when the stamp carries the Trivy Java database. */
 export async function verifyDatabaseStampHasJava(stamp: string): Promise<boolean> {
-  return (await lstat(join(stamp, JAVA_DB_FILE)).catch(() => null))?.isFile() === true;
+  return (await lstat(join(stamp, JAVA_DB_FILE)).catch(() => null/* absent file: the stamp has no Java database */))?.isFile() === true;
 }
 
 /** What makes a project "Java" for the Trivy Java database: Maven or Gradle builds, or a tracked archive. */

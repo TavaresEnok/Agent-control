@@ -26,13 +26,17 @@ const principal='synthetic-generation-owner',hash='a'.repeat(64),workflowDigests
 before(async()=>{const base=process.env.AC_TEST_DATABASE_URL;if(!base)throw Error('ISOLATED_DATABASE_REQUIRED');fixture=await isolatedDatabase(base,'generations');db=new Ledger(fixture.url);await db.migrate();});
 after(async()=>{await db?.close();await fixture?.close();});
 async function setup(incompatible=false){
+ const installed=await mkdtemp(join(tmpdir(),'ac-r4-installed-generation-'));
+ // A failed setup must not leave the installed copy behind: the caller never receives close().
+ try{return await setupIn(installed,incompatible);}catch(error){await rm(installed,{recursive:true,force:true});throw error;}
+}
+async function setupIn(installed:string,incompatible:boolean){
  const project=randomUUID(),session=randomUUID();await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,'synthetic-generation']);
  await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project,principal]);
- const installed=await mkdtemp(join(tmpdir(),'ac-r4-installed-generation-'));
  await cp(resolve('src'),join(installed,'src'),{recursive:true});
  if(incompatible){const versions=join(installed,'src/workflow-versions.ts');await writeFile(versions,(await readFile(versions,'utf8')).replace("  entry(baselineWorkflow, 'v1', 'current'), entry(baselineWorkflow, 'v0', 'retained'),\n",''));}
  await writeFile(join(installed,'src/cezar.ts'),(await readFile(join(installed,'src/cezar.ts'),'utf8'))+'\n// Compatible installed build: identical frozen graph protocol, new package bytes.\n');
- for(const name of ['node_modules','upstream','db','package.json','package-lock.json'])await symlink(resolve(name),join(installed,name));
+ for(const name of ['node_modules','upstream','db','scripts','package.json','package-lock.json'])await symlink(resolve(name),join(installed,name));
  const nextModule=await import(pathToFileURL(join(installed,'src/local-workflow-runtime.ts')).href),nextLedger=await import(pathToFileURL(join(installed,'src/ledger.ts')).href),nextGenerations=await import(pathToFileURL(join(installed,'src/workflow-generations.ts')).href),nextCezar=await import(pathToFileURL(join(installed,'src/cezar.ts')).href),nextHandoff=await import(pathToFileURL(join(installed,'src/workflow-runtime-handoff.ts')).href);
  const oldCapability=await createLocalWorkflowRuntime(),nextCapability=await nextModule.createLocalWorkflowRuntime();
  const oldIdentity=oldCapability.identity,nextIdentity=nextCapability.identity;assert.notEqual(oldIdentity.buildId,nextIdentity.buildId);

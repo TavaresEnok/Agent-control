@@ -1124,13 +1124,23 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
       }
     }
     if (examinerVisual) {
-      // The reviewer's critique is a second opinion on the examiner's scores: without them it is not asked.
-      const reviewerVisual = examinerVisual.scores ? await askVisual(input, screen, 'reviewer', reviewAvoid) : null;
+      // The reviewer's critique is a second opinion on the examiner's scores: it is not asked when the examiner answered
+      // without usable scores, nor after an infrastructure failure (it would hit the same dead dependency). A provider
+      // failure of the examiner (a login, say) still gets the reviewer's critique, which may come from another seat and
+      // records its own failure in the coverage.
+      const examinerSkipsReviewer = examinerVisual.failure === null ? examinerVisual.scores === null : isInfrastructureFailure(examinerVisual.failure);
+      const reviewerVisual = examinerSkipsReviewer ? null : await askVisual(input, screen, 'reviewer', reviewAvoid);
       if (reviewerVisual) remember('reviewer', reviewerVisual.model);
       if (reviewerVisual?.failure) noteFailure('reviewer', reviewerVisual.failure);
       if (reviewerVisual?.scores) modelCoverage.reviewer.judged += 1;
       if (!examinerVisual.scores || !reviewerVisual?.scores) {
-        const missingRoles = !examinerVisual.scores ? 'examinador; a crítica do revisor não foi pedida' : 'revisor';
+        const missingRoles = reviewerVisual === null
+          ? 'examinador; a crítica do revisor não foi pedida'
+          : !examinerVisual.scores && !reviewerVisual.scores
+            ? 'examinador e revisor'
+            : !examinerVisual.scores
+              ? 'examinador'
+              : 'revisor';
         notes.push(`A crítica visual de ${oneLine(screen.route)} (${screen.file}) não veio completa (${missingRoles}).`);
       } else {
         visualComplete.add(screen);

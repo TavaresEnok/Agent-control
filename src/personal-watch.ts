@@ -415,7 +415,7 @@ export async function runPersonalWatch(argv:string[],deps:PersonalWatchDeps={}){
    const automatic=(config.retention?.automatic??'preview')!=='off';
    const spacing=overBudget?RETENTION_REPEAT_MS:hourMs;
    if(automatic&&(!loaded||due(loaded.lastRetentionAt,now,spacing))
-    &&(overBudget||!await (deps.retentionTimerEnabled??defaultRetentionTimerEnabled)(retentionTimer).catch(()=>false))){
+    &&(overBudget||!await (deps.retentionTimerEnabled??defaultRetentionTimerEnabled)(retentionTimer).catch(()=>false/* timer state unknown: treat it as disabled so retention still runs */))){
     if(loaded){loaded.lastRetentionAt=now.toISOString();await persist(loaded);}
     retentionRan=true;
     if(deps.retention)await deps.retention(installationFile,config.retention?.automatic==='apply');
