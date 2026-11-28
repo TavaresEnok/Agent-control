@@ -14,7 +14,7 @@ import {readonlyDesignExam,type NativeModuleExamRecovery,type ModuleExamWorkRele
 import {recoverPersonalOrphanedExams} from './personal-orphaned-exams.ts';
 import {inventoryJobWork,readRetentionCursor,rotateAfter,writeRetentionCursor} from './native-work-retention.ts';
 import {composePersonalExecutionSupervisors} from './personal-runtime.ts';
-import {readCurrentVerifyDatabase,refreshVerifyDatabases,runVerifyDatabaseRetention} from './verify-db.ts';
+import {readCurrentVerifyDatabase,refreshVerifyDatabases,runVerifyDatabaseRetention,verifyJavaDatabaseWanted} from './verify-db.ts';
 import {checkPersonalDockerDependencies} from './personal-docker-dependencies.ts';
 
 const imageId=/^sha256:[a-f0-9]{64}$/;
@@ -104,6 +104,22 @@ export async function runPersonalCapacityWaitRetention(config:Installation,apply
  }
 }
 
+/** storage.verifyDb for a refresh. `auto` looks at the installation's projects and the ones registered in the database;
+ * when the database cannot list them, the Java database is fetched, so an outage never reduces coverage. */
+export async function verifyDatabaseStorage(config:Installation,deps:{registeredRepos?:()=>Promise<string[]>;hasJava?:(repository:string)=>Promise<boolean>}={}){
+ const {keep,javaDb:mode}=config.storage.verifyDb;
+ if(mode!=='auto')return {keep,javaDb:mode==='always'};
+ let registered:string[];
+ try{
+  registered=await (deps.registeredRepos??(async()=>{
+   const ledger=new Ledger(config.databaseUrl,config.installationAuthority?.token);
+   try{return (await ledger.pool.query<{repo:string}>('SELECT repo FROM ac_project_repositories')).rows.map(row=>row.repo);}
+   finally{await ledger.close();}
+  }))();
+ }catch{return {keep,javaDb:true};}
+ return {keep,javaDb:await verifyJavaDatabaseWanted(mode,[config.project.repo,...config.projects.map(project=>project.repo),...registered],deps.hasJava)};
+}
+
 /** The AGENTS.md order: `work/` of terminal jobs first (the largest and most urgent under disk pressure), then old
  * vulnerability database stamps (several GB each), then dead capacity waits, then worktrees, images and temporaries. The stages are independent: a damaged artifact registry, a database outage or any other failure
  * of one stage never keeps the next one from running. A failure is reported after every stage has had its turn. */
@@ -116,7 +132,7 @@ export async function runRetentionStages(config:Installation,apply:boolean,deps:
     return [...recovered,...await simpleJobRetention(config,apply)];
    }finally{await ledger.close();}
   }:runPersonalJobRetention)],
-  ['verify-db','bases de vulnerabilidades',deps.verifyDatabaseRetention??((config,apply)=>runVerifyDatabaseRetention(config.dataDirectory,apply))],
+  ['verify-db','bases de vulnerabilidades',deps.verifyDatabaseRetention??((config,apply)=>runVerifyDatabaseRetention(config.dataDirectory,apply,{keep:config.storage.verifyDb.keep}))],
   ['capacity-waits','esperas de capacidade',deps.capacityWaitRetention??runPersonalCapacityWaitRetention],
   ['artifacts','artefatos (worktrees, imagens e temporários)',deps.artifactRetention??runPersonalArtifactRetention],
  ];
@@ -584,7 +600,7 @@ async function runMaintenanceStages(config:Installation,file:string,deps:Mainten
  });
  await stage('bases',async()=>{
   try{
-   await (deps.refreshDatabases??(async()=>{await refreshVerifyDatabases({dataDirectory:config.dataDirectory,simple:simpleIsolation(config)});}))(config.dataDirectory);
+   await (deps.refreshDatabases??(async()=>{await refreshVerifyDatabases({dataDirectory:config.dataDirectory,simple:simpleIsolation(config),...await verifyDatabaseStorage(config)});}))(config.dataDirectory);
    return {outcome:'ok',lines:['Bases de vulnerabilidade atualizadas.']};
   }catch{return {outcome:'failed',lines:['Bases de vulnerabilidade não atualizadas. A base anterior permanece.']};}
  });

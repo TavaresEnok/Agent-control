@@ -169,7 +169,15 @@ scanners=secret
 if [ -f /databases/trivy/db/trivy.db ]; then
   scanners=vuln,secret
 fi
-record_tool trivy-fs trivy /output/trivy-fs.json trivy fs --scanners "$scanners" --offline-scan --skip-db-update --skip-java-db-update \
+# Without the Java database (no Java project when it was fetched) Java archives are skipped, so Trivy never has to
+# open the missing database offline, and the marker tells the report that Java coverage is reduced.
+# The arguments were already checked above and are not used again, so they carry the extra flags.
+set --
+if [ ! -f /databases/trivy/java-db/trivy-java.db ]; then
+  : > /output/trivy-fs.sem-java-db
+  set -- --skip-files '**/*.jar' --skip-files '**/*.war' --skip-files '**/*.ear' --skip-files '**/*.par'
+fi
+record_tool trivy-fs trivy /output/trivy-fs.json trivy fs --scanners "$scanners" --offline-scan --skip-db-update --skip-java-db-update "$@" \
   --skip-check-update --skip-version-check --disable-telemetry --quiet --ignorefile '' --config '' \
   --cache-dir /databases/trivy --format json --output /output/trivy-fs.json --timeout 15m /repository
 

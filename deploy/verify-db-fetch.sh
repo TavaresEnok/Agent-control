@@ -46,8 +46,11 @@ TMPDIR=/databases/grype grype db update
 
 trivy fs --cache-dir /databases/trivy --download-db-only --skip-version-check \
   --disable-telemetry --quiet --timeout 20m /tmp/empty
-trivy fs --cache-dir /databases/trivy --download-java-db-only --skip-version-check \
-  --disable-telemetry --quiet --timeout 20m /tmp/empty
+# AC_VERIFY_JAVA_DB=0: no project of the installation has Java. The exam then skips Java archives and reports it.
+if [ "${AC_VERIFY_JAVA_DB:-1}" != 0 ]; then
+  trivy fs --cache-dir /databases/trivy --download-java-db-only --skip-version-check \
+    --disable-telemetry --quiet --timeout 20m /tmp/empty
+fi
 trivy config --cache-dir /databases/trivy --skip-version-check --disable-telemetry \
   --quiet --timeout 15m /tmp/empty
 

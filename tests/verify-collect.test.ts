@@ -183,3 +183,28 @@ test('redacao de JSON: hash do achado, Match, numeros, chaves, __proto__, Author
     await rm(directory, {recursive: true, force: true});
   }
 });
+
+test('sem a base Java o trivy-fs segue válido e relata cobertura reduzida para Java', async () => {
+  const entry = await readFile('deploy/verify-entrypoint.sh', 'utf8');
+  assert.equal(entry.match(/record_tool trivy-fs /g)?.length, 1, 'uma só chamada do trivy fs');
+  assert.match(entry, /if \[ ! -f \/databases\/trivy\/java-db\/trivy-java\.db \]; then\n  : > \/output\/trivy-fs\.sem-java-db\n  set -- --skip-files '\*\*\/\*\.jar'/);
+  assert.match(entry, /--skip-java-db-update "\$@" \\/);
+  const fetch = await readFile('deploy/verify-db-fetch.sh', 'utf8');
+  assert.match(fetch, /if \[ "\$\{AC_VERIFY_JAVA_DB:-1\}" != 0 \]; then\n  trivy fs --cache-dir \/databases\/trivy --download-java-db-only/);
+  for (const missing of [false, true]) {
+    const directory = await mkdtemp(join(tmpdir(), 'verify-collect-java-'));
+    try {
+      await writeFile(join(directory, 'status.json'), '{}\n');
+      await writeFile(join(directory, 'trivy-fs.code'), '0\n');
+      await writeFile(join(directory, 'trivy-fs.json'), JSON.stringify({SchemaVersion: 2, Results: []}));
+      if (missing) await writeFile(join(directory, 'trivy-fs.sem-java-db'), '');
+      const result = await collectToolFindings(directory);
+      const trivy = result.tools.find(tool => tool.name === 'trivy-fs');
+      assert.equal(trivy?.state, 'limpa');
+      if (missing) assert.match(trivy?.reason ?? '', /cobertura reduzida para Java/);
+      else assert.equal(trivy?.reason, null);
+    } finally {
+      await rm(directory, {recursive: true, force: true});
+    }
+  }
+});
