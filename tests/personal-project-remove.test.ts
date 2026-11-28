@@ -385,6 +385,16 @@ test('removing a project closes a stale job and a stale exam marker, and still r
   await ledger.pool.query(`INSERT INTO ac_native_execution_jobs(id,grant_id,intent_id,context_id,manager_epoch,session_id,account_id,profile_id,profile_digest,eligibility_revision,executor_digest,key_fingerprint,input_digest,base_id,role,state,created_at)
    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,1,$10,$11,$12,$13,'specialist','uncertain',clock_timestamp()-interval '8 days')`,
    [job,grant,intent.id,context,authority.epoch,input.sessionId,account,profile,digest({fixture:true}),executor,'2'.repeat(64),digest(input),input.base]);
+  // A stale QA job on the same intent, older still: its artifact and stage rows are left out (foreign keys off for this insert).
+  const qaGrant=randomUUID(),qaJob=randomUUID();
+  await ledger.pool.query(`INSERT INTO ac_capacity_grants(id,attempt_id,intent_id,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,request_digest,emergency,state)
+   VALUES($1,$2,$3,$4,$5,$6,$7,'qa',$8,1,1,$9,false,'uncertain')`,[qaGrant,randomUUID(),intent.id,context,authority.epoch,account,profile,nexo.id,digest({qaGrant})]);
+  const raw=new pg.Client({connectionString:database.url});await raw.connect();
+  try{
+   await raw.query("SET session_replication_role=replica");
+   await raw.query(`INSERT INTO ac_native_qa_jobs(id,context_id,intent_id,artifact_id,grant_id,session_id,manager_epoch,request_digest,contract_digest,state,deadline_at,created_at)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$8,'uncertain',clock_timestamp()-interval '9 days',clock_timestamp()-interval '9 days')`,[qaJob,context,intent.id,randomUUID(),qaGrant,randomUUID(),authority.epoch,'f'.repeat(64)]);
+  }finally{await raw.end();}
   await ledger.releaseLease(authority);
   await mkdir(join(hostRoot,job,'output'),{recursive:true,mode:0o700});
   // A .running marker left behind by an exam whose progress file says it failed.
@@ -417,6 +427,7 @@ test('removing a project closes a stale job and a stale exam marker, and still r
   const preview=await removePersonalProject(file,'nexo',{apply:false,deleteData:true,deps});
   const shown=preview.lines.join('\n');
   assert.match(shown,new RegExp(`Atividade parada: job nativo ${job} sem processo vivo.*seria encerrado como falho, com a vaga liberada`));
+  assert.match(shown,new RegExp(`Atividade parada: job de QA ${qaJob} sem processo vivo.*seria encerrado como falho, com a vaga liberada`));
   assert.match(shown,new RegExp(`Atividade parada: marcador ${marker} \\(exame ${exam} falhou, sem processo vivo\\); seria removido`));
   assert.doesNotMatch(shown,/Atividade em curso/);
   assert.deepEqual(await state(),untouched);
@@ -445,6 +456,18 @@ test('removing a project closes a stale job and a stale exam marker, and still r
   await writeFile(marker,'not-an-exam');
   await refuses({},/marcador: o marcador não nomeia um exame/,'not-an-exam');
   await writeFile(marker,exam,{mode:0o600});
+  // Judged stale, then alive before the archiving transaction: a manager takes the lease, or the job moves. Nothing changes.
+  let late:Awaited<ReturnType<Ledger['acquire']>>|undefined;
+  await refuses({beforeArchive:async()=>{late=await ledger.acquire(owner,context,randomUUID(),'fixture-exam',60);}},/ganhou gerente com licença válida/);
+  await ledger.releaseLease(late!);
+  await assert.rejects(()=>removePersonalProject(file,'nexo',{apply:true,deleteData:true,deps:{...deps,beforeArchive:async()=>{
+   await ledger.pool.query("UPDATE ac_native_execution_jobs SET state='running' WHERE id=$1",[job]);}}}),(error:unknown)=>{
+   assert.ok(error instanceof Refusal&&error.code==='PROJECT_REMOVE_ACTIVE');
+   assert.match(personalProjectRemoveFailureText(error),new RegExp(`o job ${job} mudou depois da avaliação`));return true;});
+  await ledger.pool.query("UPDATE ac_native_execution_jobs SET state='uncertain' WHERE id=$1",[job]);
+  assert.deepEqual(await state(),untouched);
+  assert.equal((await ledger.pool.query('SELECT state FROM ac_native_qa_jobs WHERE id=$1',[qaJob])).rows[0].state,'uncertain');
+  assert.equal(await readFile(marker,'utf8'),exam);
 
   // 3. Applied: the job is closed with a recorded reason, the grant released, the intent failed, the marker dropped, the data gone.
   const result=await removePersonalProject(file,'nexo',{apply:true,deleteData:true,deps});
@@ -456,8 +479,12 @@ test('removing a project closes a stale job and a stale exam marker, and still r
   assert.equal(after.job,'failed');assert.equal(after.grant_state,'released');assert.equal(after.intent,'failed');assert.ok(after.archived instanceof Date);
   const receipt=(await ledger.pool.query('SELECT physical_receipt FROM ac_capacity_grants WHERE id=$1',[grant])).rows[0].physical_receipt;
   assert.equal(receipt.source,'project-removal-stale');assert.equal(receipt.jobId,job);
-  const audit=(await ledger.pool.query("SELECT detail FROM ac_audit WHERE kind='project.remove.stale_job_closed'")).rows;
-  assert.deepEqual(audit.map(row=>[row.detail.jobId,row.detail.previousState,row.detail.grantReleased,row.detail.intentClosed]),[[job,'uncertain',true,true]]);
+  const audit=(await ledger.pool.query("SELECT detail FROM ac_audit WHERE kind='project.remove.stale_job_closed' ORDER BY id")).rows;
+  // The older QA job first: the intent stays open until the last job on it is closed.
+  assert.deepEqual(audit.map(row=>[row.detail.kind,row.detail.jobId,row.detail.previousState,row.detail.grantReleased,row.detail.intentClosed]),
+   [['qa',qaJob,'uncertain',true,false],['execution',job,'uncertain',true,true]]);
+  assert.deepEqual((await ledger.pool.query('SELECT q.state,g.state grant_state,g.physical_receipt->>\'source\' source FROM ac_native_qa_jobs q JOIN ac_capacity_grants g ON g.id=q.grant_id WHERE q.id=$1',[qaJob])).rows[0],
+   {state:'failed',grant_state:'released',source:'project-removal-stale'});
   assert.equal(await exists(join(hostRoot,job)),false);
   assert.equal(await exists(join(data,'verificacoes',nexo.id)),false);
   // The retired executor pair the job held is no longer kept by an open job: the image retention may judge it.

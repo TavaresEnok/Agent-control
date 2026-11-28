@@ -81,7 +81,8 @@ function run(command:string,args:string[],cwd?:string){
 const defaultDocker=(args:string[])=>run('docker',args);
 const defaultGit=(cwd:string,args:string[])=>run('git',['-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false',...args],cwd);
 
-/** One pass over /proc: the cwd, root and open files of every process this user may inspect. */
+/** One pass over /proc: the cwd, root and open files of every process this user may inspect. Processes of other uids that /proc
+ * does not let us read are skipped; a containerised job's processes are covered by the running-container check instead. */
 async function defaultProcessPaths(){
  const paths:string[]=[];
  for(const name of await readdir('/proc')){
@@ -153,20 +154,23 @@ type Activity={jobs:number;qa:number;grants:number;exams:number;marker:boolean};
 /** Hours a job must exist before the absence of its process can close it: longer than any job timeout. */
 export const STALE_JOB_HOURS=24;
 const STALE_SOURCE='project-removal-stale';
+const EXECUTION_FINGERPRINT=(t:string)=>`jsonb_build_array(${t}.state,${t}.worker_id,${t}.tools_id,${t}.launch_digest,${t}.network_id)::text`;
+const QA_FINGERPRINT=(t:string)=>`jsonb_build_array(${t}.state,${t}.container_id,${t}.stop_reason)::text`;
 const staleCandidatesSql=`SELECT j.kind,j.id::text AS id,j.context_id::text AS context_id,j.intent_id::text AS intent_id,j.grant_id::text AS grant_id,
   g.state AS grant_state,j.containers,j.created_at<clock_timestamp()-($2::int*interval '1 hour') AS old,
-  EXISTS(SELECT 1 FROM ac_managers m WHERE m.context_id=j.context_id AND m.lease_until>clock_timestamp()) AS lease
- FROM (SELECT 'execution' AS kind,e.id,e.context_id,e.intent_id,e.grant_id,e.created_at,array_remove(ARRAY[e.worker_id,e.tools_id],NULL) AS containers
+  EXISTS(SELECT 1 FROM ac_managers m WHERE m.context_id=j.context_id AND m.lease_until>clock_timestamp()) AS lease,j.fingerprint
+ FROM (SELECT 'execution' AS kind,e.id,e.context_id,e.intent_id,e.grant_id,e.created_at,array_remove(ARRAY[e.worker_id,e.tools_id],NULL) AS containers,${EXECUTION_FINGERPRINT('e')} AS fingerprint
    FROM ac_native_execution_jobs e WHERE e.state IN ('uncertain','running')
-  UNION ALL SELECT 'qa',q.id,q.context_id,q.intent_id,q.grant_id,q.created_at,array_remove(ARRAY[q.container_id],NULL)
+  UNION ALL SELECT 'qa',q.id,q.context_id,q.intent_id,q.grant_id,q.created_at,array_remove(ARRAY[q.container_id],NULL),${QA_FINGERPRINT('q')}
    FROM ac_native_qa_jobs q WHERE q.state IN ('uncertain','running')) j
  JOIN ac_contexts x ON x.id=j.context_id JOIN ac_capacity_grants g ON g.id=j.grant_id
  WHERE x.project_id=$1 ORDER BY j.created_at,j.id`;
-type JobVerdict={kind:'execution'|'qa';id:string;contextId:string;grantState:string;stale:boolean;reason:string};
+/** Everything that moves while a job lives: judged once outside the transaction, compared again under the row lock. */
+type JobVerdict={kind:'execution'|'qa';id:string;contextId:string;grantId:string;grantState:string;fingerprint:string;stale:boolean;reason:string};
 
 /** Each active job of the project, and whether it is provably without a live process (empty `reason`). */
 async function judgeActiveJobs(ledger:Ledger,projectId:string,hostRoot:string,docker:NonNullable<RetentionDeps['docker']>,processPaths:()=>Promise<string[]>):Promise<JobVerdict[]>{
- const rows=(await ledger.pool.query<{kind:'execution'|'qa';id:string;context_id:string;grant_state:string;containers:string[];old:boolean;lease:boolean}>(
+ const rows=(await ledger.pool.query<{kind:'execution'|'qa';id:string;context_id:string;grant_id:string;grant_state:string;containers:string[];old:boolean;lease:boolean;fingerprint:string}>(
   staleCandidatesSql,[projectId,STALE_JOB_HOURS])).rows;
  if(!rows.length)return [];
  // Running containers only: a stopped one runs no process. Docker or /proc unreadable proves nothing.
@@ -186,7 +190,7 @@ async function judgeActiveJobs(ledger:Ledger,projectId:string,hostRoot:string,do
    :!open?'não foi possível ler os processos'
    :open.some(item=>item===path||item.startsWith(path+sep))?'há processo usando a pasta do job'
    :'';
-  return {kind:row.kind,id:row.id,contextId:row.context_id,grantState:row.grant_state,stale:!reason,reason};
+  return {kind:row.kind,id:row.id,contextId:row.context_id,grantId:row.grant_id,grantState:row.grant_state,fingerprint:row.fingerprint,stale:!reason,reason};
  });
 }
 
@@ -217,9 +221,11 @@ async function closeStaleJobs(c:pg.PoolClient,ledger:Ledger,projectId:string,job
  const lines:string[]=[];
  for(const job of jobs){
   const table=job.kind==='execution'?'ac_native_execution_jobs':'ac_native_qa_jobs';
-  const row=(await c.query<{state:string;grant_id:string;intent_id:string;context_id:string}>(
-   `SELECT state,grant_id::text AS grant_id,intent_id::text AS intent_id,context_id::text AS context_id FROM ${table} WHERE id=$1 FOR UPDATE`,[job.id])).rows[0];
-  if(!row||(row.state!=='uncertain'&&row.state!=='running'))continue;
+  const row=(await c.query<{state:string;grant_id:string;intent_id:string;context_id:string;fingerprint:string}>(
+   `SELECT j.state,j.grant_id::text AS grant_id,j.intent_id::text AS intent_id,j.context_id::text AS context_id,
+     ${job.kind==='execution'?EXECUTION_FINGERPRINT('j'):QA_FINGERPRINT('j')} AS fingerprint FROM ${table} j WHERE j.id=$1 FOR UPDATE`,[job.id])).rows[0];
+  // The job must be exactly as judged: a new state, container, launch or stop means something touched it meanwhile.
+  if(!row||row.fingerprint!==job.fingerprint)throw new ActiveProject(`o job ${job.id} mudou depois da avaliação (${row?row.fingerprint:'sumiu'}); repita a prévia.`);
   await c.query(`UPDATE ${table} SET state='failed' WHERE id=$1`,[job.id]);
   const grant=(await c.query<{state:string}>('SELECT state FROM ac_capacity_grants WHERE id=$1 FOR UPDATE',[row.grant_id])).rows[0];
   const released=Boolean(grant&&grant.state!=='released');
@@ -230,7 +236,17 @@ async function closeStaleJobs(c:pg.PoolClient,ledger:Ledger,projectId:string,job
    OR EXISTS(SELECT 1 FROM ac_native_planning_jobs pj JOIN ac_semantic_planning_calls pc ON pc.id=pj.id WHERE pc.intent_id=$1 AND pj.state IN ('prepared','uncertain','running'))
    OR EXISTS(SELECT 1 FROM ac_capacity_grants WHERE intent_id=$1 AND state<>'released')
    OR EXISTS(SELECT 1 FROM ac_verify_runs WHERE intent_id=$1 AND status='running') AS open`,[row.intent_id])).rows[0]!.open;
-  const intentClosed=!open&&Boolean((await c.query("UPDATE ac_intents SET state='failed' WHERE id=$1 AND state NOT IN ('done','review','failed','canceled')",[row.intent_id])).rowCount);
+  // Only an intent still 'accepted' (the open state the exam finalizers close too); any other state is left as it is.
+  let intentClosed=false;
+  if(!open){
+   await c.query('SAVEPOINT stale_intent');
+   try{intentClosed=Boolean((await c.query("UPDATE ac_intents SET state='failed' WHERE id=$1 AND state='accepted'",[row.intent_id])).rowCount);}
+   catch(error){
+    await c.query('ROLLBACK TO SAVEPOINT stale_intent');
+    throw new ActiveProject(`a intenção ${row.intent_id} do job ${job.id} não pôde ser fechada (${error instanceof Error?error.message.slice(0,120):'erro do banco'}).`);
+   }
+   await c.query('RELEASE SAVEPOINT stale_intent');
+  }
   if(intentClosed)await ledger.refreshPending(c,row.context_id);
   await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'project.remove.stale_job_closed',$2)",[row.context_id,
    {projectId,jobId:job.id,kind:job.kind,previousState:row.state,grantId:row.grant_id,grantReleased:released,intentId:row.intent_id,intentClosed,source:STALE_SOURCE}]);
@@ -278,7 +294,7 @@ export async function removePersonalProject(installationPath:string,token:string
   const staleJobs=verdicts.filter(item=>item.stale);
   // What still holds the removal once the provably stale jobs and marker are set aside.
   const activity:Activity={jobs:counted.jobs-staleJobs.filter(item=>item.kind==='execution').length,qa:counted.qa-staleJobs.filter(item=>item.kind==='qa').length,
-   grants:Math.max(0,counted.grants-staleJobs.filter(item=>item.grantState!=='released').length),exams:counted.exams,marker:markerVerdict.present&&!markerVerdict.stale};
+   grants:Math.max(0,counted.grants-new Set(staleJobs.filter(item=>item.grantState!=='released').map(item=>item.grantId)).size),exams:counted.exams,marker:markerVerdict.present&&!markerVerdict.stale};
   const why=[...verdicts.filter(item=>!item.stale).map(item=>`job ${item.id}: ${item.reason}`),...(activity.marker?[`marcador: ${markerVerdict.reason}`]:[])];
   const busy=activityText(activity)+(activityText(activity)&&why.length?` (${why.join('; ')})`:'');
 
