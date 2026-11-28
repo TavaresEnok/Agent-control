@@ -7,6 +7,7 @@
   "native-owner-labels.test.ts",
   "personal-project-remove.test.ts",
   "personal-retired-native-images.test.ts",
+  "verify-db-pack.test.ts",
   "personal-space.test.ts",
   "personal-status.test.ts",
   "personal-tools-image.test.ts",
