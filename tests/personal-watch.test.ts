@@ -6,15 +6,16 @@ import {join} from 'node:path';
 import {test} from 'node:test';
 import {Refusal} from '../src/contracts.ts';
 import type {Installation} from '../src/installation.ts';
-import {gatewayDownNotice,gatewayUpNotice,imagesRebuiltNotice,migrationsNotice,personalWatchImages,runPersonalWatch,staleGrokLogin,staleLoginNotices} from '../src/personal-watch.ts';
+import {GATEWAY_RESTART_EVERY_MS,gatewayDownNotice,gatewayUpNotice,imagesRebuiltNotice,migrationsNotice,personalWatchImages,runPersonalWatch,spaceOverBudget,staleGrokLogin,staleLoginNotices} from '../src/personal-watch.ts';
 
 const digest=(char:string)=>'sha256:'+char.repeat(64);
 /** No journal, a roomy disk and no login problem, unless a test says otherwise. */
-const quiet={retention:async()=>{},recentLog:async()=>'',diskUsedPercent:async()=>50,logins:async()=>[],gatewayExitStatus:async()=>null,migrations:async()=>null};
+const quiet={retention:async()=>{},retentionTimerEnabled:async()=>true,recentLog:async()=>'',diskUsedPercent:async()=>50,logins:async()=>[],gatewayUnit:async()=>null,migrations:async()=>null};
+const stopped=(exitStatus:number|null,activeState='failed')=>async()=>({activeState,exitStatus});
 
-/** The last space measurement puts the AC at 25 GB, over the default 20 GB budget. */
-async function overBudget(data:string,gb=25){
- await writeFile(join(data,'space-last.json'),JSON.stringify({acBytes:gb*1024**3}),{mode:0o600});
+/** The last space measurement, in the format src/personal-disk.ts writes it: 25 GB (decimal) against a 20 GB budget. */
+async function overBudget(data:string,gb=25,budgetGB:number|null=20){
+ await writeFile(join(data,'space-last.json'),JSON.stringify({measuredAt:new Date().toISOString(),acBytes:gb*1e9,...(budgetGB===null?{}:{budgetGB})}),{mode:0o600});
 }
 
 async function fixture(activation:'personal'|'locked'='personal'){
@@ -166,7 +167,7 @@ test('repeated errors, a full disk and an expiring login notify at their own pac
  const env=await fixture();
  const sent:string[]=[];
  let now=new Date('2026-11-16T12:00:00Z'),log='',disk=50,logins:{key:string;text:string;repeatMs:number}[]=[];
- const run=()=>runPersonalWatch([env.file],{retention:async()=>{},now:()=>now,probe:async()=>true,notify:async(_dir,body)=>{sent.push(body);},images:()=>[],
+ const run=()=>runPersonalWatch([env.file],{retention:async()=>{},retentionTimerEnabled:async()=>true,now:()=>now,probe:async()=>true,notify:async(_dir,body)=>{sent.push(body);},images:()=>[],
   recentLog:async()=>log,diskUsedPercent:async()=>disk,logins:async()=>logins});
  try{
   const line='RECONCILIATION_FAILED NATIVE_JOB_RECONCILIATION_FAILED: d766dbd8-ebb9-4eb1-9c66-4445bdfd4481 NATIVE_EXECUTION_SUPERVISOR_UNAVAILABLE';
@@ -190,7 +191,7 @@ test('repeated errors, a full disk and an expiring login notify at their own pac
   // A notice that could not be sent is tried again on the next check.
   logins=[{key:'login:def',text:'O Grok está sem login válido.',repeatMs:24*3600_000}];
   let failing=true;
-  const flaky=()=>runPersonalWatch([env.file],{retention:async()=>{},now:()=>now,probe:async()=>true,notify:async(_dir,body)=>{if(failing)throw new Error('push down');sent.push(body);},images:()=>[],
+  const flaky=()=>runPersonalWatch([env.file],{retention:async()=>{},retentionTimerEnabled:async()=>true,now:()=>now,probe:async()=>true,notify:async(_dir,body)=>{if(failing)throw new Error('push down');sent.push(body);},images:()=>[],
    recentLog:async()=>'',diskUsedPercent:async()=>50,logins:async()=>logins});
   assert.equal(await flaky(),'watch gateway=up failures=0 images=ok');
   failing=false;
@@ -280,7 +281,7 @@ test('a gateway stopped with exit 78 gets the personal:update notice and is neve
  const restarts:string[]=[];
  const units:string[]=[];
  try{
-  const run=()=>runPersonalWatch([env.file],{...quiet,probe:async()=>false,gatewayExitStatus:async unit=>{units.push(unit);return 78;},
+  const run=()=>runPersonalWatch([env.file],{...quiet,probe:async()=>false,gatewayUnit:async unit=>{units.push(unit);return {activeState:'failed',exitStatus:78};},
    restartGateway:async unit=>{restarts.push(unit);},notify:async(_dir,body)=>{sent.push(body);}});
   assert.equal(await run(),'watch gateway=down failures=1 images=ok notice=migrations');
   assert.deepEqual(sent,[migrationsNotice(env.file)]);
@@ -296,13 +297,13 @@ test('another exit status or a running gateway does not send the migration notic
  const env=await fixture();
  const sent:string[]=[];
  try{
-  for(const status of [1,null]){
-   const line=await runPersonalWatch([env.file],{...quiet,probe:async()=>false,gatewayExitStatus:async()=>status,notify:async(_dir,body)=>{sent.push(body);}});
+  for(const unit of [stopped(1),stopped(78,'active'),async()=>null]){
+   const line=await runPersonalWatch([env.file],{...quiet,probe:async()=>false,gatewayUnit:unit,restartGateway:async()=>{},notify:async(_dir,body)=>{sent.push(body);}});
    assert.equal(line.includes('migrations'),false);
   }
   assert.equal(sent.some(body=>body.includes('personal:update')),false);
   // A healthy gateway is not even asked for its exit status.
-  await runPersonalWatch([env.file],{...quiet,probe:async()=>true,gatewayExitStatus:async()=>{assert.fail('asked while up');},notify:async()=>{}});
+  await runPersonalWatch([env.file],{...quiet,probe:async()=>true,gatewayUnit:async()=>{assert.fail('asked while up');},notify:async()=>{}});
  }finally{await rm(env.root,{recursive:true,force:true});}
 });
 
@@ -311,15 +312,19 @@ test('images are rebuilt but a pending migration keeps the gateway from being re
  const sent:string[]=[];
  let restarts=0,rebuilds=0;
  try{
-  for(const pending of [async()=>'MIGRATIONS_PENDING',async()=>{throw new Error('database down');}]){
-   const line=await runPersonalWatch([env.file],{...quiet,now:()=>new Date(Date.parse('2026-11-28T00:00:00Z')+rebuilds*2*3600_000),probe:async()=>true,images:()=>[digest('a')],inspectImage:async()=>false,
-    rebuildImages:async()=>{rebuilds+=1;},restartGateway:async()=>{restarts+=1;},migrations:pending,notify:async(_dir,body)=>{sent.push(body);}});
-   assert.match(line,/^watch gateway=up failures=0 images=rebuilt restart=skipped/);
-  }
-  assert.equal(rebuilds,2);
-  assert.equal(restarts,0);
-  assert.equal(sent.includes(imagesRebuiltNotice),false);
-  assert.equal(sent[0],migrationsNotice(env.file));
+  let now=Date.parse('2026-11-28T00:00:00Z'),present=false,pending:string|null='MIGRATIONS_PENDING';
+  const run=()=>runPersonalWatch([env.file],{...quiet,now:()=>new Date(now),probe:async()=>true,images:()=>[digest('a')],inspectImage:async()=>present,
+   rebuildImages:async()=>{rebuilds+=1;present=true;},restartGateway:async()=>{restarts+=1;},migrations:async()=>pending,notify:async(_dir,body)=>{sent.push(body);}});
+  assert.equal(await run(),'watch gateway=up failures=0 images=rebuilt restart=skipped notice=migrations');
+  // The images are there now, but the restart is still owed: once personal:update fixed the schema, it happens.
+  now+=2*60_000;
+  assert.equal(await run(),'watch gateway=up failures=0 images=ok restart=skipped');
+  pending=null;now+=2*60_000;
+  assert.equal(await run(),'watch gateway=up failures=0 images=ok notice=images');
+  assert.equal(await run(),'watch gateway=up failures=0 images=ok');
+  assert.equal(rebuilds,1);
+  assert.equal(restarts,1);
+  assert.deepEqual(sent,[migrationsNotice(env.file),imagesRebuiltNotice]);
  }finally{await rm(env.root,{recursive:true,force:true});}
 });
 
@@ -335,7 +340,7 @@ test('below the budget, or without a measurement, the watch never runs the reten
   await overBudget(env.data,19.9);
   assert.equal(await run(),'watch gateway=up failures=0 images=ok');
   // A larger budget in storage keeps 25 GB inside it.
-  await overBudget(env.data,25);
+  await overBudget(env.data,25,null);
   const body=JSON.parse(await readFile(env.file,'utf8'));
   body.storage={budgetGB:30};
   await writeFile(env.file,JSON.stringify(body));
@@ -380,8 +385,8 @@ test('an enabled Grok login whose token was not refreshed for days is reported a
  const notices=await staleLoginNotices('/contas',[{id,provider:'grok'},{id:claude,provider:'claude'},{id:'..',provider:'grok'}],now,'/inst/installation.json',async path=>{
   const text=files[path];if(text===undefined)throw Object.assign(new Error('missing'),{code:'ENOENT'});return text;});
  assert.equal(notices.length,1);
- assert.equal(notices[0]!.key,'login:'+id);
- assert.match(notices[0]!.text,/^O login do Grok \(conta ba6bfaec\) está vencido desde 16\/11 e a conta continua habilitada\. Entre de novo: npm run gateway -- account-add \/inst\/installation\.json grok Grok/);
+ assert.equal(notices[0]!.key,'login-stale:'+id);
+ assert.match(notices[0]!.text,/^O login do Grok \(conta ba6bfaec\) não é renovado desde 16\/11 e a conta continua habilitada\. Se o Grok recusar, entre de novo: npm run gateway -- account-add \/inst\/installation\.json grok Grok/);
  assert.equal(notices[0]!.text.includes('refresh_token'),false);
  // A missing file is left to loginNotices, which reports it as "sem login válido".
  assert.deepEqual(await staleLoginNotices('/contas',[{id:'22222222-2222-3333-4444-555555555555',provider:'grok'}],now,'/i.json',async()=>{throw new Error('ENOENT');}),[]);
@@ -391,8 +396,108 @@ test('each watch pass returns one summary line',async()=>{
  const env=await fixture();
  try{
   await overBudget(env.data);
-  const line=await runPersonalWatch([env.file],{...quiet,probe:async()=>false,gatewayExitStatus:async()=>78,notify:async()=>{}});
+  const line=await runPersonalWatch([env.file],{...quiet,probe:async()=>false,gatewayUnit:stopped(78),notify:async()=>{}});
   assert.equal(line.includes('\n'),false);
   assert.match(line,/^watch gateway=down /);
+ }finally{await rm(env.root,{recursive:true,force:true});}
+});
+
+test('a gateway systemd gave up on is restarted at most every 15 minutes, never on exit 78 or a pending schema',async()=>{
+ const env=await fixture();
+ const sent:string[]=[];
+ const restarts:string[]=[];
+ let now=Date.parse('2026-11-28T00:00:00Z'),unit=stopped(1),migrations:()=>Promise<string|null>=async()=>null;
+ const run=()=>runPersonalWatch([env.file],{...quiet,now:()=>new Date(now),probe:async()=>false,gatewayUnit:unit,migrations:()=>migrations(),
+  restartGateway:async name=>{restarts.push(name);},notify:async(_dir,body)=>{sent.push(body);}});
+ try{
+  assert.equal(await run(),'watch gateway=down failures=1 images=ok restart=done');
+  assert.deepEqual(restarts,['agent-control-gateway-ispagent']);
+  now+=2*60_000;
+  assert.equal(await run(),'watch gateway=down failures=2 images=ok notice=down');
+  now+=GATEWAY_RESTART_EVERY_MS-2*60_000;
+  assert.equal(await run(),'watch gateway=down failures=3 images=ok restart=done');
+  assert.equal(restarts.length,2);
+  // Database unreachable: no restart, no false migration notice, and the next pass tries again.
+  now+=GATEWAY_RESTART_EVERY_MS;migrations=async()=>{throw new Error('ECONNREFUSED');};
+  assert.equal(await run(),'watch gateway=down failures=4 images=ok restart=waiting');
+  migrations=async()=>'MIGRATIONS_PENDING';
+  assert.equal(await run(),'watch gateway=down failures=5 images=ok restart=skipped notice=migrations');
+  // Exit 78 and a unit stopped on purpose are left alone.
+  migrations=async()=>null;now+=GATEWAY_RESTART_EVERY_MS;
+  for(const state of [stopped(78),stopped(1,'inactive')]){unit=state;await run();}
+  assert.equal(restarts.length,2);
+  assert.equal(sent.filter(body=>body===migrationsNotice(env.file)).length,1);
+ }finally{await rm(env.root,{recursive:true,force:true});}
+});
+
+test('a schema check that fails after a rebuild is not reported as a migration and the restart follows on the next pass',async()=>{
+ const env=await fixture();
+ const sent:string[]=[];
+ let restarts=0,present=false,down=true,now=Date.parse('2026-11-28T00:00:00Z');
+ const run=()=>runPersonalWatch([env.file],{...quiet,now:()=>new Date(now),probe:async()=>true,images:()=>[digest('a')],inspectImage:async()=>present,
+  rebuildImages:async()=>{present=true;},restartGateway:async()=>{restarts+=1;},
+  migrations:async()=>{if(down)throw new Error('pool refused');return null;},notify:async(_dir,body)=>{sent.push(body);}});
+ try{
+  assert.equal(await run(),'watch gateway=up failures=0 images=rebuilt restart=waiting');
+  assert.equal(restarts,0);
+  assert.deepEqual(sent,[]);
+  down=false;now+=2*60_000;
+  assert.equal(await run(),'watch gateway=up failures=0 images=ok notice=images');
+  assert.equal(restarts,1);
+  assert.deepEqual(sent,[imagesRebuiltNotice]);
+ }finally{await rm(env.root,{recursive:true,force:true});}
+});
+
+test('over budget means the same as the exam gate: decimal gigabytes, the budget itself included',async()=>{
+ assert.equal(spaceOverBudget({acBytes:20e9,budgetGB:20},20),true);
+ assert.equal(spaceOverBudget({acBytes:20e9-1,budgetGB:20},20),false);
+ // The budget recorded with the reading wins; without it, the configured one.
+ assert.equal(spaceOverBudget({acBytes:25e9,budgetGB:30},20),false);
+ assert.equal(spaceOverBudget({acBytes:25e9,budgetGB:null},20),true);
+ assert.equal(spaceOverBudget(null,20),false);
+ const env=await fixture();
+ let runs=0;
+ try{
+  await overBudget(env.data,20);
+  assert.equal(await runPersonalWatch([env.file],{...quiet,retention:async()=>{runs+=1;},probe:async()=>true,notify:async()=>{}}),'watch gateway=up failures=0 images=ok retention=over-budget');
+  assert.equal(runs,1);
+ }finally{await rm(env.root,{recursive:true,force:true});}
+});
+
+test('the stale Grok notice has its own key and a file rewritten after the expiry is not stale',async()=>{
+ const now=new Date('2026-11-28T12:00:00Z');
+ const raw={'https://auth.x.ai::x':{refresh_token:'r',expires_at:'2026-11-16T20:20:58Z'}};
+ assert.equal(staleGrokLogin(raw,now,Date.parse('2026-11-27T00:00:00Z')),null);
+ assert.notEqual(staleGrokLogin(raw,now,Date.parse('2026-11-16T14:20:58Z')),null);
+ const id='ba6bfaec-5918-4a30-972b-133a47365fd5';
+ const read=async()=>JSON.stringify(raw);
+ assert.deepEqual(await staleLoginNotices('/contas',[{id,provider:'grok'}],now,'/i.json',read,async()=>Date.parse('2026-11-27T00:00:00Z')),[]);
+ const stale=await staleLoginNotices('/contas',[{id,provider:'grok'}],now,'/i.json',read,async()=>Date.parse('2026-11-16T14:20:58Z'));
+ // Both notices about one account go out in the same pass; neither silences the other.
+ const env=await fixture();
+ const sent:string[]=[];
+ try{
+  const logins=async()=>[{key:'login:'+id,text:'O Grok está sem login válido.',repeatMs:24*3600_000},...stale];
+  assert.equal(await runPersonalWatch([env.file],{...quiet,logins,probe:async()=>true,notify:async(_dir,body)=>{sent.push(body);}}),'watch gateway=up failures=0 images=ok notice=login+login-stale');
+  assert.equal(sent.length,2);
+ }finally{await rm(env.root,{recursive:true,force:true});}
+});
+
+test('until the hourly retention timer is installed the watch keeps running the retention every hour',async()=>{
+ const env=await fixture();
+ const timers:string[]=[];
+ let runs=0,enabled=false,now=Date.parse('2026-11-28T00:00:00Z');
+ const run=()=>runPersonalWatch([env.file],{...quiet,now:()=>new Date(now),retention:async()=>{runs+=1;},
+  retentionTimerEnabled:async timer=>{timers.push(timer);return enabled;},probe:async()=>true,notify:async()=>{}});
+ try{
+  assert.equal(await run(),'watch gateway=up failures=0 images=ok retention=no-timer');
+  now+=30*60_000;
+  assert.equal(await run(),'watch gateway=up failures=0 images=ok');
+  now+=30*60_000;
+  assert.equal(await run(),'watch gateway=up failures=0 images=ok retention=no-timer');
+  enabled=true;now+=3600_000;
+  assert.equal(await run(),'watch gateway=up failures=0 images=ok');
+  assert.equal(runs,2);
+  assert.equal(timers.at(-1),'agent-control-retention-ispagent.timer');
  }finally{await rm(env.root,{recursive:true,force:true});}
 });
