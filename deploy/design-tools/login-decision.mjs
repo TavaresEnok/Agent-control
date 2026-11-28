@@ -25,8 +25,49 @@ export function loginRoute(url) {
   return path + (fragment.startsWith('#/') ? fragment.replace(/\/+$/u, '') : '');
 }
 
+/** Caminho do login comparável com loginRoute(): sem barra final, com o fragmento "#/" quando houver. */
+export function loginPath(login, origin) {
+  return typeof login?.path === 'string' ? loginRoute(new URL(login.path, origin)) : undefined;
+}
+
+/**
+ * A tela de login e as rotas declaradas públicas abrem sem sessão. A raiz fica de fora,
+ * porque muitos sistemas mostram o login e o painel no mesmo "/".
+ */
+export function publicRoute(requestedUrl, login, declared = false) {
+  if (declared === true) return true;
+  const requested = new URL(requestedUrl);
+  const path = loginPath(login, requested.origin);
+  return path !== undefined && path !== '/' && loginRoute(requested) === path;
+}
+
+/**
+ * O Playwright conta como visível o elemento com opacity:0 ou dentro de [inert].
+ * Roda na página: sobe pelos ancestrais, atravessando Shadow DOM aberto.
+ */
+export function effectivelyShown(element) {
+  for (let node = element; node;) {
+    if (node.nodeType === 1) {
+      if (node.hasAttribute('inert')) return false;
+      const opacity = Number(getComputedStyle(node).opacity);
+      if (Number.isFinite(opacity) && opacity === 0) return false;
+    }
+    const root = node.getRootNode?.();
+    node = node.parentElement ?? (root && root !== node && root.host ? root.host : null);
+  }
+  return true;
+}
+
+const VISIBLE_CHECK_MAX = 20;
+
 async function visible(frame, selector) {
-  return Boolean(await frame.locator(selector).filter({visible: true}).count());
+  const shown = frame.locator(selector).filter({visible: true});
+  const count = Math.min(await shown.count(), VISIBLE_CHECK_MAX);
+  for (let index = 0; index < count; index++) {
+    // Timeout curto: durante uma navegação o elemento some, e a espera padrão do locator passaria do prazo do login.
+    if (await shown.nth(index).evaluate(effectivelyShown, undefined, {timeout: 1000}).catch(() => false)) return true;
+  }
+  return false;
 }
 
 // Os locators do Playwright atravessam Shadow DOM aberto, inclusive para seletores de texto.
@@ -35,7 +76,7 @@ async function formVisible(frame, selectors) {
   for (const child of frame.childFrames()) {
     const element = await child.frameElement();
     try {
-      if (await element.isVisible() && await formVisible(child, selectors)) return true;
+      if (await element.isVisible() && await element.evaluate(effectivelyShown).catch(() => false) && await formVisible(child, selectors)) return true;
     } finally {
       await element.dispose();
     }
@@ -47,8 +88,11 @@ export async function pageShowsLogin(page, requestedUrl, login) {
   const final = new URL(page.url());
   const requested = new URL(requestedUrl);
   if (final.origin !== requested.origin) return true;
+  // A própria tela de login, pedida de propósito, não é sessão perdida.
+  if (publicRoute(requestedUrl, login)) return false;
   const finalRoute = loginRoute(final);
-  if (finalRoute === login.path && loginRoute(requested) !== login.path) return true;
+  const path = loginPath(login, final.origin);
+  if (finalRoute === path && loginRoute(requested) !== path) return true;
   const selectors = [login.usernameSelector, login.passwordSelector, login.submitSelector].filter(Boolean);
   if (selectors.length && await formVisible(page.mainFrame(), selectors)) return true;
   return Boolean(login.successSelector && login.successRoutes?.includes(finalRoute)
