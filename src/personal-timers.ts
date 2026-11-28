@@ -16,7 +16,7 @@ export type PersonalTimerDeps={
  root?:string;
 };
 
-function serviceUnit(description:string,name:string,root:string,execPath:string,exec:string){
+function serviceUnit(description:string,name:string,root:string,execPath:string,exec:string,extra=''){
  const path=[dirname(execPath),'/usr/local/bin','/usr/bin','/bin'].join(':');
  return `[Unit]
 Description=${description} (${name})
@@ -26,9 +26,13 @@ Type=oneshot
 WorkingDirectory=${root}
 Environment=PATH=${path}
 ExecStart=${exec}
-UMask=0077
+${extra}UMask=0077
 `;
 }
+
+/** The watch runs every 2 minutes: its own summary goes out at notice and systemd's Starting/Finished/Consumed lines (info) are dropped,
+ * so each pass leaves one journal line. Failures (warning and above) still show. */
+const quietWatch='SyslogLevel=notice\nLogLevelMax=notice\n';
 
 function timerUnit(description:string,name:string,unit:string,schedule:string){
  return `[Unit]
@@ -44,7 +48,7 @@ WantedBy=timers.target
 `;
 }
 
-/** Unit text for the 2-minute watch, the 03:30 backup, Sunday's maintenance (databases, retention and dedicated cache as separate stages) and the monthly restore proof. No systemd calls. */
+/** Unit text for the 2-minute watch, the hourly retention, the 03:30 backup, Sunday's maintenance (databases, retention and dedicated cache as separate stages) and the monthly restore proof. No systemd calls. */
 export function personalTimerUnits(input:{name:string;root:string;installationFile:string;execPath:string}){
  const {name,root,installationFile,execPath}=input;
  const backupDirectory=join(personalBackupRoot,name);
@@ -60,9 +64,15 @@ export function personalTimerUnits(input:{name:string;root:string;installationFi
  const restoreTimer=`agent-control-restore-proof-${name}.timer`;
  const maintenanceExec=`${execPath} ${join(root,'scripts/personal-maintenance.mjs')} ${installationFile} --manutencao-agendada`;
  const restoreExec=`${execPath} ${join(root,'scripts/personal-restore-proof.mjs')} ${installationFile} ${backupDirectory}`;
+ // Hourly, outside the watch: --retencao-agendada reads retention.automatic (off, preview or apply) on each run.
+ const retentionService=`agent-control-retention-${name}.service`;
+ const retentionTimer=`agent-control-retention-${name}.timer`;
+ const retentionExec=`${execPath} ${join(root,'scripts/personal-maintenance.mjs')} ${installationFile} --retencao-agendada`;
  const units:PersonalTimerUnit[]=[
-  {file:watchService,text:serviceUnit('Agent Control: watch',name,root,execPath,watchExec)},
+  {file:watchService,text:serviceUnit('Agent Control: watch',name,root,execPath,watchExec,quietWatch)},
   {file:watchTimer,text:timerUnit('Agent Control: watch',name,watchService,'OnBootSec=2min\nOnUnitActiveSec=2min')},
+  {file:retentionService,text:serviceUnit('Agent Control: retention',name,root,execPath,retentionExec)},
+  {file:retentionTimer,text:timerUnit('Agent Control: retention',name,retentionService,'OnCalendar=hourly\nRandomizedDelaySec=5min')},
   {file:backupService,text:serviceUnit('Agent Control: backup',name,root,execPath,backupExec)},
   {file:backupTimer,text:timerUnit('Agent Control: backup',name,backupService,'OnCalendar=*-*-* 03:30:00\nAccuracySec=1min')},
   {file:maintenanceService,text:serviceUnit('Agent Control: maintenance',name,root,execPath,maintenanceExec)},
@@ -70,8 +80,8 @@ export function personalTimerUnits(input:{name:string;root:string;installationFi
   {file:restoreService,text:serviceUnit('Agent Control: restore proof',name,root,execPath,restoreExec)},
   {file:restoreTimer,text:timerUnit('Agent Control: restore proof',name,restoreService,'OnCalendar=*-*-01 04:30:00\nAccuracySec=1min')},
  ];
- const enable=[watchTimer,backupTimer,maintenanceTimer,restoreTimer];
- return {backupDirectory,units,enable,remove:[...enable,watchService,backupService,maintenanceService,restoreService]};
+ const enable=[watchTimer,retentionTimer,backupTimer,maintenanceTimer,restoreTimer];
+ return {backupDirectory,units,enable,remove:[...enable,watchService,retentionService,backupService,maintenanceService,restoreService]};
 }
 
 /** Write the user units, then daemon-reload and enable --now the timers. --remove drops them. */

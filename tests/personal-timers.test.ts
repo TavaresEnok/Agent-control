@@ -23,7 +23,7 @@ async function fixture(){
  return {root,data,file,home};
 }
 
-test('timer units schedule the watch every two minutes and the backup at 03:30',async()=>{
+test('timer units schedule the watch every two minutes, the retention hourly and the backup at 03:30',async()=>{
  const env=await fixture();
  const calls:string[][]=[];
  const root=fileURLToPath(new URL('..',import.meta.url));
@@ -32,9 +32,9 @@ test('timer units schedule the watch every two minutes and the backup at 03:30',
   assert.equal(line.includes('s3cret'),false);
   assert.equal(line.includes('postgresql'),false);
   const parsed=JSON.parse(line) as {installed:string[];backupDirectory:string};
-  assert.deepEqual(parsed.installed,['agent-control-watch-ispagent.timer', 'agent-control-backup-ispagent.timer', 'agent-control-maintenance-ispagent.timer', 'agent-control-restore-proof-ispagent.timer']);
+  assert.deepEqual(parsed.installed,['agent-control-watch-ispagent.timer', 'agent-control-retention-ispagent.timer', 'agent-control-backup-ispagent.timer', 'agent-control-maintenance-ispagent.timer', 'agent-control-restore-proof-ispagent.timer']);
   assert.equal(parsed.backupDirectory,'/home/app/backups-agent-control/ispagent');
-  assert.deepEqual(calls,[['daemon-reload'],['enable','--now','agent-control-watch-ispagent.timer'],['enable','--now','agent-control-backup-ispagent.timer'],['enable','--now','agent-control-maintenance-ispagent.timer'],['enable','--now','agent-control-restore-proof-ispagent.timer']]);
+  assert.deepEqual(calls,[['daemon-reload'],['enable','--now','agent-control-watch-ispagent.timer'],['enable','--now','agent-control-retention-ispagent.timer'],['enable','--now','agent-control-backup-ispagent.timer'],['enable','--now','agent-control-maintenance-ispagent.timer'],['enable','--now','agent-control-restore-proof-ispagent.timer']]);
   const dir=join(env.home,'.config/systemd/user');
   const watch=await readFile(join(dir,'agent-control-watch-ispagent.timer'),'utf8');
   const backup=await readFile(join(dir,'agent-control-backup-ispagent.timer'),'utf8');
@@ -52,7 +52,18 @@ test('timer units schedule the watch every two minutes and the backup at 03:30',
   assert.match(restore,/OnCalendar=\*-\*-01 04:30:00/);
   assert.ok(maintenanceService.includes(`/usr/bin/node ${join(root,'scripts/personal-maintenance.mjs')} ${env.file} --manutencao-agendada`));
   assert.ok(restoreService.includes(`/usr/bin/node ${join(root,'scripts/personal-restore-proof.mjs')} ${env.file} /home/app/backups-agent-control/ispagent`));
-  for(const text of [watchService,backupService,maintenanceService,restoreService]){
+  // Retention left the watch: its own hourly timer runs the scheduled retention, which follows retention.automatic.
+  const retention=await readFile(join(dir,'agent-control-retention-ispagent.timer'),'utf8');
+  const retentionService=await readFile(join(dir,'agent-control-retention-ispagent.service'),'utf8');
+  assert.match(retention,/OnCalendar=hourly\nRandomizedDelaySec=5min/);
+  assert.match(retention,/Unit=agent-control-retention-ispagent\.service/);
+  assert.ok(retentionService.includes(`/usr/bin/node ${join(root,'scripts/personal-maintenance.mjs')} ${env.file} --retencao-agendada`));
+  assert.equal(retentionService.includes('--aplicar'),false);
+  // One journal line per watch pass: the summary is logged at notice and systemd's own info lines are dropped.
+  assert.match(watchService,/^SyslogLevel=notice$/m);
+  assert.match(watchService,/^LogLevelMax=notice$/m);
+  for(const text of [backupService,maintenanceService,restoreService,retentionService])assert.equal(text.includes('LogLevelMax'),false);
+  for(const text of [watchService,retentionService,backupService,maintenanceService,restoreService]){
    assert.match(text,/Type=oneshot/);
    assert.equal(text.includes('Restart=always'),false);
    assert.equal(text.includes('s3cret'),false);
@@ -62,9 +73,9 @@ test('timer units schedule the watch every two minutes and the backup at 03:30',
   assert.ok(backupService.includes(`/usr/bin/node ${join(root,'scripts/personal-backup-rotate.mjs')} ${env.file} /home/app/backups-agent-control/ispagent`));
   calls.length=0;
   const removed=await runPersonalTimers([env.file,'--remove'],{home:env.home,systemctl:args=>{if(args[0]==='disable')throw new Error('missing');calls.push(args);}});
-  assert.equal(JSON.parse(removed).removed.length,8);
+  assert.equal(JSON.parse(removed).removed.length,10);
   assert.deepEqual(calls,[['daemon-reload']]);
-  for(const name of ['agent-control-watch-ispagent.service', 'agent-control-watch-ispagent.timer', 'agent-control-backup-ispagent.service', 'agent-control-backup-ispagent.timer', 'agent-control-maintenance-ispagent.service', 'agent-control-maintenance-ispagent.timer', 'agent-control-restore-proof-ispagent.service', 'agent-control-restore-proof-ispagent.timer']){
+  for(const name of ['agent-control-watch-ispagent.service', 'agent-control-watch-ispagent.timer', 'agent-control-retention-ispagent.service', 'agent-control-retention-ispagent.timer', 'agent-control-backup-ispagent.service', 'agent-control-backup-ispagent.timer', 'agent-control-maintenance-ispagent.service', 'agent-control-maintenance-ispagent.timer', 'agent-control-restore-proof-ispagent.service', 'agent-control-restore-proof-ispagent.timer']){
    assert.equal(await stat(join(dir,name)).then(()=>true,()=>false),false);
   }
  }finally{await rm(env.root,{recursive:true,force:true});}
