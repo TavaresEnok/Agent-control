@@ -13,7 +13,7 @@ import {validatePassiveTlsEvidence, type ProntidaoPassiveEvidence} from './pront
 import {trackRoundTemp, type RoundScope} from './personal-artifact-hooks.ts';
 import {ARCHIVE_TIMEOUT_MS, COLLECTOR_DAEMON_TIMEOUT_MS, DEFAULT_COLLECTOR_TIMEOUT_MS, DIGEST, MAX_COLLECTOR_STDOUT_BYTES, MODULE_CONTAINER_USER, MODULE_MEMORY_BYTES, MODULE_NANO_CPUS, MODULE_PIDS_LIMIT, MUTABLE_LATEST, ModuleCollectorOutput, assertVerificationModule, isErrno} from './verification-modules-contracts.ts';
 import {parseModuleCollectorOutput} from './verification-modules-collector.ts';
-import {installationName, ownerLabelArgs} from '../scripts/ac-labels.mjs';
+import {installationName, ownerLabelArgs, projectLabel} from '../scripts/ac-labels.mjs';
 
 function assertNoForeignNetwork(value: string): void {
   if (/(?:--network|--net)(?:=|\s+)(?!none\b)\S+/i.test(value)) throw new Refusal('VERIFY_NETWORK_FORBIDDEN');
@@ -260,7 +260,7 @@ async function confirmCollectorStarted(run: CollectorProcess, id: string, timeou
 
 /** Ownership labels of a module exam container: the installation and the project of the run, when the run is known. */
 export function moduleOwnerLabelArgs(retention: ModuleRetention | undefined, module: VerificationModule | undefined): string[] {
-  return retention ? ownerLabelArgs({installation: installationName(retention.dataDirectory), project: retention.projectId,
+  return retention ? ownerLabelArgs({installation: installationName(retention.dataDirectory), project: projectLabel(retention.projectId),
     kind: `exam-${module ?? 'module'}`}) : [];
 }
 

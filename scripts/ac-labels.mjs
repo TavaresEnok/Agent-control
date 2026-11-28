@@ -9,9 +9,16 @@ export const LABEL_KIND='com.agent-control.kind';
 
 const value=/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 
-/** The installation's name, the same one its services and dedicated builder use: the base name of its data directory. */
+/** The installation's name, the same one its services and dedicated builder use: the base name of its data directory.
+ * Always a valid label value: invalid characters become '-', leading non-alphanumerics are dropped (`.agent-control` is
+ * `agent-control`), it is cut at 128 characters, and an empty result is `installation`. A label never stops a launch. */
 export function installationName(dataDirectory){
- return basename(String(dataDirectory)).replace(/[^A-Za-z0-9_-]/g,'-')||'installation';
+ return basename(String(dataDirectory)).replace(/[^A-Za-z0-9_-]/g,'-').replace(/^[^A-Za-z0-9]+/,'').slice(0,128)||'installation';
+}
+
+/** A project id as a label value, or undefined when it cannot be one; the labels then name only the installation. */
+export function projectLabel(project){
+ return typeof project==='string'&&value.test(project)?project:undefined;
 }
 
 /** Labels as a record, for the Docker API. A project is included only when known; malformed values are refused, never sanitized. */
