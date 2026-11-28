@@ -13,6 +13,7 @@ import {Ledger} from '../src/ledger.ts';
 import {NativeExecutionRequest} from '../src/native-execution-supervisor.ts';
 import {runPersonalArtifactRetention,type CommandResult} from '../src/personal-artifact-retention.ts';
 import {PROJECT_LABEL,personalProjectRemoveFailureText,removePersonalProject,runPersonalProjectRemoveCli} from '../src/personal-project-remove.ts';
+import {OPEN_EXECUTION_JOBS_SQL} from '../src/personal-retired-native-images.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
 const url=process.env.AC_TEST_DATABASE_URL;
@@ -26,7 +27,7 @@ function fakeDocker(byProject:Record<string,Labelled>,registryImages:string[]){
  const images=new Set([...registryImages,...Object.values(byProject).flatMap(item=>item.images)]);
  const containers=new Set(Object.values(byProject).flatMap(item=>item.containers));
  const volumes=new Set(Object.values(byProject).flatMap(item=>item.volumes));
- const running=new Set<string>(),imageOf=new Map<string,string>();
+ const running=new Set<string>(),imageOf=new Map<string,string>(),named=new Map<string,string>();
  const zero='sha256:'+'0'.repeat(64);
  const ok=(stdout='')=>({code:0,stdout}) as CommandResult;
  const docker=async(args:string[]):Promise<CommandResult>=>{
@@ -38,6 +39,7 @@ function fakeDocker(byProject:Record<string,Labelled>,registryImages:string[]){
   if(joined==='info --format {{.ID}}')return ok('daemon-1\n');
   if(joined.startsWith('info'))return {code:1,stdout:''};
   if(args[0]==='container'&&args[1]==='ls'){
+   if(joined.includes('{{.Names}}'))return lines([...running].filter(item=>containers.has(item)).map(item=>`${item} ${named.get(item)??''}`.trim()));
    if(label)return lines((of?.containers??[]).filter(item=>containers.has(item)));
    const ancestor=args.find(item=>item.startsWith('ancestor='))?.slice('ancestor='.length);
    if(ancestor)return lines([...containers].filter(item=>imageOf.get(item)===ancestor));
@@ -66,7 +68,7 @@ function fakeDocker(byProject:Record<string,Labelled>,registryImages:string[]){
   if(args[0]==='image'&&args[1]==='rm'){images.delete(args[2]!);return ok();}
   return {code:1,stdout:'',stderr:'unexpected '+joined};
  };
- return {docker,calls,images,containers,volumes,running,imageOf};
+ return {docker,calls,images,containers,volumes,running,imageOf,named};
 }
 
 test('removing a project: preview changes nothing, active work refuses, only the chosen project goes and its repository stays',{skip:!url,timeout:180000},async()=>{
@@ -340,6 +342,127 @@ test('removing a project: preview changes nothing, active work refuses, only the
   // The other project was the last one with remote development: the block goes, and the file stays valid.
   assert.equal((await loadInstallation(file)).remoteDevelopment,undefined);
   assert.match(kept.join('\n'),/bloco remoteDevelopment/);
+ }finally{
+  await ledger.close();
+  await database.close();
+  await rm(area,{recursive:true,force:true});
+ }
+});
+
+test('removing a project closes a stale job and a stale exam marker, and still refuses anything alive',{skip:!url,timeout:180000},async()=>{
+ const database=await isolatedDatabase(url!,'projrmstale');
+ const area=await realpath(await mkdtemp(join(tmpdir(),'ac-proj-rm-stale-')));
+ const ledger=new Ledger(database.url);
+ try{
+  await ledger.migrate();
+  const data=join(area,'data'),hostRoot=join(data,'native','execution-host'),file=join(data,'installation.json');
+  await mkdir(hostRoot,{recursive:true,mode:0o700});
+  for(const path of [data,join(data,'native'),hostRoot])await chmod(path,0o700);
+  const owner='owner@example.com',account=randomUUID(),profile=randomUUID();
+  const ids:Record<string,{id:string;repo:string}>={};
+  for(const name of ['primary','nexo']){
+   const id=randomUUID(),repo=join(area,'repos',name);
+   await mkdir(repo,{recursive:true,mode:0o700});
+   execFileSync('git',['init','-q','-b','main',repo],{stdio:'ignore'});
+   ids[name]={id,repo};
+   await ledger.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[id,name]);
+   await ledger.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[id,owner]);
+   await ledger.pool.query('INSERT INTO ac_project_repositories(project_id,repo) VALUES($1,$2)',[id,repo]);
+   await ledger.pool.query("INSERT INTO ac_policy_revisions(project_id,revision,digest,snapshot,published_by) VALUES($1,1,$2,'{}',$3)",[id,'b'.repeat(64),owner]);
+  }
+  const nexo=ids.nexo!;
+  await new Capacity(ledger).addAccount(owner,ids.primary!.id,{id:account,provider:'codex',label:'shared',resourceIdentity:'codex:'+'a'.repeat(64),mode:'subscription_cli',eligibility:'documented_supported',eligibilitySource:'https://example.invalid/fixture',maxConcurrent:8});
+  await ledger.pool.query("INSERT INTO ac_profiles(id,account_id,model,effort,role,enabled) VALUES($1,$2,'fixture-model','medium','specialist',false)",[profile,account]);
+  await ledger.pool.query('INSERT INTO ac_account_access VALUES($1,$2)',[account,nexo.id]);
+  const context=await ledger.createContext(owner,nexo.id,randomUUID());
+  const authority=await ledger.acquire(owner,context,randomUUID(),'fixture-exam',60);
+  const intent=await ledger.accept(owner,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:context,policyRevision:1,action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'encrypted:fixture'}},authority,'api');
+  // The job of an exam whose process died days ago: uncertain, its grant still uncertain, its intent still open.
+  const grant=randomUUID(),job=randomUUID(),executor='1'.repeat(64);
+  await ledger.pool.query(`INSERT INTO ac_capacity_grants(id,attempt_id,intent_id,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,request_digest,emergency,state)
+   VALUES($1,$2,$3,$4,$5,$6,$7,'specialist',$8,1,1,$9,false,'uncertain')`,[grant,randomUUID(),intent.id,context,authority.epoch,account,profile,nexo.id,digest({grant})]);
+  const input={sessionId:randomUUID(),base:'e'.repeat(40)};
+  await ledger.pool.query(`INSERT INTO ac_native_execution_jobs(id,grant_id,intent_id,context_id,manager_epoch,session_id,account_id,profile_id,profile_digest,eligibility_revision,executor_digest,key_fingerprint,input_digest,base_id,role,state,created_at)
+   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,1,$10,$11,$12,$13,'specialist','uncertain',clock_timestamp()-interval '8 days')`,
+   [job,grant,intent.id,context,authority.epoch,input.sessionId,account,profile,digest({fixture:true}),executor,'2'.repeat(64),digest(input),input.base]);
+  await ledger.releaseLease(authority);
+  await mkdir(join(hostRoot,job,'output'),{recursive:true,mode:0o700});
+  // A .running marker left behind by an exam whose progress file says it failed.
+  const exam=randomUUID(),progress=join(data,'verificacoes',nexo.id,'andamento'),marker=join(progress,'.running');
+  await mkdir(progress,{recursive:true,mode:0o700});
+  await writeFile(marker,exam,{mode:0o600});
+  const failedProgress=JSON.stringify({id:exam,status:'failed',phase:'failed',startedAt:'2026-11-20T05:56:10.341Z',durationMs:1000});
+  await writeFile(join(progress,exam+'.json'),failedProgress);
+  const entry=(name:string)=>({id:ids[name]!.id,label:name,repo:ids[name]!.repo,owner});
+  await writeFile(file,JSON.stringify({schemaVersion:1,mode:'administration-only',activation:'personal',databaseUrl:database.url,dataDirectory:data,
+   project:entry('primary'),projects:[entry('nexo')],http:{listen:'127.0.0.1',port:8765,publicOrigin:'http://127.0.0.1:8765'},
+   contextVault:{directory:join(data,'vault'),masterFile:join(data,'vault-master')}},null,2)+'\n',{mode:0o600});
+  const fake=fakeDocker({},[]);
+  await mkdir(join(area,'tmp'));
+  const deps={docker:fake.docker,sharedRefsRoot:join(area,'refs'),productRoot:join(area,'product'),tmpRoot:join(area,'tmp'),
+   processPaths:async()=>[] as string[],processInside:async()=>false,mountInfo:async()=>'22 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw\n'};
+  const state=async()=>(await ledger.pool.query(`SELECT j.state job,g.state grant_state,i.state intent,(SELECT archived_at FROM ac_projects WHERE id=$2) archived
+   FROM ac_native_execution_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id JOIN ac_intents i ON i.id=j.intent_id WHERE j.id=$1`,[job,nexo.id])).rows[0];
+  const untouched={job:'uncertain',grant_state:'uncertain',intent:'accepted',archived:null};
+  const refuses=async(extra:Record<string,unknown>,pattern:RegExp,body:string=exam)=>{
+   await assert.rejects(()=>removePersonalProject(file,'nexo',{apply:true,deleteData:true,deps:{...deps,...extra}}),(error:unknown)=>{
+    assert.ok(error instanceof Refusal&&error.code==='PROJECT_REMOVE_ACTIVE');
+    assert.match(personalProjectRemoveFailureText(error),pattern);return true;});
+   assert.deepEqual(await state(),untouched);
+   assert.equal(await readFile(marker,'utf8'),body);
+   assert.ok(await exists(join(hostRoot,job)));
+  };
+
+  // 1. The preview says what would be closed and changes nothing.
+  const preview=await removePersonalProject(file,'nexo',{apply:false,deleteData:true,deps});
+  const shown=preview.lines.join('\n');
+  assert.match(shown,new RegExp(`Atividade parada: job nativo ${job} sem processo vivo.*seria encerrado como falho, com a vaga liberada`));
+  assert.match(shown,new RegExp(`Atividade parada: marcador ${marker} \\(exame ${exam} falhou, sem processo vivo\\); seria removido`));
+  assert.doesNotMatch(shown,/Atividade em curso/);
+  assert.deepEqual(await state(),untouched);
+
+  // 2. Anything that may be alive still refuses, and nothing changes.
+  const worker=createHash('sha256').update('worker').digest('hex');
+  fake.containers.add(worker);fake.running.add(worker);fake.named.set(worker,'ac-native-worker-'+job);
+  await refuses({},/job\(s\) nativo\(s\) ativo.*há contêiner do job em execução/);
+  fake.running.delete(worker);
+  await refuses({processPaths:async()=>[join(hostRoot,job,'output')]},/há processo usando a pasta do job/);
+  await refuses({processPaths:async()=>{throw new Error('EACCES');}},/não foi possível ler os processos/);
+  await refuses({docker:async(args:string[])=>args.includes('{{.ID}} {{.Names}}')?{code:1,stdout:''} as CommandResult:fake.docker(args)},/o Docker não respondeu/);
+  const again=await ledger.acquire(owner,context,randomUUID(),'fixture-exam',60);
+  await refuses({},/o contexto tem gerente com licença válida/);
+  await ledger.releaseLease(again);
+  await ledger.pool.query('UPDATE ac_native_execution_jobs SET created_at=clock_timestamp() WHERE id=$1',[job]);
+  await refuses({},/criado há menos de 24 h/);
+  await ledger.pool.query("UPDATE ac_native_execution_jobs SET created_at=clock_timestamp()-interval '8 days' WHERE id=$1",[job]);
+  // The marker's exam is alive by the rule of personal:status (its PID lives and is not a reused one).
+  await writeFile(join(progress,exam+'.json'),JSON.stringify({id:exam,status:'running',phase:'modelo',startedAt:new Date().toISOString(),pid:4242}));
+  await refuses({alive:()=>true,startedAt:()=>null},/marcador: o exame .* está em andamento/);
+  // Dead PID: abandoned, so stale; put the failed file back for the rest.
+  const abandoned=await removePersonalProject(file,'nexo',{apply:false,deleteData:true,deps:{...deps,alive:()=>false}});
+  assert.match(abandoned.lines.join('\n'),/exame .* abandonado, sem processo vivo\); seria removido/);
+  await writeFile(join(progress,exam+'.json'),failedProgress);
+  await writeFile(marker,'not-an-exam');
+  await refuses({},/marcador: o marcador não nomeia um exame/,'not-an-exam');
+  await writeFile(marker,exam,{mode:0o600});
+
+  // 3. Applied: the job is closed with a recorded reason, the grant released, the intent failed, the marker dropped, the data gone.
+  const result=await removePersonalProject(file,'nexo',{apply:true,deleteData:true,deps});
+  const report=result.lines.join('\n');
+  assert.match(report,new RegExp(`Banco: job ${job}: encerrado como falho \\(sem processo vivo\\), vaga liberada, intenção fechada\\.`));
+  assert.match(report,/marcador parado removido/);
+  assert.match(report,/Remoção aplicada\./);
+  const after=await state();
+  assert.equal(after.job,'failed');assert.equal(after.grant_state,'released');assert.equal(after.intent,'failed');assert.ok(after.archived instanceof Date);
+  const receipt=(await ledger.pool.query('SELECT physical_receipt FROM ac_capacity_grants WHERE id=$1',[grant])).rows[0].physical_receipt;
+  assert.equal(receipt.source,'project-removal-stale');assert.equal(receipt.jobId,job);
+  const audit=(await ledger.pool.query("SELECT detail FROM ac_audit WHERE kind='project.remove.stale_job_closed'")).rows;
+  assert.deepEqual(audit.map(row=>[row.detail.jobId,row.detail.previousState,row.detail.grantReleased,row.detail.intentClosed]),[[job,'uncertain',true,true]]);
+  assert.equal(await exists(join(hostRoot,job)),false);
+  assert.equal(await exists(join(data,'verificacoes',nexo.id)),false);
+  // The retired executor pair the job held is no longer kept by an open job: the image retention may judge it.
+  assert.equal(Number((await ledger.pool.query(OPEN_EXECUTION_JOBS_SQL,[executor])).rows[0].n),0);
+  assert.deepEqual((await loadInstallation(file)).projects,[]);
  }finally{
   await ledger.close();
   await database.close();
