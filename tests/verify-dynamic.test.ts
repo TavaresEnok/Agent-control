@@ -80,6 +80,17 @@ test('a rede interna anexa só o contêiner alvo', async () => {
   ]);
 });
 
+test('a rede interna leva os rótulos de dono antes do nome', async () => {
+  const {attachInternalTarget} = await import('../src/verify-dynamic.ts');
+  const calls: string[][] = [];
+  const labels = ['--label', 'com.agent-control.installation=ispagent', '--label', 'com.agent-control.kind=verify-dynamic-network'];
+  await attachInternalTarget({
+    network: 'verify-homologation-abc123ef', container: 'verify-alvo', labels,
+    run: async args => { calls.push([...args]); return {code: 0, stdout: args.includes('inspect') ? 'true' : ''}; },
+  });
+  assert.deepEqual(calls[0], [VERIFY_RUNTIME_BIN, 'network', 'create', '--internal', ...labels, 'verify-homologation-abc123ef']);
+});
+
 test('inspect falso recusa a rede e não liga o alvo', async () => {
   const {attachInternalTarget} = await import('../src/verify-dynamic.ts');
   const calls: string[][] = [];

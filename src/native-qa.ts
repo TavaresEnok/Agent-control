@@ -22,6 +22,7 @@ import {provisionNativeQaDatabase,redactQaDatabaseSecrets,removeNativeQaService}
 import {NativeQaContract as NativeQaSchema,nativeQaContractDigest,type NativeQaContract as NativeQaValue} from './native-qa-contract.ts';
 import {backoffMs} from './manager-discipline.ts';
 import {continueAfterScriptQa,contextQaModel,qaLogTail,qaModelIds} from './qa-model.ts';
+import {ownerLabels} from '../scripts/ac-labels.mjs';
 export const NativeQaContract=NativeQaSchema;
 export type NativeQaContract=NativeQaValue;
 export {nativeQaContractDigest};
@@ -47,7 +48,9 @@ export async function collectQaLogs(fetch:()=>Promise<Buffer>){
 export class NativeQa{
  readonly contract:NativeQaContract;readonly verifierDigest:string;private readonly key:Buffer;private readonly docker:DockerDaemon;private readonly cacheRoot?:string;
  constructor(readonly ledger:Ledger,readonly quality:Quality,readonly repository:string,private readonly root:string,contract:NativeQaContract,key:Uint8Array,
-  socketPath?:string,private readonly diskGuard:DiskGuard|undefined=diskGuardFromEnvironment(),resourceEnvelope?:NativeResourceEnvelope,cacheRoot?:string,private readonly simple=false){
+  socketPath?:string,private readonly diskGuard:DiskGuard|undefined=diskGuardFromEnvironment(),resourceEnvelope?:NativeResourceEnvelope,cacheRoot?:string,private readonly simple=false,
+  /** Installation and project for the ownership labels of the QA containers and network. */
+  private readonly owner?:{installation:string;project?:string}){
   if(quality.ledger!==ledger||key.byteLength<32||resolve(root)!==root||resolve(repository)!==repository||root===repository||root.startsWith(repository+sep)||repository.startsWith(root+sep))throw new Refusal('NATIVE_QA_CONFIGURATION_INVALID');
   this.contract=Object.freeze(NativeQaContract.parse(structuredClone(contract)));Object.freeze(this.contract.argv);Object.freeze(this.contract.environment);if(this.contract.prepareArgv)Object.freeze(this.contract.prepareArgv);
   if(this.contract.services){Object.freeze(this.contract.services);Object.freeze(this.contract.services.postgres);}
@@ -56,11 +59,13 @@ export class NativeQa{
   this.verifierDigest=nativeQaContractDigest(this.contract);this.key=Buffer.from(key);this.docker=nativeDockerDaemon(socketPath,resourceEnvelope);
  }
  /** Configured QA writes the checkout, so it runs as the gateway user. The default contract stays uid 10001. */
+ /** Ownership labels beside the identity labels; the identity checks read only their own keys. */
+ private ownedLabels(kind:string):Record<string,string>{return this.owner?ownerLabels({...this.owner,kind}):{};}
  private qaUser(){return this.contract.prepareArgv?`${process.getuid?.()??10001}:${process.getgid?.()??10001}`:'10001:10001';}
  private testNetwork(jobId:string){return this.contract.services?`ac-native-qa-net-${jobId}`:'none';}
  private async qaDatabaseEnv(jobId:string){
   const postgres=this.contract.services?.postgres;if(!postgres)return [] as string[];
-  const url=await provisionNativeQaDatabase(this.docker,jobId,postgres,{memoryBytes:this.contract.memoryBytes,pids:this.contract.pids,nanoCpus:this.contract.nanoCpus},()=>{});
+  const url=await provisionNativeQaDatabase(this.docker,jobId,postgres,{memoryBytes:this.contract.memoryBytes,pids:this.contract.pids,nanoCpus:this.contract.nanoCpus},()=>{},kind=>this.ownedLabels(kind));
   return [`QA_DATABASE_URL=${url}`];
  }
  /** The password is per run, so inspect checks the shape and never records the value. */
@@ -115,13 +120,13 @@ export class NativeQa{
  private prepareSpec(jobId:string,hash:string){
   const work=this.paths(jobId).work;
   return {Image:this.contract.image,User:this.qaUser(),WorkingDir:'/work',Entrypoint:[this.contract.prepareArgv![0]],Cmd:this.contract.prepareArgv!.slice(1),Env:[...this.contract.environment],
-   Labels:{'agent-control.contract':'native-qa-prepare-v1','agent-control.job':jobId,'agent-control.request':hash},
+   Labels:{...this.ownedLabels('native-qa-prepare'),'agent-control.contract':'native-qa-prepare-v1','agent-control.job':jobId,'agent-control.request':hash},
    HostConfig:{ReadonlyRootfs:true,Privileged:false,CapDrop:['ALL'],SecurityOpt:['no-new-privileges:true'],PidsLimit:this.contract.pids,Memory:this.contract.memoryBytes,NanoCpus:this.contract.nanoCpus,Tmpfs:{'/tmp':'rw,nosuid,nodev,mode=1777,size=128m'},Binds:[work+':/work:rw',this.cacheRoot+':/cache:rw']}};
  }
  private preparedTestSpec(jobId:string,hash:string,extraEnv:readonly string[]=[]){
   const work=this.paths(jobId).work;
   return {Image:this.contract.image,User:this.qaUser(),WorkingDir:'/work',Entrypoint:[this.contract.argv[0]],Cmd:this.contract.argv.slice(1),Env:[...this.contract.environment,...extraEnv],
-   Labels:{'agent-control.contract':'native-qa-v1','agent-control.job':jobId,'agent-control.request':hash},
+   Labels:{...this.ownedLabels('native-qa'),'agent-control.contract':'native-qa-v1','agent-control.job':jobId,'agent-control.request':hash},
    HostConfig:{NetworkMode:this.testNetwork(jobId),ReadonlyRootfs:true,Privileged:false,CapDrop:['ALL'],SecurityOpt:['no-new-privileges:true'],PidsLimit:this.contract.pids,Memory:this.contract.memoryBytes,NanoCpus:this.contract.nanoCpus,Tmpfs:{'/tmp':'rw,nosuid,nodev,mode=1777,size=128m'},Binds:[work+':/work:rw',this.cacheRoot+':/cache:rw']}};
  }
  private async rememberContainer(principal:string,authority:Authority,job:Record<string,any>,containerId:string){
@@ -235,7 +240,7 @@ export class NativeQa{
   try{id=await this.ledger.tx(async c=>{
    await this.authorize(c,principal,authority,intentId,false);await this.policy(c,artifact);
    const job=(await c.query("SELECT * FROM ac_native_qa_jobs WHERE id=$1 AND state='uncertain' FOR UPDATE",[stage.id])).rows[0];if(!job||Number(job.manager_epoch)!==authority.epoch||job.request_digest!==hash)throw new Refusal('NATIVE_QA_RECONCILIATION_REQUIRED');
-   const id=await this.docker.create('ac-native-qa-'+stage.id,{Image:image,User:'10001:10001',WorkingDir:'/work',Entrypoint:[this.contract.argv[0]],Cmd:this.contract.argv.slice(1),Env:[...this.contract.environment,...extra],Labels:{'agent-control.contract':'native-qa-v1','agent-control.job':stage.id,'agent-control.request':hash},
+   const id=await this.docker.create('ac-native-qa-'+stage.id,{Image:image,User:'10001:10001',WorkingDir:'/work',Entrypoint:[this.contract.argv[0]],Cmd:this.contract.argv.slice(1),Env:[...this.contract.environment,...extra],Labels:{...this.ownedLabels('native-qa'),'agent-control.contract':'native-qa-v1','agent-control.job':stage.id,'agent-control.request':hash},
     HostConfig:{NetworkMode:this.testNetwork(stage.id),ReadonlyRootfs:true,Privileged:false,CapDrop:['ALL'],SecurityOpt:['no-new-privileges:true'],PidsLimit:this.contract.pids,Memory:this.contract.memoryBytes,NanoCpus:this.contract.nanoCpus,Tmpfs:{'/tmp':'rw,nosuid,nodev,mode=1777,size=128m'},Binds:[p.work+':/work:ro']}});
    await this.docker.start(id);return id;
   });}

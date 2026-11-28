@@ -56,7 +56,9 @@ function overlaps(left: string, right: string): boolean {
 
 /** Separate step, with network, that only downloads vulnerability databases. */
 /** `javaDb: false` asks the fetch script to skip the Trivy Java database (about 1.5 GB); an older image ignores it and still downloads it. */
-export function verifyDatabaseArguments({image, output, javaDb = true}: {image: string; output: string; javaDb?: boolean}): readonly string[] {
+export function verifyDatabaseArguments({image, output, javaDb = true, labels = []}: {image: string; output: string; javaDb?: boolean;
+  /** Ownership `--label` arguments (installation, kind). */
+  labels?: readonly string[]}): readonly string[] {
   assertPinnedImage(image);
   const databases = assertHostPath(output);
   return [
@@ -72,14 +74,17 @@ export function verifyDatabaseArguments({image, output, javaDb = true}: {image: 
     ...(javaDb ? [] : ['--env', 'AC_VERIFY_JAVA_DB=0']),
     '--workdir', '/databases',
     '--mount', `type=bind,src=${databases},dst=/databases`,
+    ...labels,
     '--entrypoint', '/usr/local/bin/verify-db-fetch.sh',
     image,
   ];
 }
 
 /** Offline exam. Refuses .., a socket, or any network other than none. */
-export function verifyExamArguments({image, repository, databases, output, memoryBytes, nanoCpus, pidsLimit,commonTools}: {
+export function verifyExamArguments({image, repository, databases, output, memoryBytes, nanoCpus, pidsLimit,commonTools,labels=[]}: {
   image: string;
+  /** Ownership `--label` arguments (installation, project, kind). */
+  labels?: readonly string[];
   repository: string;
   databases: string;
   output: string;
@@ -115,6 +120,7 @@ export function verifyExamArguments({image, repository, databases, output, memor
     '--mount', `type=bind,src=${source},dst=/repository,readonly`,
     '--mount', `type=bind,src=${cache},dst=/databases,readonly`,
     '--mount', `type=bind,src=${report},dst=/output`,
+    ...labels,
     '--entrypoint', commonTools?'/usr/local/bin/ac-collect':'/usr/local/bin/verify-entrypoint.sh',
     image, ...(commonTools?['verify']:[]),
   ];

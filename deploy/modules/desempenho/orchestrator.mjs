@@ -141,7 +141,7 @@ function socketMount(path, destination) {
 }
 
 /** O chamador mantém vivo o snapshot de prepareModuleSnapshot e repassa o sinal do heartbeat. */
-export async function runPerformanceModule({snapshotPath, imageDigest, commonPin, sharedCheckout = false, signal, recoveryDirectory, previousMeasurement, previousMeasurements,
+export async function runPerformanceModule({snapshotPath, imageDigest, commonPin, ownerLabels = [], sharedCheckout = false, signal, recoveryDirectory, previousMeasurement, previousMeasurements,
   timeoutMs = 480_000, maxStdoutBytes = 16 * 1024 * 1024}, {dockerBinary = 'docker'} = {}) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_147_483_647 ||
       !Number.isSafeInteger(maxStdoutBytes) || maxStdoutBytes < 1) throw new Error('limites de desempenho inválidos');
@@ -179,7 +179,7 @@ export async function runPerformanceModule({snapshotPath, imageDigest, commonPin
         phase.throwIfAborted();
       }
       let created;
-      try { created = await docker([...args, ...label, imageDigest, ...command], {signal: phase}); }
+      try { created = await docker([...args, ...label, ...ownerLabels, imageDigest, ...command], {signal: phase}); }
       catch (error) {
         await journal.recordFailedCreation(resourceName, error);
         throw error;

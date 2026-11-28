@@ -38,7 +38,7 @@ const absolutePath=z.string().max(4096).refine(value=>isAbsolute(value)&&resolve
 const time=z.number().int().safe().nonnegative();
 const Worktree=z.object({id:z.uuid(),projectId:z.uuid(),path:absolutePath,branch:ref,base:ref,identity:z.string().optional(),quarantine:absolutePath.optional(),registeredAt:time,origin:z.enum(['new','existing'])}).strict();
 /** Kinds of candidate image: the verification modules plus the native runtime images (planning, execution, tools) that `personal:images` replaces. */
-export const CANDIDATE_IMAGE_KINDS=[...VERIFICATION_MODULES,'native-runtime'] as const;
+export const CANDIDATE_IMAGE_KINDS=[...VERIFICATION_MODULES,'native-runtime','simple-tools'] as const;
 export type CandidateImageKind=(typeof CANDIDATE_IMAGE_KINDS)[number];
 const Image=z.object({id:z.uuid(),projectId:z.uuid(),module:z.enum(CANDIDATE_IMAGE_KINDS),imageId:z.string().regex(imageIdPattern),daemonId:z.string().min(1).max(256).optional(),registeredAt:time}).strict();
 /** `removing` is the removal journal, written outside the directory before its contents start to go. The owner marker lives inside

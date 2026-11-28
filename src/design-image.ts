@@ -1,4 +1,5 @@
 import {Refusal} from './contracts.ts';
+import {installationName, ownerLabelArgs, projectLabel} from '../scripts/ac-labels.mjs';
 
 /** Binário do runtime de contêiner. Os testes comparam esta constante. */
 export const DESIGN_RUNTIME_BIN = 'docker';
@@ -44,6 +45,18 @@ export type DesignRunInput = {
   /** Nome do contêiner, para o host removê-lo no prazo ou na interrupção. */
   name?: string;
 };
+
+let designOwner: {installation: string; project?: string} | undefined;
+
+/** A instalação e o projeto da sessão de design: os contêineres que ela sobe levam os rótulos de dono. */
+export function setDesignContainerOwner(owner: {dataDirectory: string; projectId?: string} | undefined): void {
+  designOwner = owner && {installation: installationName(owner.dataDirectory), project: projectLabel(owner.projectId)};
+}
+
+/** Os `--label` de dono para um contêiner de design deste tipo; vazio enquanto a sessão não tem dono. */
+export function designOwnerLabelArgs(kind: string): string[] {
+  return designOwner ? ownerLabelArgs({...designOwner, kind}) : [];
+}
 
 export const DESIGN_EXAM_CONTAINER = /^ac-design-exam-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -220,6 +233,7 @@ export function designRunArguments(input: DesignRunInput): readonly string[] {
     `type=bind,source=${input.output},destination=/output`,
     ...loginMount,
     ...trust,
+    ...designOwnerLabelArgs('design-exam'),
     '--entrypoint',
     DESIGN_ENTRYPOINT,
     input.image,

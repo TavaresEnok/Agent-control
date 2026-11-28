@@ -23,6 +23,7 @@ import {SemanticPlanning} from './semantic-planning.ts';
 import {PersonalManagerChat} from './personal-manager-chat.ts';
 import type {EngineeringOptions} from './engineering.ts';
 import {containFailure} from './failure-log.ts';
+import {installationName,projectLabel} from '../scripts/ac-labels.mjs';
 
 /** Real Codex and Claude supervisors for an installation whose bootstrap is active. */
 /**
@@ -177,11 +178,11 @@ export async function composePersonalRuntime(config:Installation,ledger:Ledger){
   const accountSubjects=subjects(provider);
   if(!accountSubjects.length)continue;
   planning.push(new NativePlanningSupervisor(ledger,{id:boot.planning.id+'-'+provider,executorDigest:boot.planning.executorDigest,imageId:boot.planning.imageId,
-   hostRoot:boot.planning.hostRoot,accountRoot:boot.planning.accountRoot,protectedRepositories,signingKeyPem:planningPem,providerNetwork:'ac-native-provider',provider,accountSubjects,personalEgress}));
+   hostRoot:boot.planning.hostRoot,accountRoot:boot.planning.accountRoot,protectedRepositories,signingKeyPem:planningPem,providerNetwork:'ac-native-provider',provider,accountSubjects,personalEgress,installation:installationName(config.dataDirectory)}));
   // A rebuilt image changes the executor identity; a call left uncertain under the old one is reconciled only by it.
   for(const imageId of (boot.planning.retiredImageIds??[]).filter(id=>id!==boot.planning.imageId))
    planning.push(new NativePlanningSupervisor(ledger,{id:boot.planning.id+'-'+provider,executorDigest:nativePlanningExecutorDigest(imageId),imageId,active:false,
-    hostRoot:boot.planning.hostRoot,accountRoot:boot.planning.accountRoot,protectedRepositories,signingKeyPem:planningPem,providerNetwork:'ac-native-provider',provider,accountSubjects}));
+    hostRoot:boot.planning.hostRoot,accountRoot:boot.planning.accountRoot,protectedRepositories,signingKeyPem:planningPem,providerNetwork:'ac-native-provider',provider,accountSubjects,installation:installationName(config.dataDirectory)}));
  }
  const executions=await composePersonalExecutionSupervisors(config,ledger,rows);
  if(!planning.length||!executions.length)throw new Error('PERSONAL_RUNTIME_ACCOUNT_REQUIRED');
@@ -197,7 +198,8 @@ export async function composePersonalRuntime(config:Installation,ledger:Ledger){
    const quality=new Quality(ledger,reviewKey,git);
    const qaContract=await resolvePersonalProjectQa({dataDirectory:config.dataDirectory,projectId,image:boot.qa.image,fallback:boot.qa});
    const cacheRoot=qaContract.prepareArgv?resolve(join(config.dataDirectory,'qa-cache',projectId)):undefined;
-   const nativeQa=new NativeQa(ledger,quality,repo,boot.execution.hostRoot,qaContract,reviewKey,undefined,undefined,undefined,cacheRoot,simpleIsolation(config));
+   const nativeQa=new NativeQa(ledger,quality,repo,boot.execution.hostRoot,qaContract,reviewKey,undefined,undefined,undefined,cacheRoot,simpleIsolation(config),
+    {installation:installationName(config.dataDirectory),project:projectLabel(projectId)});
    await syncPersonalQaPolicy(ledger,owner,projectId,nativeQa.verifierDigest);
    // A new QA contract publishes a new quality revision; live conversation templates must follow it.
    await refreshPersonalTemplates(ledger,projectId);

@@ -19,6 +19,7 @@ import {planningReceiptMessage,PlanningPhysicalReceipt,type PlanningExecutor,typ
 import {nativePlanningExecutorDigest} from './native-planning-contract.ts';
 import {nativeContainerNeverStarted} from './native-execution-isolation.ts';
 import {providerLimitDisposition} from './quota-exhaustion.ts';
+import {ownerLabels} from '../scripts/ac-labels.mjs';
 export {nativePlanningExecutorDigest};
 const Hash=z.string().regex(/^[a-f0-9]{64}$/);
 const Result=z.object({schemaVersion:z.literal(1),callId:z.uuid(),output:z.string().max(262144),normalizedTokensUsed:z.number().int().safe().nonnegative().nullable(),
@@ -28,7 +29,9 @@ function dockerUncertain(error:unknown){return error instanceof Refusal&&error.c
 export type NativePlanningSupervisorConfig={id:string;executorDigest:string;imageId:string;hostRoot:string;accountRoot:string;personalEgress?:boolean;
  protectedRepositories:readonly string[];signingKeyPem:string;socketPath?:string;resourceEnvelope?:NativeResourceEnvelope;providerNetwork:string;accountSubjects:readonly {accountId:string;subjectDigest:string}[];provider?:'codex'|'claude'|'grok';syntheticFixture?:NativeSyntheticFixture;
  /** false: registered only to reconcile calls it left uncertain (a replaced image); never launches new work. */
- active?:boolean};
+ active?:boolean;
+ /** Name for the ownership labels of the planning containers. */
+ installation?:string};
 /** Fixed Docker supervisor, not a scheduler. No HTTP-controlled image, mount,
  * command, provider address or key. Construction alone performs no inference.
  * Runtime eligibility remains an independent mandatory gate. */
@@ -122,7 +125,7 @@ export class NativePlanningSupervisor{
     LEFT JOIN ac_quota_observations q ON q.account_id=a.id WHERE g.id=$1 AND g.manager_epoch=$2 FOR UPDATE OF g FOR SHARE OF a,p`,[input.grantId,input.executionEpoch])).rows[0];
    if(!active||active.state!=='reserved'||!active.account_enabled||!active.profile_enabled||active.status!=='available'||!active.fresh)throw new Refusal('NATIVE_PLANNING_NOT_ELIGIBLE');
    const id=await this.docker.create(name,{Image:this.config.imageId,User:String(process.getuid?.())+':'+String(process.getgid?.()),WorkingDir:'/planning',
-   Entrypoint:['node','/opt/agent-control/dist/src/native-planning-worker.mjs'],Cmd:[],Env:[],Labels:{'agent-control.contract':'native-planning-v1','agent-control.job':input.callId,'agent-control.launch':launchDigest},
+   Entrypoint:['node','/opt/agent-control/dist/src/native-planning-worker.mjs'],Cmd:[],Env:[],Labels:{...(this.config.installation?ownerLabels({installation:this.config.installation,kind:'native-planning'}):{}),'agent-control.contract':'native-planning-v1','agent-control.job':input.callId,'agent-control.launch':launchDigest},
    HostConfig:{NetworkMode:this.config.providerNetwork,ReadonlyRootfs:true,Privileged:false,CapDrop:['ALL'],SecurityOpt:['no-new-privileges:true'],PidsLimit:96,Memory:512*1024*1024,NanoCpus:1e9,
     Tmpfs:{'/tmp':'rw,nosuid,nodev,noexec,size=64m'},Binds:[join(this.config.accountRoot,input.profile.accountId)+':/account:rw',paths.input+':/input:ro',paths.output+':/output:rw',paths.planning+':/planning:ro',paths.key+':/runner/planning-public-key.pem:ro']}});
    await this.docker.start(id);return id;

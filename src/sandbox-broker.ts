@@ -13,6 +13,7 @@ import { Ledger } from './ledger.ts';
 import {DiskAdmissionGuard,type DiskAdmissionPolicy} from './disk-admission.ts';
 import {QualityPolicy} from './quality-policy.ts';
 import type pg from 'pg';
+import {ownerLabels} from '../scripts/ac-labels.mjs';
 
 const CompositionSource=z.object({unitId:z.string(),artifactId:Id,commit:z.string().regex(/^[a-f0-9]{40}$/),tree:z.string().regex(/^[a-f0-9]{40}$/),base:z.string().regex(/^[a-f0-9]{40}$/),writePaths:z.array(z.string())}).strict();
 export const CorrectionSource=z.object({schemaVersion:z.literal(1),parentIntentId:Id,taskId:z.string().regex(/^[a-z][a-z0-9_-]{0,47}$/),revision:z.number().int().min(1).max(5),
@@ -179,7 +180,13 @@ export class DockerDaemon{
 export type SandboxBrokerConfig={hostRoot:string;probeHostPath:string;probeSha256:string;implementationPath?:string;implementationSha256?:string;diskPolicy?:DiskAdmissionPolicy;
  verificationPath?:string;verificationSha256?:string;verifierPath?:string;verifierSha256?:string;
  specialistPath?:string;specialistSha256?:string;verifierVersions?:readonly {path:string;hash:string}[];
- imageId:string;socketPath:string;keyPath:string;databaseUrl:string};
+ imageId:string;socketPath:string;keyPath:string;databaseUrl:string;
+ /** Name for the ownership labels of the containers this broker creates. */
+ installation?:string};
+/** Labels of a sandbox container: the identity labels the recovery checks, plus the ownership labels when the broker names its installation. */
+export function sandboxContainerLabels(installation:string|undefined,value:{jobId:string;grantId:string;authority:{epoch:number}},spec:string):Record<string,string>{
+ return {...(installation?ownerLabels({installation,kind:'sandbox'}):{}),'ac.scope':'isolated-synthetic','ac.job':value.jobId,'ac.grant':value.grantId,'ac.epoch':String(value.authority.epoch),'ac.spec':spec};
+}
 const exec=promisify(execFile);
 async function safeGit(cwd:string,args:string[]){
  const result=await exec('/usr/bin/git',['-c','safe.directory='+cwd,'-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false','-C',cwd,...args],
@@ -500,7 +507,7 @@ export class SandboxBroker{
    // Failure here preserves the registered uncertain job/grant for recovery.
    await this.diskGuard?.assertAdmission();
    if(await this.docker.inspect(name))throw new Refusal('SANDBOX_NAME_IN_USE');
-   const labels={'ac.scope':'isolated-synthetic','ac.job':value.jobId,'ac.grant':value.grantId,'ac.epoch':String(value.authority.epoch),'ac.spec':spec};
+   const labels=sandboxContainerLabels(this.config.installation,value,spec);
    const id=await this.docker.create(name,{Image:this.config.imageId,User:'10001:10001',WorkingDir:'/work',
     Entrypoint:['node','/runner/probe.mjs',...(value.advice?[Buffer.from(JSON.stringify({...value.advice,sourceBase:value.source!.base})).toString('base64')]:value.verification?[value.verification.operationId,value.verification.kind,...(value.source?.correction?['--correction',Buffer.from(JSON.stringify({outputPath:value.source.outputPath,...value.source.correction})).toString('base64')]:value.source?.composition?['--composition',Buffer.from(JSON.stringify(value.source.composition)).toString('base64')]:value.source?.outputPath?[value.source.outputPath]:[])]:value.source?[value.jobId,...(value.source.outputPath?[value.source.outputPath]:[]),...(value.source.correction?['--correction',Buffer.from(JSON.stringify({outputPath:value.source.outputPath,...value.source.correction})).toString('base64')]:[])]:[])],Env:['PATH=/usr/local/bin:/usr/bin:/bin','HOME=/tmp',
      'GIT_CONFIG_NOSYSTEM=1','GIT_CONFIG_GLOBAL=/dev/null','GIT_AUTHOR_NAME=Synthetic worker','GIT_AUTHOR_EMAIL=fixture@example.invalid',

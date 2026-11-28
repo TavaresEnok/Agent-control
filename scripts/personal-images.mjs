@@ -10,6 +10,7 @@ import {readFileSync,rmSync} from 'node:fs';
 import {readFile} from 'node:fs/promises';
 import {basename,dirname,resolve,sep} from 'node:path';
 import {pathToFileURL} from 'node:url';
+import {installationName,ownerLabelArgs} from './ac-labels.mjs';
 
 const root=resolve(import.meta.dirname,'..');
 const contextName=/^native-(planning|execution|tools)-image-[A-Za-z0-9]+$/;
@@ -31,11 +32,13 @@ const imageId=(run,tag)=>{
 };
 
 /** Builds each tag. Remembers the id the tag pointed to before and after, and always discards the context this run created. */
-export function buildImages({builds,stateRoot,run=defaultRun,remove=rmSync}){
+/** `owner` adds the installation's ownership labels to each image, with the item's kind (`native-<kind>`). */
+export function buildImages({builds,stateRoot,run=defaultRun,remove=rmSync,owner}){
  const built=[];
  for(const {tag,context,kind} of builds){
   const previous=imageId(run,tag);
-  const result=run('docker',['build','-t',tag,context],{stdio:'inherit'});
+  const labels=owner?ownerLabelArgs({installation:owner.installation,kind:'native-'+kind}):[];
+  const result=run('docker',['build','-t',tag,...labels,context],{stdio:'inherit'});
   discardContext(context,stateRoot,remove);
   if(result.error||result.status)throw new Error('BUILD_FAILED:'+tag);
   built.push({tag,kind,previous,current:imageId(run,tag)});
@@ -91,7 +94,8 @@ async function main(){
  const stateRoot=resolve(root,'.state');
  let built;
  try{
-  built=buildImages({stateRoot,builds:[
+  const dataDirectory=JSON.parse(readFileSync(file,'utf8'))?.dataDirectory;
+  built=buildImages({stateRoot,owner:typeof dataDirectory==='string'?{installation:installationName(dataDirectory)}:undefined,builds:[
    {tag:'ac-native-planning:personal',context:contexts.planning,kind:'planning'},
    {tag:'ac-native-execution:personal',context:contexts.execution,kind:'execution'},
    {tag:'ac-native-tools:personal',context:contexts.tools,kind:'tools'}]});

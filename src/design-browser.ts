@@ -6,7 +6,7 @@ import {pathToFileURL} from 'node:url';
 import {Refusal} from './contracts.ts';
 import type {DesignCaptureDriver, DesignCaptureTheme} from './design-capture.ts';
 import type {DesignLogin} from './design-discover.ts';
-import {assertDesignDestination, assertDesignTarget, designTrustArguments} from './design-image.ts';
+import {assertDesignDestination, assertDesignTarget, designOwnerLabelArgs, designTrustArguments} from './design-image.ts';
 import {claimDesignContainer, makeDesignScratch, releaseDesignContainer, removeDesignScratch} from './design-containers.ts';
 // @ts-expect-error módulo compartilhado com a imagem
 import {bodyLeaksPassword, pageShowsLogin, submitLogin, watchNavigationFailure} from '../deploy/design-tools/login-decision.mjs';
@@ -327,6 +327,7 @@ async function writeLoginStateInImage(targetUrl: string, login: DesignLogin, pin
       '--mount', `type=bind,source=${cred},destination=/login/login.json,readonly`,
       '--mount', `type=bind,source=${out},destination=/output`,
       ...trust,
+      ...designOwnerLabelArgs('design-login'),
       pinnedImage,
       '/opt/design-tools/write-login-state.mjs',
     ]);

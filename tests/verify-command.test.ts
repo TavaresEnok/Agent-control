@@ -7,7 +7,7 @@ import {execFile} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {basename, join} from 'node:path';
 import {promisify} from 'node:util';
 import {Capacity} from '../src/capacity.ts';
 import {Refusal} from '../src/contracts.ts';
@@ -456,7 +456,10 @@ test('contêiner alvo entra na rede interna e o laço não varre', async () => {
     network = `verify-homologation-${begun.id.replaceAll('-', '').slice(0, 8)}`;
     assert.match(network, /^verify-homologation-[a-f0-9]{8}$/);
     assert.deepEqual(calls, [
-      [VERIFY_RUNTIME_BIN, 'network', 'create', '--internal', network],
+      // The homologation network carries the installation, project and kind ownership labels.
+      [VERIFY_RUNTIME_BIN, 'network', 'create', '--internal',
+        '--label', `com.agent-control.installation=${basename(dataDirectory)}`, '--label', `com.agent-control.project=${projectId}`,
+        '--label', 'com.agent-control.kind=verify-dynamic-network', network],
       [VERIFY_RUNTIME_BIN, 'network', 'inspect', network, '--format', '{{.Internal}}'],
       [VERIFY_RUNTIME_BIN, 'network', 'connect', network, 'verify-alvo'],
     ]);

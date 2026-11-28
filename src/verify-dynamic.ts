@@ -105,13 +105,15 @@ export function dynamicScanPlan(targetUrl: string): DynamicScanPlan {
 }
 
 /** Create an internal network and attach only the target container. */
-export async function attachInternalTarget({network, container, run}: {
+export async function attachInternalTarget({network, container, run, labels = []}: {
   network: string;
   container: string;
+  /** Ownership `--label` arguments for the network (installation, project, kind). */
+  labels?: readonly string[];
   run: (args: readonly string[]) => Promise<{code: number; stdout: string}>;
 }): Promise<void> {
   if (!isSingleLabel(network) || !isSingleLabel(container)) throw new Refusal('VERIFY_NETWORK_FORBIDDEN');
-  const created = await run([VERIFY_RUNTIME_BIN, 'network', 'create', '--internal', network]);
+  const created = await run([VERIFY_RUNTIME_BIN, 'network', 'create', '--internal', ...labels, network]);
   if (created.code !== 0) throw new Refusal('VERIFY_NETWORK_FORBIDDEN');
   const inspected = await run([VERIFY_RUNTIME_BIN, 'network', 'inspect', network, '--format', '{{.Internal}}']);
   if (inspected.code !== 0 || inspected.stdout.trim() !== 'true') throw new Refusal('VERIFY_NETWORK_FORBIDDEN');

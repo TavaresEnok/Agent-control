@@ -13,6 +13,7 @@ import {validatePassiveTlsEvidence, type ProntidaoPassiveEvidence} from './pront
 import {trackRoundTemp, type RoundScope} from './personal-artifact-hooks.ts';
 import {ARCHIVE_TIMEOUT_MS, COLLECTOR_DAEMON_TIMEOUT_MS, DEFAULT_COLLECTOR_TIMEOUT_MS, DIGEST, MAX_COLLECTOR_STDOUT_BYTES, MODULE_CONTAINER_USER, MODULE_MEMORY_BYTES, MODULE_NANO_CPUS, MODULE_PIDS_LIMIT, MUTABLE_LATEST, ModuleCollectorOutput, assertVerificationModule, isErrno} from './verification-modules-contracts.ts';
 import {parseModuleCollectorOutput} from './verification-modules-collector.ts';
+import {installationName, ownerLabelArgs, projectLabel} from '../scripts/ac-labels.mjs';
 
 function assertNoForeignNetwork(value: string): void {
   if (/(?:--network|--net)(?:=|\s+)(?!none\b)\S+/i.test(value)) throw new Refusal('VERIFY_NETWORK_FORBIDDEN');
@@ -257,6 +258,12 @@ async function confirmCollectorStarted(run: CollectorProcess, id: string, timeou
   throw new Refusal('VERIFY_TOOLS_FAILED', 503);
 }
 
+/** Ownership labels of a module exam container: the installation and the project of the run, when the run is known. */
+export function moduleOwnerLabelArgs(retention: ModuleRetention | undefined, module: VerificationModule | undefined): string[] {
+  return retention ? ownerLabelArgs({installation: installationName(retention.dataDirectory), project: projectLabel(retention.projectId),
+    kind: `exam-${module ?? 'module'}`}) : [];
+}
+
 export async function runModuleCollectorContainer(input: {
   image: string;
   repoPath: string;
@@ -323,7 +330,7 @@ export async function runModuleCollectorContainer(input: {
     // Let create return its ID even when cancellation arrives during the call.
     // Drain the attached streams without persisting either one in the daemon.
     const createArgs = [MODULE_RUNTIME_BIN, 'create', '--pull', 'never', '--name', moduleContainerName(token),
-      '--label', `${MODULE_CONTAINER_LABEL}=${token}`, '--log-driver', 'none',
+      '--label', `${MODULE_CONTAINER_LABEL}=${token}`, ...moduleOwnerLabelArgs(input.retention, input.module), '--log-driver', 'none',
       '--mount', `type=bind,src=${wrapper},dst=${COLLECTOR_WRAPPER_PATH},readonly`,
       '--tmpfs', `${COLLECTOR_CAPTURE_DIR}:rw,noexec,nosuid,nodev,uid=65532,gid=65532,mode=0700,size=${captureBytes}`,
       '--env', `AC_COLLECTOR_CAPTURE_DIR=${COLLECTOR_CAPTURE_DIR}`,

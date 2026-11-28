@@ -3,7 +3,8 @@ import {execFile, spawn as spawnProcess} from 'node:child_process';
 import {createHash, randomUUID} from 'node:crypto';
 import {constants, createReadStream} from 'node:fs';
 import {chmod, link, lstat, mkdir, open, readdir, readFile, rename, rm, unlink, writeFile} from 'node:fs/promises';
-import {isAbsolute, join, relative, resolve, sep} from 'node:path';
+import {dirname, isAbsolute, join, relative, resolve, sep} from 'node:path';
+import {installationName, ownerLabelArgs} from '../scripts/ac-labels.mjs';
 import {Refusal} from './contracts.ts';
 import {VERIFY_RUNTIME_BIN, verifyDatabaseArguments} from './verify-image.ts';
 import {diskUsedPercent} from './personal-disk.ts';
@@ -147,6 +148,8 @@ export function discardStampArguments(stamp: string, parent: string, image: stri
     '--read-only',
     '--entrypoint', '/bin/sh',
     '--mount', `type=bind,src=${resolvedStamp},dst=/databases`,
+    // The stamps live in <dataDirectory>/verify-db: the installation is the parent's parent.
+    ...ownerLabelArgs({installation: installationName(dirname(resolve(parent))), kind: 'verify-db-discard'}),
     image, '-c', 'chmod -R a+rwX /databases',
   ];
 }
@@ -303,7 +306,7 @@ async function publishStamp(
   image: string,
   fetchedAt: string,
 ): Promise<VerifyDatabaseSnapshot> {
-  const args = verifyDatabaseArguments({image, output: stamp, javaDb: input.javaDb !== false});
+  const args = verifyDatabaseArguments({image, output: stamp, javaDb: input.javaDb !== false, labels: ownerLabelArgs({installation: installationName(root), kind: 'verify-db'})});
   const run = input.spawn ?? ((command) => runCommand(command, 'inherit', FETCH_TIMEOUT_MS));
   let code = 1;
   try {

@@ -198,12 +198,16 @@ test('orquestra imagem fixada, cópia oficial imutável e namespaces separados s
   await symlink('server.mjs', join(fixture.repo, 'link'));
   await assert.rejects(fixture.run({imageDigest: `sha256:${'f'.repeat(64)}`}), /digest/);
   await assert.rejects(fixture.run({snapshotPath: process.cwd()}), /snapshot oficial/);
-  const output = await fixture.run();
+  const ownerLabels = ['--label', 'com.agent-control.installation=ispagent', '--label', 'com.agent-control.kind=exam-desempenho'];
+  const output = await fixture.run({ownerLabels});
   assert.match(output.coverage[0].detail, /3 entrada\(s\) excluída/);
   assert.equal(output.coverage[1].status, 'ok');
   const creates = (await fixture.calls()).filter(args => args[0] === 'create');
   assert.equal(creates.length, 2);
   for (const args of creates) {
+    // The ownership labels come right before the image, after the recovery owner label.
+    const image = args.findIndex(arg => /^sha256:[a-f0-9]{64}$/.test(arg));
+    assert.deepEqual(args.slice(image - ownerLabels.length, image), ownerLabels);
     assert.equal(args[args.indexOf('--network') + 1], 'none');
     for (const option of ['--read-only', '--user', '--cap-drop', '--security-opt', '--pids-limit', '--memory', '--tmpfs']) assert.ok(args.includes(option));
     assert.equal(args[args.indexOf('--log-driver') + 1], 'none');

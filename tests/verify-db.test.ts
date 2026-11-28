@@ -3,7 +3,7 @@ import {execFile} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {chmod, mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {basename, join} from 'node:path';
+import {basename, dirname, join} from 'node:path';
 import {test} from 'node:test';
 import {promisify} from 'node:util';
 import {Refusal} from '../src/contracts.ts';
@@ -40,6 +40,8 @@ function publishingSpawn(): (args: readonly string[]) => Promise<number> {
   return async (args) => {
     assert.ok(args.includes('/usr/local/bin/verify-db-fetch.sh'));
     const directory = mountedDatabase(args);
+    // The download container carries the installation's ownership labels: <dataDirectory>/verify-db/<stamp>.
+    assert.ok(args.includes(`com.agent-control.installation=${basename(dirname(dirname(directory)))}`) && args.includes('com.agent-control.kind=verify-db'));
     await mkdir(join(directory, 'osv'), {recursive: true});
     await writeFile(join(directory, 'osv', 'npm.txt'), 'ok');
     return 0;
@@ -220,6 +222,9 @@ test('o descarte só devolve ao root as caps de chmod, sem privilégio novo', ()
   assert.equal(args[0], 'docker');
   assert.ok(args.includes(`type=bind,src=${stamp},dst=/databases`));
   assert.equal(args.includes(image), true);
+  // The stamps are <dataDirectory>/verify-db/<stamp>: the installation is the parent's parent.
+  assert.ok(args.includes('com.agent-control.installation=tmp') && args.includes('com.agent-control.kind=verify-db-discard'));
+  assert.ok(args.indexOf('com.agent-control.kind=verify-db-discard') < args.indexOf(image));
 });
 
 test('a poda conserva o current, os dois mais novos e o carimbo em uso', async () => {
