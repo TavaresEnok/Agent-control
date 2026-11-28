@@ -8,7 +8,7 @@ import {test} from 'node:test';
 import {canonical,digest} from '../src/contracts.ts';
 import {defaultPersonalQaContract,parsePersonalQaConfig,personalQaContractFromConfig} from '../src/personal-qa-config.ts';
 import {nativeQaContractDigest} from '../src/native-qa-contract.ts';
-import {redactQaDatabaseSecrets,removeNativeQaService,withNativeQaDatabase} from '../src/native-qa-database.ts';
+import {provisionNativeQaDatabase,redactQaDatabaseSecrets,removeNativeQaService,withNativeQaDatabase} from '../src/native-qa-database.ts';
 import {assertCompleteQaLogs} from '../src/native-qa.ts';
 import {DockerDaemon} from '../src/sandbox-broker.ts';
 
@@ -111,6 +111,19 @@ test('a QA service creates an internal network, waits for postgres, tests, and r
   await assert.rejects(withNativeQaDatabase(fake.docker,randomUUID(),service,{memoryBytes:268435456,pids:64,nanoCpus:500000000},async()=>{fake.events.push('test');throw Error('boom');},line=>logs.push(line)));
   assert.deepEqual(fake.events,['network','database','start','wait','test','stop','remove-database','remove-network']);
   assert.equal(logs.join('\n').includes(password),false);
+ }finally{await fake.close();}
+});
+
+test('the QA network and database carry the ownership labels the QA supervisor gives them',async()=>{
+ const fake=await fakeDocker(),jobId=randomUUID();
+ try{
+  await provisionNativeQaDatabase(fake.docker,jobId,{image:'postgres:16-alpine',database:'qa_test'},{memoryBytes:268435456,pids:64,nanoCpus:500000000},()=>{},
+   kind=>({'com.agent-control.installation':'ispagent','com.agent-control.kind':kind}));
+  const network=fake.calls.find(call=>call.path==='/v1.44/networks/create');
+  assert.deepEqual(network?.body.Labels,{'com.agent-control.installation':'ispagent','com.agent-control.kind':'native-qa-network','agent-control.contract':'native-qa-net-v1','agent-control.job':jobId});
+  const database=fake.calls.find(call=>call.method==='POST'&&call.path.startsWith('/v1.44/containers/create'));
+  assert.deepEqual(database?.body.Labels,{'com.agent-control.installation':'ispagent','com.agent-control.kind':'native-qa-db','agent-control.contract':'native-qa-db-v1','agent-control.job':jobId});
+  await removeNativeQaService(fake.docker,jobId);
  }finally{await fake.close();}
 });
 

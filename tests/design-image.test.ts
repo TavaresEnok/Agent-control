@@ -7,8 +7,10 @@ import {
   DESIGN_RUNTIME_BIN,
   assertDesignDestination,
   assertDesignTarget,
+  designOwnerLabelArgs,
   designRunArguments,
   pinnedDesignImage,
+  setDesignContainerOwner,
   type DesignRunInput,
 } from '../src/design-image.ts';
 
@@ -164,4 +166,28 @@ test('o Dockerfile usa a tag fixa e o digest que a constante publica', () => {
   assert.match(entry, /Não executa código do repositório/);
   assert.match(network, /design-homologation/);
   assert.match(network, /--internal/);
+});
+
+test('com a sessão de design ligada a uma instalação, o contêiner do exame leva os rótulos de dono', () => {
+  const plain = designRunArguments(input());
+  assert.equal(plain.some(item => item.startsWith('com.agent-control.')), false);
+  assert.deepEqual(designOwnerLabelArgs('design-login'), []);
+  try {
+    setDesignContainerOwner({dataDirectory: '/home/app/.agent-control/ispagent', projectId: 'chatisp'});
+    const args = designRunArguments(input());
+    const labels = ['--label', 'com.agent-control.installation=ispagent', '--label', 'com.agent-control.project=chatisp', '--label', 'com.agent-control.kind=design-exam'];
+    const at = args.indexOf(labels[1]!);
+    assert.deepEqual(args.slice(at - 1, at - 1 + labels.length), labels);
+    // The labels sit before the entrypoint and the image: they never become the command.
+    assert.ok(at < args.indexOf('--entrypoint') && at < args.indexOf(DESIGN_IMAGE));
+    // The other flags are the same as without an owner.
+    assert.deepEqual(args.filter(item => !labels.includes(item)), plain);
+    assert.deepEqual(designOwnerLabelArgs('design-login').at(-1), 'com.agent-control.kind=design-login');
+    // A data directory whose name starts with a dot, or a project id that cannot be a label, never stops the exam.
+    setDesignContainerOwner({dataDirectory: '/x/.agent-control', projectId: 'não é rótulo'});
+    assert.deepEqual(designOwnerLabelArgs('design-serve'), ['--label', 'com.agent-control.installation=agent-control', '--label', 'com.agent-control.kind=design-serve']);
+  } finally {
+    setDesignContainerOwner(undefined);
+  }
+  assert.deepEqual(designRunArguments(input()), plain);
 });

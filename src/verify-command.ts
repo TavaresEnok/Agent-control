@@ -24,7 +24,7 @@ import {collectToolFindings} from './verify-collect.ts';
 import {claimVerifyDatabaseStamp, readCurrentVerifyDatabase, releaseVerifyDatabaseStamp, verifyDatabaseStampPresent} from './verify-db.ts';
 import {attachInternalTarget, dynamicScanPlan} from './verify-dynamic.ts';
 import {VERIFY_RUNTIME_BIN, verifyExamArguments} from './verify-image.ts';
-import {installationName, ownerLabelArgs} from '../scripts/ac-labels.mjs';
+import {installationName, ownerLabelArgs, projectLabel} from '../scripts/ac-labels.mjs';
 import {inheritNativeWorkerCapacityPoll, isCapacityNativeWorker, type SecurityExamSupervisor} from './verify-native-launch.ts';
 import {
   runResolvedPersonalSecurityVerification,
@@ -452,7 +452,7 @@ export async function defaultRunTools(
       image: spec.image,
       repository: spec.staticPersonalExam && !spec.commonTools ? join(snapshot, 'repository') : snapshot,
       commonTools:spec.commonTools,
-      ...(spec.retention?{labels:ownerLabelArgs({installation:installationName(spec.retention.dataDirectory),project:spec.retention.projectId,kind:'exam-verify'})}:{}),
+      ...(spec.retention?{labels:ownerLabelArgs({installation:installationName(spec.retention.dataDirectory),project:projectLabel(spec.retention.projectId),kind:'exam-verify'})}:{}),
       databases: spec.databases,
       output: spec.output,
       memoryBytes: EXAM_MEMORY_BYTES,
@@ -561,10 +561,10 @@ async function removeHomologationNetwork(network: string, container: string, run
   } catch { /* removal must not hide the exam result */ }
 }
 
-async function attachHomologation(network: string, container: string, run: NetworkRunner): Promise<void> {
+async function attachHomologation(network: string, container: string, run: NetworkRunner, labels: readonly string[]): Promise<void> {
   let attached = false;
   try {
-    await attachInternalTarget({network, container, run});
+    await attachInternalTarget({network, container, run, labels});
     attached = true;
   } finally {
     if (!attached) await removeHomologationNetwork(network, container, run);
@@ -767,7 +767,8 @@ export async function beginPersonalVerification(input: PersonalVerificationInput
   let snapshot: string | undefined;
   let progressPath: string | undefined;
   try {
-    if (network && container) await attachHomologation(network, container, networkRunner);
+    if (network && container) await attachHomologation(network, container, networkRunner,
+      ownerLabelArgs({installation: installationName(ready.dataDirectory), project: projectLabel(ready.projectId), kind: 'verify-dynamic-network'}));
     databaseStamp = await claimExamDatabase(ready.dataDirectory, ready.databasesDirectory, id);
     const output = await ensureTree(ready.dataDirectory, ['verificacoes', ready.projectId, 'ferramentas', id]);
     progressPath = join(progressDir, `${id}.json`);

@@ -55,7 +55,9 @@ function overlaps(left: string, right: string): boolean {
 }
 
 /** Separate step, with network, that only downloads vulnerability databases. */
-export function verifyDatabaseArguments({image, output}: {image: string; output: string}): readonly string[] {
+export function verifyDatabaseArguments({image, output, labels = []}: {image: string; output: string;
+  /** Ownership `--label` arguments (installation, kind). */
+  labels?: readonly string[]}): readonly string[] {
   assertPinnedImage(image);
   const databases = assertHostPath(output);
   return [
@@ -70,6 +72,7 @@ export function verifyDatabaseArguments({image, output}: {image: string; output:
     '--env', 'TMPDIR=/tmp',
     '--workdir', '/databases',
     '--mount', `type=bind,src=${databases},dst=/databases`,
+    ...labels,
     '--entrypoint', '/usr/local/bin/verify-db-fetch.sh',
     image,
   ];

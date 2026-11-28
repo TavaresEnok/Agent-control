@@ -19,6 +19,7 @@ import {formatDesignPrepare, prepareDesignSpecialist} from './design-prepare.ts'
 import {readReferenceFiles} from './design-reference-files.ts';
 import {approveDesignBaseline} from './design-regression.ts';
 import {readDesignCaptureFiles} from './design-report.ts';
+import {designOwnerLabelArgs, setDesignContainerOwner} from './design-image.ts';
 import {loadInstallation} from './installation.ts';
 import {assertInstallationMigrations,migrationsPendingText} from './installation-readiness.ts';
 import {Ledger} from './ledger.ts';
@@ -257,11 +258,12 @@ async function withCreatedServer<T>(
       '--entrypoint', 'node',
       '--pull', 'never',
       '--mount', `type=bind,source=${pub},destination=/srv,readonly`,
+      ...designOwnerLabelArgs('design-create-serve'),
       pin,
       '/opt/design-tools/serve-static.mjs',
     ]);
     await dockerFinished([
-      'run', '--rm', '--pull', 'never', '--network', 'design-homologation', '--entrypoint', 'node', pin,
+      'run', '--rm', '--pull', 'never', '--network', 'design-homologation', ...designOwnerLabelArgs('design-probe'), '--entrypoint', 'node', pin,
       '-e', readyScript(`http://design-create.local:8080/${first}`),
     ]);
     return await run('http://design-create.local:8080', root);
@@ -302,11 +304,12 @@ async function withServedDirectory<T>(
       '--entrypoint', 'node',
       '--pull', 'never',
       '--mount', `type=bind,source=${directory},destination=/srv,readonly`,
+      ...designOwnerLabelArgs('design-serve'),
       pin,
       '/opt/design-tools/serve-static.mjs',
     ]);
     await dockerFinished([
-      'run', '--rm', '--pull', 'never', '--network', 'design-homologation', '--entrypoint', 'node', pin,
+      'run', '--rm', '--pull', 'never', '--network', 'design-homologation', ...designOwnerLabelArgs('design-probe'), '--entrypoint', 'node', pin,
       '-e', readyScript(servedUrl(probe)),
     ]);
     return await run('http://design-servir.local:8080', routes, servedFiles);
@@ -420,6 +423,7 @@ async function main() {
   let browser: Awaited<ReturnType<typeof openDesignBrowser>> | undefined;
   try {
     const resolved = await resolvePersonalDesign(invocation.argv, undefined, true);
+    setDesignContainerOwner({dataDirectory: resolved.dataDirectory, projectId: resolved.projectId});
     examStatus = await runDesignSession(
       resolved,
       async () => {
@@ -486,6 +490,7 @@ async function main() {
 
 async function runCreate(invocation: {installationPath: string; projectId: string; briefing: string; references: string[]; screens: number; rounds: number}) {
   const resolved = await resolvePersonalDesign([], {installationPath: invocation.installationPath, projectId: invocation.projectId});
+  setDesignContainerOwner({dataDirectory: resolved.dataDirectory, projectId: resolved.projectId});
   await runDesignSession(resolved, async () => {
     const runId = randomUUID();
     const briefing = await readFile(invocation.briefing, 'utf8');

@@ -46,7 +46,7 @@ type RecordedLaunch = {
 async function startLaunchDocker(
   socket: string,
   answer: (launch: RecordedLaunch) => {output: string; failureCode: string | null},
-): Promise<{launches: RecordedLaunch[]; close: () => Promise<void>}> {
+): Promise<{launches: RecordedLaunch[]; createdNetworks: {Name: string; Labels: Record<string, string>}[]; close: () => Promise<void>}> {
   type ContainerState = {
     Id: string;
     Image: string;
@@ -59,6 +59,7 @@ async function startLaunchDocker(
   const containers = new Map<string, ContainerState>();
   const networks = new Map<string, {Name: string; Labels: Record<string, string>}>();
   const launches: RecordedLaunch[] = [];
+  const createdNetworks: {Name: string; Labels: Record<string, string>}[] = [];
   const id = () => digest(randomUUID());
   const readJson = async (req: IncomingMessage) => {
     const chunks: Buffer[] = [];
@@ -79,6 +80,7 @@ async function startLaunchDocker(
           const body = await readJson(req);
           const netId = id();
           networks.set(netId, {Name: body.Name, Labels: body.Labels});
+          createdNetworks.push({Name: body.Name, Labels: body.Labels});
           send(201, {Id: netId});
           return;
         }
@@ -149,6 +151,7 @@ async function startLaunchDocker(
   await new Promise<void>(resolve => server.listen(socket, resolve));
   return {
     launches,
+    createdNetworks,
     close: () => new Promise<void>((resolve, reject) => server.close(err => err ? reject(err) : resolve())),
   };
 }
@@ -203,7 +206,7 @@ test('seleção por módulo exige Sonnet 5.5 medium/high na primeira conta da ca
   const database = await isolatedDatabase(base!, 'modrouting');
   const ledger = new Ledger(database.url);
   const root = await mkdtemp(join(tmpdir(), 'ac-mod-routing-'));
-  let docker: {launches: RecordedLaunch[]; close: () => Promise<void>} | undefined;
+  let docker: Awaited<ReturnType<typeof startLaunchDocker>> | undefined;
   try {
     await ledger.migrate();
     const dataDirectory = join(root, 'data');
@@ -366,6 +369,12 @@ test('seleção por módulo exige Sonnet 5.5 medium/high na primeira conta da ca
     assert.equal(qaExam!.labels?.['com.agent-control.project'], project);
     assert.equal(qaExam!.labels?.['com.agent-control.kind'], 'native-specialist');
     assert.equal(qaExam!.labels?.['agent-control.contract'], 'native-execution-v1');
+    // The job's private network is created with the same ownership labels.
+    const qaNetwork = docker!.createdNetworks.find(network => network.Name === `ac-native-exec-${qaExam!.jobId}`);
+    assert.ok(qaNetwork, 'a rede privada do exame foi criada');
+    assert.equal(qaNetwork.Labels['com.agent-control.installation'], 'data');
+    assert.equal(qaNetwork.Labels['com.agent-control.project'], project);
+    assert.equal(qaNetwork.Labels['com.agent-control.kind'], 'native-specialist');
 
     assert.equal(qaColHigh!.provider, 'codex');
     assert.equal(qaColHigh!.accountId, codexAccount);

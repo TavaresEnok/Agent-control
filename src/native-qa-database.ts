@@ -43,16 +43,17 @@ async function waitQaDatabase(docker:DockerDaemon,container:string,user:string,d
 }
 
 /** Create the internal network and the database, then wait until it accepts connections. Returns the test URL. */
-export async function provisionNativeQaDatabase(docker:DockerDaemon,jobId:string,service:QaServices['postgres'],limits:QaDatabaseLimits,log:(line:string)=>void=()=>{}){
+export async function provisionNativeQaDatabase(docker:DockerDaemon,jobId:string,service:QaServices['postgres'],limits:QaDatabaseLimits,log:(line:string)=>void=()=>{},
+ owner:(kind:string)=>Record<string,string>=()=>({})){
  const container=qaDatabaseName(jobId),network=qaNetworkName(jobId);
  const user='u'+randomBytes(8).toString('hex'),password=randomBytes(18).toString('hex');
  await dropLeftoverQaService(docker,jobId);
  safeQaLog(log,'qa-service create network '+network);
- await docker.createQaNetwork(network,{'agent-control.contract':'native-qa-net-v1','agent-control.job':jobId});
+ await docker.createQaNetwork(network,{...owner('native-qa-network'),'agent-control.contract':'native-qa-net-v1','agent-control.job':jobId});
  try{
   safeQaLog(log,'qa-service create database '+container);
   const id=await docker.create(container,{Image:service.image,Env:[`POSTGRES_USER=${user}`,`POSTGRES_PASSWORD=${password}`,`POSTGRES_DB=${service.database}`],
-   Labels:{'agent-control.contract':'native-qa-db-v1','agent-control.job':jobId},
+   Labels:{...owner('native-qa-db'),'agent-control.contract':'native-qa-db-v1','agent-control.job':jobId},
    HostConfig:{NetworkMode:network,Privileged:false,PublishAllPorts:false,PidsLimit:limits.pids,Memory:limits.memoryBytes,NanoCpus:limits.nanoCpus,
     Tmpfs:{'/var/lib/postgresql/data':'rw,nosuid,nodev,size=512m'}}});
   await docker.start(id);
