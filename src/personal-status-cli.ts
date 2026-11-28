@@ -1,3 +1,4 @@
+import {readFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {Refusal} from './contracts.ts';
@@ -45,8 +46,28 @@ export type ExamStatusRow = {
   msPerJob: number | null; etaAt: string | null; note: string | null;
 };
 
-function stateOf(row: VerificationProgress, alive: (pid: number) => boolean): ExamState {
-  if (row.status === 'running') return row.pid !== undefined && !alive(row.pid) ? 'abandonado' : 'em-andamento';
+/** A live PID that started this much after the exam did belongs to another process (PID reused, say after a reboot). */
+const PID_REUSE_SLACK_MS = 10_000;
+
+/** Start time of a process from /proc (Linux, USER_HZ 100), or null when it cannot be read. */
+export function processStartedAt(pid: number): number | null {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    // Fields after the command name, which may hold spaces; field 22 (starttime) is the 20th of them.
+    const ticks = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]);
+    const btime = Number(/^btime (\d+)$/mu.exec(readFileSync('/proc/stat', 'utf8'))?.[1]);
+    return Number.isFinite(ticks) && Number.isFinite(btime) ? (btime + ticks / 100) * 1000 : null;
+  } catch { return null; }
+}
+
+function stateOf(row: VerificationProgress, alive: (pid: number) => boolean, startOf: (pid: number) => number | null): ExamState {
+  if (row.status === 'running') {
+    if (row.pid === undefined) return 'em-andamento';
+    if (!alive(row.pid)) return 'abandonado';
+    const processStart = startOf(row.pid);
+    const examStart = Date.parse(row.startedAt);
+    return processStart !== null && Number.isFinite(examStart) && processStart > examStart + PID_REUSE_SLACK_MS ? 'abandonado' : 'em-andamento';
+  }
   if (row.status === 'done') return 'concluido';
   if (row.status === 'stopped') return 'parado';
   if (row.status === 'incomplete') return 'incompleto';
@@ -54,8 +75,8 @@ function stateOf(row: VerificationProgress, alive: (pid: number) => boolean): Ex
 }
 
 export function examStatusRow(project: {id: string; label: string}, row: VerificationProgress, now: number,
-  alive: (pid: number) => boolean = processAlive): ExamStatusRow {
-  const state = stateOf(row, alive);
+  alive: (pid: number) => boolean = processAlive, startOf: (pid: number) => number | null = processStartedAt): ExamStatusRow {
+  const state = stateOf(row, alive, startOf);
   const started = Date.parse(row.startedAt);
   const elapsedMs = row.durationMs ?? (Number.isFinite(started) ? Math.max(0, now - started) : 0);
   const judged = row.judged ?? null;
@@ -89,6 +110,8 @@ export type StatusDeps = {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   alive?: (pid: number) => boolean;
+  /** Start time of a live PID, to tell the exam's process from another one that took its PID. */
+  startedAt?: (pid: number) => number | null;
   load?: (path: string) => Promise<{dataDirectory: string; projects: Project[]}>;
 };
 
@@ -97,17 +120,25 @@ async function loadProjects(path: string): Promise<{dataDirectory: string; proje
   return {dataDirectory: config.dataDirectory, projects: [config.project, ...config.projects].map(item => ({id: item.id, label: item.label}))};
 }
 
-/** Rows of the exams in progress (or abandoned), or every row of the run or project named. */
-async function collect(dataDirectory: string, projects: readonly Project[], target: string | undefined, now: number,
-  alive: (pid: number) => boolean): Promise<ExamStatusRow[]> {
+type Row = (project: Project, row: VerificationProgress) => ExamStatusRow;
+
+/** Every row of the scope: the run named, the project named, or all projects. */
+async function scoped(dataDirectory: string, projects: readonly Project[], target: string | undefined, toRow: Row): Promise<ExamStatusRow[]> {
   const project = target ? projects.find(item => item.id === target || item.label === target) : undefined;
   if (target && !project && !UUID.test(target)) throw new Refusal('NOT_FOUND', 404);
   const rows: ExamStatusRow[] = [];
   for (const item of project ? [project] : projects) {
     const progress = await readVerificationProgress(dataDirectory, item.id, {all: true}).catch(() => [] as VerificationProgress[]);
-    for (const row of progress) rows.push(examStatusRow(item, row, now, alive));
+    for (const row of progress) rows.push(toRow(item, row));
   }
-  if (target && !project) return rows.filter(row => row.runId === target);
+  return target && !project ? rows.filter(row => row.runId === target) : rows;
+}
+
+/** Rows of the exams in progress (or abandoned), or every row of the run or project named. */
+async function collect(dataDirectory: string, projects: readonly Project[], target: string | undefined, toRow: Row): Promise<ExamStatusRow[]> {
+  const project = target ? projects.find(item => item.id === target || item.label === target) : undefined;
+  const rows = await scoped(dataDirectory, projects, target, toRow);
+  if (target && !project) return rows;
   if (project) {
     // The project named: what runs now, else the newest run of each module.
     const live = rows.filter(row => row.state === 'em-andamento' || row.state === 'abandonado');
@@ -121,53 +152,59 @@ async function collect(dataDirectory: string, projects: readonly Project[], targ
 
 export type StatusOutcome = {code: 0 | 2 | 3; rows: ExamStatusRow[]; lines: string[]; json?: string};
 
+const keyOf = (row: ExamStatusRow) => `${row.projectId}/${row.runId}`;
+
 /**
  * `personal:status`. Without `--esperar` it shows and leaves (0). With `--esperar` it blocks in this process, with a growing
- * wait and no pgrep, until every exam it follows ends: 0 when all finished, 2 when one stopped, failed, came out incomplete or
- * was abandoned, 3 when `--ate` ran out first.
+ * wait and no pgrep, until every exam it follows ends: 0 when at least one was followed and all finished, 2 when one stopped,
+ * failed, came out incomplete or was abandoned, 3 when `--ate` ran out first. With nothing running yet (an exam just launched
+ * in the background, whose progress file comes after the lease) it waits for one to appear in the scope, never exiting 0.
  */
 export async function runPersonalStatus(argv: readonly string[], deps: StatusDeps = {}): Promise<StatusOutcome> {
   const args = parseStatusArgs(argv);
   const now = deps.now ?? Date.now;
   const alive = deps.alive ?? processAlive;
+  const startOf = deps.startedAt ?? processStartedAt;
   const sleep = deps.sleep ?? (ms => new Promise<void>(done => setTimeout(done, ms)));
   const {dataDirectory, projects} = await (deps.load ?? loadProjects)(args.installationPath);
-  let rows = await collect(dataDirectory, projects, args.target, now(), alive);
-  if (args.target && UUID.test(args.target) && !projects.some(item => item.id === args.target) && rows.length === 0) throw new Refusal('NOT_FOUND', 404);
-  let code: StatusOutcome['code'] = 0;
-  if (args.wait) {
-    // The exams followed are fixed at the start: a new one that begins later is not waited for.
-    const followed = new Set(rows.filter(row => row.state === 'em-andamento').map(row => `${row.projectId}/${row.runId}`));
-    const schedule = pollSchedule({backoff: true, baseMs: WAIT_BASE_MS, maxMs: WAIT_MAX_MS, deadlineMs: args.untilMinutes * 60_000});
-    const deadline = now() + args.untilMinutes * 60_000;
-    const current = async () => {
-      const all: ExamStatusRow[] = [];
-      for (const project of projects) {
-        const progress = await readVerificationProgress(dataDirectory, project.id, {all: true}).catch(() => [] as VerificationProgress[]);
-        for (const row of progress) if (followed.has(`${project.id}/${row.id}`)) all.push(examStatusRow(project, row, now(), alive));
-      }
-      return all;
-    };
-    let attempt = 0;
-    let watched = rows.filter(row => followed.has(`${row.projectId}/${row.runId}`));
-    const refresh = async () => {
-      const fresh = new Map((await current()).map(row => [`${row.projectId}/${row.runId}`, row]));
-      // A file removed while waited for leaves no outcome: it counts as failed, never as finished.
-      watched = watched.map(row => fresh.get(`${row.projectId}/${row.runId}`)
-        ?? (row.state === 'em-andamento' ? {...row, state: 'falhou' as const, note: 'O arquivo de andamento sumiu antes do fim.'} : row));
-    };
-    while (watched.some(row => row.state === 'em-andamento')) {
-      if (now() >= deadline) break;
-      await sleep(Math.min(schedule.waitMs(attempt++), Math.max(0, deadline - now())));
-      await refresh();
-    }
-    rows = followed.size ? watched : rows;
-    code = rows.some(row => row.state === 'em-andamento') ? 3
-      : rows.some(row => row.state !== 'concluido') ? 2 : 0;
+  const toRow: Row = (project, row) => examStatusRow(project, row, now(), alive, startOf);
+  const runTarget = Boolean(args.target && UUID.test(args.target) && !projects.some(item => item.id === args.target));
+  if (!args.wait) {
+    const rows = await collect(dataDirectory, projects, args.target, toRow);
+    if (runTarget && rows.length === 0) throw new Refusal('NOT_FOUND', 404);
+    const lines = rows.length ? rows.map(formatStatusRow) : ['Nenhum exame em andamento.'];
+    return {code: 0, rows, lines, ...(args.json ? {json: JSON.stringify({code: 0, exames: rows})} : {})};
   }
-  const lines = rows.length ? rows.map(formatStatusRow) : ['Nenhum exame em andamento.'];
-  if (args.wait && code === 3) lines.push(`Tempo de espera esgotado (${args.untilMinutes} min); o exame segue rodando.`);
-  return {code, rows, lines, ...(args.json ? {json: JSON.stringify({code, exames: rows})} : {})};
+  const schedule = pollSchedule({backoff: true, baseMs: WAIT_BASE_MS, maxMs: WAIT_MAX_MS, deadlineMs: args.untilMinutes * 60_000});
+  const deadline = now() + args.untilMinutes * 60_000;
+  let attempt = 0;
+  const pause = () => sleep(Math.min(schedule.waitMs(attempt++), Math.max(0, deadline - now())));
+  // The runs followed: the one named whatever its state, else those running now. Runs listed now and not running are past
+  // ones; a run that appears later in the scope (running or already ended) is the one launched meanwhile.
+  const initial = await scoped(dataDirectory, projects, args.target, toRow);
+  const known = new Set(initial.map(keyOf));
+  const followed = new Set((runTarget ? initial : initial.filter(row => row.state === 'em-andamento')).map(keyOf));
+  while (followed.size === 0 && now() < deadline) {
+    await pause();
+    for (const row of await scoped(dataDirectory, projects, args.target, toRow)) if (runTarget || !known.has(keyOf(row))) followed.add(keyOf(row));
+  }
+  let watched = initial.filter(row => followed.has(keyOf(row)));
+  const refresh = async () => {
+    const fresh = new Map((await scoped(dataDirectory, projects, args.target, toRow)).map(row => [keyOf(row), row]));
+    // A file removed while waited for leaves no outcome: it counts as failed, never as finished.
+    watched = [...followed].map(key => fresh.get(key) ?? watched.find(row => keyOf(row) === key)).filter((row): row is ExamStatusRow => row !== undefined)
+      .map(row => fresh.has(keyOf(row)) || row.state !== 'em-andamento' ? row : {...row, state: 'falhou' as const, note: 'O arquivo de andamento sumiu antes do fim.'});
+  };
+  await refresh();
+  while (watched.some(row => row.state === 'em-andamento') && now() < deadline) {
+    await pause();
+    await refresh();
+  }
+  const code: StatusOutcome['code'] = watched.length === 0 || watched.some(row => row.state === 'em-andamento') ? 3
+    : watched.some(row => row.state !== 'concluido') ? 2 : 0;
+  const lines = watched.length ? watched.map(formatStatusRow) : [`Nenhum exame apareceu para esperar em ${args.untilMinutes} min.`];
+  if (code === 3 && watched.length) lines.push(`Tempo de espera esgotado (${args.untilMinutes} min); o exame segue rodando.`);
+  return {code, rows: watched, lines, ...(args.json ? {json: JSON.stringify({code, exames: watched})} : {})};
 }
 
 async function main(): Promise<void> {
