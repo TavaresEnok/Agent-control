@@ -1,4 +1,5 @@
 import {EgressConfig} from './personal-egress.ts';
+import {StorageConfig} from './storage-config.ts';
 import {constants} from 'node:fs';
 import {open,mkdir,realpath,stat} from 'node:fs/promises';
 import {isAbsolute,join,resolve,sep} from 'node:path';
@@ -43,7 +44,9 @@ export const ProjectEconomy=z.object({map:z.boolean().default(true),measurement:
  /** Módulo 1: confirmações ao mesmo tempo (1 a 4). O limite de avaliadores da política continua valendo. */
  securityConfirmations:z.number().int().min(1).max(4).default(1),
  /** Módulo 1: modelo e esforço do revisor dos achados que não são altos. Ausente mantém a cadeia. O alto segue com o Opus. */
- securityReviewer:z.object({model:z.string().min(1).max(100),effort:z.enum(['low','medium','high'])}).strict().optional()}).strict();
+ securityReviewer:z.object({model:z.string().min(1).max(100),effort:z.enum(['low','medium','high'])}).strict().optional(),
+ /** Teto de chamadas ao modelo por exame; ao chegar nele o exame para com relatório parcial. Ausente: sem teto. */
+ maxModelCalls:z.number().int().min(1).max(100000).optional()}).strict();
 const projectDefinition=z.object({economy:ProjectEconomy.optional(),allowedAccountIds:z.array(z.uuid()).min(1).max(8).refine(ids=>new Set(ids).size===ids.length,'Duplicate allowed account').optional(),id:z.uuid(),label:z.string().min(1).max(200),repo:absolute,owner:z.string().min(1).max(200),publishedOrigin:httpsOrigin().optional(),publishedOrigins:z.array(httpsOrigin()).max(16).optional()}).strict();
 export const InstallationObject=z.object({schemaVersion:z.literal(1),mode:z.literal('administration-only'),
  isolation:z.enum(['simple','strict']).optional(),
@@ -52,6 +55,8 @@ export const InstallationObject=z.object({schemaVersion:z.literal(1),mode:z.lite
  projectRoots:z.array(ProjectRoot.extend({path:absolute})).max(32).default([]),
  retention:z.object({automatic:z.enum(['off','preview','apply']).default('preview')}).strict().default({automatic:'preview'}),
  dockerDependencies:DockerDependenciesConfig.optional(),
+ /** Orçamento de espaço do próprio Agent Control (src/storage-config.ts). */
+ storage:StorageConfig.default(StorageConfig.parse({})),
  /** Provider egress for personal workers (src/personal-egress.ts). Absent means off. */
  egress:EgressConfig.optional(),
  dataDirectory:absolute,project:projectDefinition,projects:z.array(projectDefinition).max(99).default([]),

@@ -13,3 +13,8 @@ upstream/happier/.yarn/
 .design-captures/
 !upstream/cezar/.env.example
 !upstream/happier/**/.env.example
+
+# Build do painel, sessões do Playwright MCP e rascunhos de scripts (não vão para o git)
+upstream/cezar/packages/cezar/web/
+.playwright-mcp/
+scripts/.tmp*/
