@@ -25,6 +25,9 @@ import {assertInstallationMigrations,migrationsPendingText} from './installation
 import {Ledger} from './ledger.ts';
 import {containFailure} from './failure-log.ts';
 import {assertInternalDesignNetwork, readDesignTrustCa, stageDesignTrustCa} from './design-trust.ts';
+import {examStopText} from './exam-breaker.ts';
+import {examDependencyText} from './exam-preflight.ts';
+import {trackExamProgress} from './verify-command.ts';
 
 const messages: Record<string, string> = {
   DESIGN_USAGE: 'Uso: npm run personal:design -- <instalação.json> <projectId> --url <url> [--login-file <arquivo>] [--ca <arquivo.pem>] [--esperar-cota]',
@@ -83,6 +86,8 @@ export function designCliFailureText(error: unknown): string {
   if (error instanceof DesignCreateModelFailure) return `O modelo não devolveu as telas. Causa: ${error.causeCode}.`;
   const code = error instanceof Refusal ? error.code : error instanceof Error ? error.message : '';
   if (code === 'MIGRATIONS_PENDING') return `${code}. ${migrationsPendingText}`;
+  const dependency = examDependencyText(error);
+  if (dependency) return dependency;
   if (Object.hasOwn(messages, code)) return messages[code]!;
   // Um código de recusa só tem letras maiúsculas e sublinhado: mostrá-lo não vaza caminho nem segredo e diz onde olhar.
   if (error instanceof Refusal && /^[A-Z][A-Z0-9_]{2,63}$/.test(code)) return `O exame de design falhou (código ${code}).`;
@@ -91,6 +96,7 @@ export function designCliFailureText(error: unknown): string {
 
 /** The report is already on disk. A stale login or an incomplete visual exam still exits non-zero. */
 export function designExamStatus(result: {
+  stopped?: string | null;
   loginStale?: boolean;
   captureLoginFailed?: boolean;
   visualUnjudged?: boolean;
@@ -99,6 +105,7 @@ export function designExamStatus(result: {
   visualMissing?: readonly string[];
 }): {code: number; lines: string[]} {
   const lines: string[] = [];
+  if (result.stopped) lines.push(examStopText(result.stopped));
   if (result.loginStale) lines.push(EXAM_LOGIN_STALE_TEXT);
   if (result.captureLoginFailed) lines.push('Uma ou mais rotas perderam a sessão autenticada. Consulte o relatório de design.');
   if (result.visualUnjudged) {
@@ -429,6 +436,12 @@ async function main() {
       async () => {
         const pinnedImage = readPinnedImage();
         const runId = randomUUID();
+        // andamento/<runId>.json with this node's PID, phase and counts: `personal:status` follows the exam without pgrep.
+        const tracked = trackExamProgress(resolved.dataDirectory, resolved.projectId, runId, 'design');
+        // On stderr, so the two final stdout lines (runId and report directory) stay as they were for scripts that read them.
+        console.error(`Exame de design ${runId} em andamento (${join(resolved.dataDirectory, 'verificacoes', resolved.projectId, 'andamento', `${runId}.json`)}). Acompanhe com: npm run personal:status -- <instalação.json> ${runId} --esperar`);
+        const preflight = resolved.preflight ? () => resolved.preflight!([pinnedImage]) : undefined;
+        try {
         const files = await readDesignRepository(resolved.repo);
         const referenceFiles = invocation.references.length === 0 ? undefined : await readReferenceFiles(invocation.references);
         const examAt = async (targetUrl: string, routes?: readonly {route: string}[], servedFiles?: readonly {path: string; text: string}[]) => {
@@ -462,6 +475,11 @@ async function main() {
             ...(opened === undefined ? {} : {login: opened.login}),
             ...(trust === undefined ? {} : {trustCa: trust.path}),
             ...(routes === undefined ? {} : {routes}),
+            ...(resolved.economy?.maxModelCalls !== undefined ? {maxModelCalls: resolved.economy.maxModelCalls} : {}),
+            ...(preflight ? {preflight} : {}),
+            onProgress: ({phase, judged, total, modelCalls, lastFailureCode, failureStreak}) => {
+              void tracked.update({phase, judged, total, modelCalls, failureStreak, ...(lastFailureCode ? {lastFailureCode} : {})});
+            },
           });
         };
         const result = invocation.serveDir === undefined
@@ -470,7 +488,14 @@ async function main() {
             (origin, routes, servedFiles) => examAt(servedDesignTarget(origin, opened === undefined ? undefined : parsed.url), routes, servedFiles));
         console.log(runId);
         console.log(result.directory);
-        return designExamStatus(result);
+        const status = designExamStatus(result);
+        await tracked.finish(result.stopped ? 'stopped' : status.code === 0 ? 'done' : 'failed',
+          result.stopped ? {note: examStopText(result.stopped), lastFailureCode: result.stopped} : {});
+        return status;
+        } catch (error) {
+          await tracked.finish('failed', error instanceof Refusal ? {lastFailureCode: error.code} : {});
+          throw error;
+        }
       },
       status => (status.code === 0 ? 'done' : 'failed'),
       async () => {

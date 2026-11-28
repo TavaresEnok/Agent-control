@@ -191,3 +191,12 @@ test('--servir usa a origem da imagem e preserva a rota de login declarada', () 
     origin + '/entrar?flow=app#/senha');
   assert.equal(new URL(servedDesignTarget(origin, 'http://127.0.0.1:3000//outro.local/entrar')).origin, origin);
 });
+
+test('o runId do design sai no stderr logo depois do arquivo de andamento, antes do exame', async () => {
+  const source = await readFile(new URL('../src/personal-design-cli.ts', import.meta.url), 'utf8');
+  const tracked = source.indexOf("trackExamProgress(resolved.dataDirectory, resolved.projectId, runId, 'design')");
+  const announced = source.indexOf('console.error(`Exame de design ${runId} em andamento');
+  const examined = source.indexOf('const files = await readDesignRepository(resolved.repo)', tracked);
+  assert.ok(tracked > 0 && announced > tracked && examined > announced);
+  assert.match(source, /console\.log\(runId\);\s*console\.log\(result\.directory\);/);
+});

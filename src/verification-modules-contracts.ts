@@ -134,6 +134,8 @@ export type CollectorRunnerSpec = {
 };
 
 export type VerificationModuleRunInput = {
+  /** Exam dependencies (egress proxy, database, pinned image) checked before the run; refuses with EXAM_DEPENDENCY_DOWN. */
+  preflight?: () => Promise<void>;
   isolation?: 'simple'|'strict';
   module: VerificationModule;
   ledger: Ledger;

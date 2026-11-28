@@ -320,3 +320,20 @@ test('módulo 1: testes, documentação e gerados saem do modelo com nota, segue
     assert.equal(examined(all).length, 15);
   } finally { await ready.close(); }
 });
+
+test('módulo 1: falha de infraestrutura numa fatia para na hora, sem repetir arquivo a arquivo', async () => {
+  const ready = await bootVerify('vrt_infra_stop', 2);
+  try {
+    await seed(ready.repo, 20);
+    for (const [extra, ceiling] of [[{batch: false, concurrency: 1}, 1], [{batch: false, concurrency: 2}, 2], [{batch: {tokens: 40_000, files: 8}}, 1]] as const) {
+      const exams: string[] = [];
+      const failing: VerifyWorker = {async run(call) {
+        if (call.task.startsWith('Pedido de mapa.')) return JSON.stringify({kind: 'mapa', routes: [], surfaces: []});
+        exams.push(call.task);
+        throw new Refusal('EXECUTION_TIMEOUT', 503);
+      }};
+      await assert.rejects(run(ready, failing, extra), (error: unknown) => error instanceof Refusal && error.code === 'EXECUTION_TIMEOUT');
+      assert.ok(exams.length <= ceiling, `chamadas de exame com ${JSON.stringify(extra)}: ${exams.length}`);
+    }
+  } finally { await ready.close(); }
+});

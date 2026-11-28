@@ -9,8 +9,11 @@ import type {ReportSummary} from './verify-types.ts';
 /** Painel: uma linha por módulo, na ordem em que o painel mostra. */
 export const STATUS_MODULES = ['seguranca', ...VERIFICATION_MODULES, 'design'] as const;
 export type StatusModule = (typeof STATUS_MODULES)[number];
-/** O design não grava andamento nem tem linha em ac_verify_runs: só se conhece o último relatório. */
-const WITHOUT_LIVE_PROGRESS: ReadonlySet<StatusModule> = new Set(['design']);
+/** O processo ainda existe. EPERM: existe, de outro usuário. */
+export function processAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
+}
 
 export type ModuleCurrent = {
   runId: string;
@@ -95,6 +98,14 @@ export async function readModuleStatuses(ledger: Pick<Ledger, 'pool'>, input: Mo
       phase: file.phase, judged: file.judged ?? null, total: file.total ?? null, modelCalls: file.modelCalls ?? null,
     }));
   }
+  // O design não tem linha em ac_verify_runs: vale o arquivo running cujo processo ainda vive.
+  const design = (await readVerificationProgress(input.dataDirectory, input.projectId, {all: true}))
+    .filter(row => row.module === 'design' && row.status === 'running' && row.pid !== undefined && processAlive(row.pid)).at(-1);
+  if (design) {
+    active.set('design', current(design.id, design.startedAt, now, {
+      phase: design.phase, judged: design.judged ?? null, total: design.total ?? null, modelCalls: design.modelCalls ?? null,
+    }));
+  }
   for (const row of running.rows) {
     if (row.status !== 'running' || !row.alive) continue;
     const module: StatusModule | undefined = row.module === 'verify' ? 'seguranca'
@@ -112,11 +123,12 @@ export async function readModuleStatuses(ledger: Pick<Ledger, 'pool'>, input: Mo
     const report = newest(input.modules.filter(item => item.module === module));
     if (report) latest.set(module, last(report, report.toolFailures, false));
   }
-  const design = newest(input.design);
-  if (design) latest.set('design', last(design, 0, false));
+  const designReport = newest(input.design);
+  if (designReport) latest.set('design', last(designReport, 0, false));
 
   return STATUS_MODULES.map(modulo => ({
-    modulo, andamentoDisponivel: !WITHOUT_LIVE_PROGRESS.has(modulo),
+    // Todos têm andamento ao vivo: o design grava andamento/<runId>.json com o PID do processo (src/personal-design-cli.ts).
+    modulo, andamentoDisponivel: true,
     atual: active.get(modulo) ?? null, ultima: latest.get(modulo) ?? null,
   }));
 }

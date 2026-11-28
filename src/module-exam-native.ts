@@ -581,6 +581,10 @@ export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | '
   waitForClaudeQuota?: boolean;
   clock?: ModuleExamClock;
   onQuotaWait?: (info: {purpose: 'examiner' | 'reviewer'; file: string; delayMs: number}) => void;
+  /** economy.maxModelCalls, the dependency check before each batch and the progress callback (src/module-exam.ts). */
+  maxModelCalls?: number;
+  preflight?: () => Promise<void>;
+  onProgress?: ModuleExamInput['onProgress'];
 }): ModuleExamCallback {
   return async ({intentId, snapshot, module, findings, collector, signal}): Promise<ModuleExamResult> => {
     const clock = input.clock ?? defaultExamClock;
@@ -660,6 +664,9 @@ export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | '
         ...(input.batch === false ? {} : {batch: input.batch ?? DEFAULT_MODULE_EXAM_BATCH}),
         ...(input.scope === false ? {scope: false} : {}),
         concurrency: await moduleExamSlots(input.ledger, input.authority.contextId),
+        ...(input.maxModelCalls !== undefined ? {maxModelCalls: input.maxModelCalls} : {}),
+        ...(input.preflight ? {preflight: input.preflight} : {}),
+        ...(input.onProgress ? {onProgress: input.onProgress} : {}),
         ...(collector ? {collectorReview: {collector, intentId, snapshot}} : {}),
         worker: createModuleExamNativeWorker({...input, intentId, runtime, signal}),
         reserve: reservations.reserve,

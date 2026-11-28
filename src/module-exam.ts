@@ -16,6 +16,7 @@ import {scanModuleExamSource} from './module-exam-syntax.ts';
 import {isModuleExamTerminalNotice, parseModuleExamJsonObject} from './module-exam-worker.ts';
 import {distinctExamSessions, examFindingId, examFindingIdentity, examSubjectDigest, HIGH_REVIEWER_MODEL, HIGH_REVIEWER_PROVIDER, HIGH_SESSION_UNPROVEN} from './module-exam-sessions.ts';
 import {moduleExamScope} from './module-exam-scope.ts';
+import {EXAM_DEPENDENCY_DOWN, EXAM_MODEL_CALL_LIMIT, ExamBreaker, ExamStop, examStopText, isInfrastructureFailure} from './exam-breaker.ts';
 
 const checklist: Record<VerificationModule, string> = {
   qa: 'Comportamento funcional, tratamento de erros e testes existentes',
@@ -132,7 +133,15 @@ export type ModuleExamInput = {
   reviewCap?: number;
   measuredRules?: ReadonlySet<string>;
   signal?: AbortSignal;
+  /** economy.maxModelCalls: examiner and reviewer calls of this exam. At the ceiling the exam stops with a partial report. */
+  maxModelCalls?: number;
+  /** Checks the exam dependencies before each examiner batch; a refusal (EXAM_DEPENDENCY_DOWN) stops the exam. */
+  preflight?: () => Promise<void>;
+  /** Called after each examiner or reviewer call, for the progress file. */
+  onProgress?: (progress: ModuleExamProgress) => void;
 };
+export type ModuleExamProgress = {phase: 'exame' | 'confirmacao'; judged: number; total: number; modelCalls: number;
+  lastFailureCode: string | null; failureStreak: number};
 export type ModuleExamExecution = Omit<ModuleExamSeat, 'grantId'> & {grantId?: string; sessionId?: string};
 export type ModuleExamCollectorReview = {collector: ModuleExamCollectorContext; intentId: string; snapshot: string;
   coverage?: ReadonlyMap<string, ModuleExamCoverage>;
@@ -349,6 +358,12 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
   }
 
   let stopExam = null as string | null;
+  // One breaker for the examiner and the reviewer: three equal infrastructure failures in a row stop the exam.
+  const breaker = new ExamBreaker(undefined, input.maxModelCalls);
+  const stopByBreaker = (code: string) => {
+    stopExam ??= breaker.stopped ?? code;
+    notes.add(examStopText(stopExam));
+  };
   // Tasks in flight share one Claude quota wait instead of each starting its own.
   let quotaGate: Promise<boolean> | null = null;
   const waitQuota = (context: ModuleExamClaudeQuotaWait) =>
@@ -424,7 +439,15 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
     }
     const commit = input.commit ? {commit: input.commit} : {};
     const stopCodes = new Set(['PROVIDER_USAGE_LIMIT', 'EXAM_LOGIN_STALE', 'EXAM_LOGIN_BUSY', 'EXAM_LOGIN_RESTORE_FAILED', 'PROVIDER_AUTH_FAILED', 'MODULE_EXAM_EXAMINER_UNAVAILABLE',
-      'NO_ELIGIBLE_CAPACITY', 'ROLE_NOT_CONFIGURED', 'NATIVE_IMAGE_MISSING', 'MODULE_EXAM_EGRESS_UNAVAILABLE', 'CAPACITY_BUSY', 'CAPACITY_QUEUED']);
+      'NO_ELIGIBLE_CAPACITY', 'ROLE_NOT_CONFIGURED', 'NATIVE_IMAGE_MISSING', 'MODULE_EXAM_EGRESS_UNAVAILABLE', 'CAPACITY_BUSY', 'CAPACITY_QUEUED',
+      'PERSONAL_DISK_FULL', 'PERSONAL_DISK_UNAVAILABLE', 'STORAGE_LOW_SPACE', 'PERSONAL_SPACE_BUDGET_EXCEEDED', EXAM_DEPENDENCY_DOWN, EXAM_MODEL_CALL_LIMIT]);
+    const progress = (phase: ModuleExamProgress['phase']) => {
+      if (!input.onProgress) return;
+      try {
+        input.onProgress({phase, judged: prepared.filter(p => p.row.status === 'lido').length, total: prepared.length,
+          modelCalls: breaker.calls, lastFailureCode: breaker.lastFailureCode, failureStreak: breaker.streak});
+      } catch { /* progress is informational */ }
+    };
     const requestFor = (p: Prepared) => {
       const read = {requestId: randomUUID(), sourceDigest: p.sourceDigest, complete: p.complete, promptDigest: p.promptDigest, ...commit};
       const binding = moduleExamReadRequestBinding({...read, module: input.module, intentId: input.intentId, file: p.file.file});
@@ -473,12 +496,19 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
         let waiting = false;
         let sibling: Promise<void> | undefined;
         try {
+          breaker.admit();
+          await input.preflight?.();
+          checkAbort(input.signal);
           seat = await reserveSeat('examiner');
           checkAbort(input.signal);
+          // Again after the seat: a sibling lane may have opened the breaker while this one waited for it.
+          breaker.admit();
           const prepare = await use(seat);
           launched = true;
+          breaker.called();
           const output = await worker.run(prepare.call as never);
           exited = true;
+          breaker.success();
           checkAbort(input.signal);
           return await onOutput(output, seat, prepare.call);
         } catch (error) {
@@ -489,18 +519,20 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
             sibling = siblingSeat();
           } else if (code === 'PROVIDER_USAGE_LIMIT' && input.waitForClaudeQuota && (!seat || seat.provider === 'claude')) {
             waiting = true;
-          } else if (onError === 'alone' && !stopCodes.has(code) && !(launched && !exited)) {
-            // A batch that failed as a whole returns the group itself to the caller.
-            return group;
           } else {
+            const open = error instanceof ExamStop || breaker.failure(code);
+            // A batch that failed as a whole returns the group itself to the caller. An infrastructure failure is not
+            // retried: the next calls would hit the same dead dependency.
+            if (!open && onError === 'alone' && !stopCodes.has(code) && !isInfrastructureFailure(code) && !(launched && !exited)) return group;
             for (const p of group) p.row.reason = code;
             notes.add(unavailableText(code));
-            if (stopCodes.has(code) || (launched && !exited)) stopExam = code;
+            if (open) stopByBreaker(code);
+            else if (stopCodes.has(code) || (launched && !exited)) stopExam = code;
             return [];
           }
         } finally {
           try { if (seat && (!launched || exited)) await release(seat, exited ? 'exited' : 'not_started'); }
-          finally { if (seat) freeSeat(); }
+          finally { if (seat) freeSeat(); progress('exame'); }
         }
         if (sibling) { await sibling; continue; }
         if (waiting) {
@@ -632,7 +664,7 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
       notes.add(`Novas tentativas do exame: ${retries.split} lote(s) repetido(s) em duas metades; arquivos repetidos sozinhos por falha do lote inteiro ${retries.batch}, por achado alto ${retries.high} e por resposta inválida ${retries.invalid}.`);
     }
 
-    let stopReview = stopExam === 'PROVIDER_USAGE_LIMIT' ? stopExam : null;
+    let stopReview = breaker.stopped ?? (stopExam === 'PROVIDER_USAGE_LIMIT' ? stopExam : null);
     let stopStandardReview: string | null = null;
     let stopHighReview: string | null = null;
     // Standard reviewer seats taken out of this exam, by provider and account (or the whole provider for its quota).
@@ -713,14 +745,18 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
         let waiting = false;
         let sibling: Promise<void> | undefined;
         try {
+          breaker.admit();
           const worst = members.reduce((top, s) => severityRank[s.finding.severity] < severityRank[top] ? s.finding.severity : top, lead.finding.severity);
           seat = await reserveSeat('reviewer', lead.examiner!, {severity: worst, source: lead.finding.source, fromExaminer: lead.fromExaminer,
             ...(!high && skippedSeats.length ? {skip: [...skippedSeats]} : {})});
           checkAbort(input.signal);
+          breaker.admit();
           const call = prepare(seat);
           launched = true;
+          breaker.called();
           const output = await worker.run(call);
           exited = true;
+          breaker.success();
           checkAbort(input.signal);
           await onOutput(output, seat, call);
           seatFailures.delete(seat.provider + ':' + seat.accountId);
@@ -738,6 +774,7 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
             waiting = true;
           } else {
             fail(code, seat?.provider ?? (code === raw ? undefined : lastSkip?.provider));
+            if (error instanceof ExamStop || breaker.failure(code)) { stopByBreaker(code); stopReview ??= stopExam; return; }
             const otherProvider = !high && seat !== undefined && seat.provider !== lead.examiner!.provider;
             const key = seat ? seat.provider + ':' + seat.accountId : '';
             const failures = code === 'MODULE_EXAM_PROVIDER_FAILED' && seat ? (seatFailures.get(key) ?? 0) + 1 : 0;
@@ -758,7 +795,7 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
           }
         } finally {
           try { if (seat && (!launched || exited)) await release(seat, exited ? 'exited' : 'not_started'); }
-          finally { if (seat) freeSeat(); }
+          finally { if (seat) freeSeat(); progress('confirmacao'); }
         }
         if (sibling) { await sibling; continue; }
         if (waiting) {

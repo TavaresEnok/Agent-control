@@ -13,6 +13,8 @@ import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {Capacity} from './capacity.ts';
 import {Id, Refusal, type Authority} from './contracts.ts';
 import {examLoginBusyNote, examLoginStaleNote} from './exam-login.ts';
+import {isImmediateStop, isInfrastructureFailure} from './exam-breaker.ts';
+import {installationExamPreflight} from './exam-preflight.ts';
 import {loadInstallation, readPrivateFile, type Installation} from './installation.ts';
 import {assertInstallationMigrations} from './installation-readiness.ts';
 import {Ledger} from './ledger.ts';
@@ -94,6 +96,8 @@ export type PersonalVerificationInput = {
   image?: string;
   modelCalls?: {count: number};
   modelCallBudget?: number;
+  /** Exam dependencies (egress proxy, database, pinned image) checked before the job starts; EXAM_DEPENDENCY_DOWN. */
+  preflight?: () => Promise<void>;
   mapEnabled?: boolean;
   batch?: SecurityBatch;
   pollBackoff?: boolean;
@@ -172,6 +176,14 @@ export type VerificationProgress = {
   total?: number;
   /** Status `incomplete`: arquivos que terminaram sem julgamento do examinador. */
   pending?: number;
+  /** Módulo do arquivo. Ausente: segurança (módulo 1), o formato antigo. */
+  module?: string;
+  /** Processo node que roda o exame e o argv dele: `personal:status` confere o PID sem pgrep. */
+  pid?: number;
+  argv?: string[];
+  /** Último código de falha do exame e quantas vezes seguidas ele veio (disjuntor). */
+  lastFailureCode?: string;
+  failureStreak?: number;
 };
 
 /** How a job that saved its report ended: `incomplete` when files stayed without the examiner's judgment or the report is partial. */
@@ -210,8 +222,9 @@ type ReadyVerification = {
 
 type ProgressState = {
   id: string;
-  /** `incomplete`: the report exists, but files stayed without the examiner's judgment or the report is partial. */
-  status: 'running' | 'done' | 'incomplete' | 'failed';
+  /** `incomplete`: the report exists, but files stayed without the examiner's judgment or the report is partial.
+   * `stopped`: the breaker or the call ceiling stopped the exam; the report is partial. */
+  status: 'running' | 'done' | 'incomplete' | 'failed' | 'stopped';
   phase: string;
   startedAt: string;
   note?: string;
@@ -220,7 +233,18 @@ type ProgressState = {
   judged?: number;
   total?: number;
   pending?: number;
+  module?: string;
+  pid?: number;
+  argv?: string[];
+  lastFailureCode?: string;
+  failureStreak?: number;
 };
+export type ExamProgressState = ProgressState;
+
+/** This node process and its arguments, bounded: the progress file names the real PID, not npm's. */
+export function examProcessIdentity(): {pid: number; argv: string[]} {
+  return {pid: process.pid, argv: process.argv.slice(0, 16).map(arg => arg.replace(/[\u0000-\u001f\u007f]/gu, ' ').slice(0, 300))};
+}
 
 function isErrno(error: unknown, code: string): boolean {
   return error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === code;
@@ -342,7 +366,44 @@ function renderProgress(state: ProgressState): string {
     body.total = state.total;
   }
   if (state.pending !== undefined) body.pending = state.pending;
+  if (state.module !== undefined) body.module = state.module;
+  if (state.pid !== undefined) body.pid = state.pid;
+  if (state.argv !== undefined) body.argv = state.argv;
+  if (state.lastFailureCode !== undefined) body.lastFailureCode = state.lastFailureCode;
+  if (state.failureStreak !== undefined) body.failureStreak = state.failureStreak;
   return `${JSON.stringify(body)}\n`;
+}
+
+/**
+ * Progress file of one exam of another module (2 a 10), in the format of module 1, with this process's PID.
+ * Writes go one after the other and never fail the exam: progress is informational.
+ */
+export function trackExamProgress(dataDirectory: string, projectId: string, id: string, module: string,
+  startedAt = new Date()): {update(change: Partial<ProgressState>): Promise<void>; finish(status: 'done' | 'failed' | 'stopped', change?: Partial<ProgressState>): Promise<void>} {
+  const state: ProgressState = {id, status: 'running', phase: 'ferramentas', startedAt: startedAt.toISOString(), module, ...examProcessIdentity()};
+  let writes: Promise<void> = Promise.resolve();
+  const write = (change: Partial<ProgressState>) => {
+    writes = writes.then(async () => {
+      if (state.status !== 'running') return;
+      Object.assign(state, change);
+      await writeExamProgress(dataDirectory, projectId, state);
+    }).catch(() => undefined /* progress is informational */);
+    return writes;
+  };
+  void write({});
+  return {
+    update: change => write(change),
+    finish: (status, change = {}) => write({...change, status, phase: status, durationMs: Date.now() - startedAt.getTime()}),
+  };
+}
+
+/** Writes `<dataDirectory>/verificacoes/<projectId>/andamento/<id>.json` in the format of module 1, for another module. */
+export async function writeExamProgress(dataDirectory: string, projectId: string, state: ProgressState): Promise<string> {
+  assertSafeSegment(state.id);
+  const directory = await ensureTree(dataDirectory, ['verificacoes', projectId, 'andamento']);
+  const path = join(directory, `${state.id}.json`);
+  await writePrivateFile(path, renderProgress(state));
+  return path;
 }
 
 export function runBoundedCommand(args: readonly string[], timeoutMs: number): Promise<{code: number; stdout: string}> {
@@ -704,6 +765,14 @@ async function runJob(input: {
         state.durationMs = Date.now() - startedMs;
         const stale = examLoginStaleNote(error) ?? examLoginBusyNote(error);
         if (stale) state.note = stale;
+        // Module 1 already stops at its first infrastructure failure (no new slice starts, no file is retried alone):
+        // the code goes to the progress file, so `personal:status` says why.
+        const code = error instanceof Refusal ? error.code : null;
+        if (code && /^[A-Z][A-Z0-9_]{0,79}$/u.test(code)) {
+          state.lastFailureCode = code;
+          state.failureStreak = 1;
+          if (!stale && (isInfrastructureFailure(code) || isImmediateStop(code))) state.note = `Exame parado na primeira falha de infraestrutura (${code}), sem novas chamadas. Confira o runtime, o proxy de saída e o disco antes de rodar de novo.`;
+        }
         await writePrivateFile(progressPath, renderProgress(state));
         await removeExamOutput(ready.dataDirectory, ready.projectId, output);
       } catch { /* the original failure stays visible */ }
@@ -731,6 +800,7 @@ export async function beginPersonalVerification(input: PersonalVerificationInput
   const plan = input.url !== undefined ? dynamicScanPlan(input.url) : undefined;
   const ready = requireReady(input);
   await assertDiskSpaceForLaunch(launchVolumesOf(ready.ledger, ready.dataDirectory), undefined, ready.dataDirectory);
+  await input.preflight?.();
   await assertVerificationAvailable(ready);
   const id = randomUUID();
   const networkRunner = input.networkRunner ?? defaultNetworkRunner;
@@ -751,6 +821,7 @@ export async function beginPersonalVerification(input: PersonalVerificationInput
     phase: 'ferramentas',
     startedAt: new Date(startedMs).toISOString(),
     note: ready.url ? HOMOLOGATION_NOTE : undefined,
+    ...examProcessIdentity(),
   };
   const modelCalls = ready.modelCalls ?? {count: 0};
   const progressDir = await ensureTree(ready.dataDirectory, ['verificacoes', ready.projectId, 'andamento']);
@@ -800,7 +871,8 @@ export async function beginPersonalVerification(input: PersonalVerificationInput
   }
 }
 
-export async function readVerificationProgress(dataDirectory: string, projectId: string): Promise<VerificationProgress[]> {
+/** Progress files of module 1. With `all`, also the files other modules write (the design), each with its `module`. */
+export async function readVerificationProgress(dataDirectory: string, projectId: string, options: {all?: boolean} = {}): Promise<VerificationProgress[]> {
   assertSafeSegment(projectId);
   const directory = join(resolve(dataDirectory), 'verificacoes', projectId, 'andamento');
   let names: string[];
@@ -833,6 +905,14 @@ export async function readVerificationProgress(dataDirectory: string, projectId:
       item.total = row.total as number;
     }
     if (Number.isSafeInteger(row.pending) && (row.pending as number) >= 0) item.pending = row.pending as number;
+    if (typeof row.module === 'string' && /^[a-z0-9-]{1,40}$/u.test(row.module)) item.module = row.module;
+    // Another module's file never counts as a security run (it would block module 1 or show up as its progress).
+    else if (row.module !== undefined) continue;
+    if (!options.all && item.module !== undefined && item.module !== 'seguranca') continue;
+    if (Number.isSafeInteger(row.pid) && (row.pid as number) > 0) item.pid = row.pid as number;
+    if (Array.isArray(row.argv) && row.argv.every(arg => typeof arg === 'string')) item.argv = (row.argv as string[]).slice(0, 16);
+    if (typeof row.lastFailureCode === 'string' && /^[A-Z][A-Z0-9_]{0,79}$/u.test(row.lastFailureCode)) item.lastFailureCode = row.lastFailureCode;
+    if (Number.isSafeInteger(row.failureStreak) && (row.failureStreak as number) >= 0) item.failureStreak = row.failureStreak as number;
     rows.push(item);
   }
   rows.sort((left, right) => left.startedAt.localeCompare(right.startedAt) || left.id.localeCompare(right.id));
@@ -1034,6 +1114,10 @@ export async function resolvePersonalVerification(
         databasesDirectory: databases.directory,
         image,
         modelCalls: {count: 0},
+        // economy.maxModelCalls: the security exam already stops with a partial report at its call budget.
+        ...(project.economy?.maxModelCalls !== undefined ? {modelCallBudget: project.economy.maxModelCalls} : {}),
+        // The host collector of the simple mode is not a Docker image: only the pinned image is checked.
+        preflight: installationExamPreflight(config, ledger, simple ? [] : [image]),
         ...(importExamJobs ? {importExamJobs} : {}),
       },
       close: async () => {

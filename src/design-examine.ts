@@ -4,6 +4,8 @@ import {EXAM_LOGIN_STALE_TEXT, providerFailureCode, safeFailureCode} from './exa
 import {acceptClaudeExamSeat} from './exam-provider.ts';
 import {batchCallReceipt, groupByBudget, sha256Text, type BatchCallReceipt} from './exam-batch-proof.ts';
 import type {ModuleExamBatch} from './module-exam.ts';
+import {ExamBreaker, ExamStop, examStopText, isImmediateStop, isInfrastructureFailure} from './exam-breaker.ts';
+import {examDependencyText} from './exam-preflight.ts';
 import {
   parseVisualScores,
   uncertainVisualAxes,
@@ -76,7 +78,14 @@ export type DesignExamineInput = {
   batch?: ModuleExamBatch | false;
   referenceNote?: string;
   references?: readonly {path: string; sha256: string; name: string}[];
+  /** economy.maxModelCalls: every examiner, visual and reviewer call. At the ceiling the exam stops with a partial report. */
+  maxModelCalls?: number;
+  /** Dependency check before each examiner call or batch; a refusal stops the exam with a partial report. */
+  preflight?: () => Promise<void>;
+  /** After each screen, for the progress file. */
+  onProgress?: (progress: DesignExamProgress) => void;
 };
+export type DesignExamProgress = {phase: 'exame'; judged: number; total: number; modelCalls: number; lastFailureCode: string | null; failureStreak: number};
 
 function parseJson(text: string): unknown {
   const trimmed = text.trim().replace(/^\uFEFF/, '');
@@ -487,6 +496,7 @@ async function runModel(worker: DesignWorker, call: DesignWorkerCall): Promise<M
     }
     return {output, failure: null};
   } catch (error) {
+    if (error instanceof ExamStop) throw error;
     if (error instanceof Refusal && (error.code === 'EXAM_LOGIN_STALE' || error.code === 'EXAM_PROVIDER_UNSUPPORTED' || error.code === 'EXAM_LOGIN_BUSY' || error.code === 'EXAM_LOGIN_RESTORE_FAILED' || error.code === 'NATIVE_PRELAUNCH_SETTLEMENT_PENDING')) throw error;
     return {
       output: '',
@@ -554,7 +564,7 @@ function confirmationTask(
 }
 
 function rethrowReviewer(error: unknown): boolean {
-  return error instanceof Refusal && (
+  return error instanceof ExamStop || error instanceof Refusal && (
     error.code === 'EXAM_LOGIN_STALE'
     || error.code === 'NATIVE_PRELAUNCH_SETTLEMENT_PENDING'
     || error.code === 'DESIGN_CONFIRMATION_INVALID'
@@ -710,8 +720,8 @@ async function confirmInBatches(
   noteFailure: (code: string) => void,
   avoid: DesignReserveOptions,
   notes: string[],
-): Promise<Map<DesignExamFinding, {seat: DesignSeat; confirm: DesignConfirmResult}>> {
-  const result = new Map<DesignExamFinding, {seat: DesignSeat; confirm: DesignConfirmResult}>();
+): Promise<Map<DesignExamFinding, {seat: DesignSeat; confirm: DesignConfirmResult} | {failure: string}>> {
+  const result = new Map<DesignExamFinding, {seat: DesignSeat; confirm: DesignConfirmResult} | {failure: string}>();
   if (!input.batch || input.batch.files < 2 || findings.length < 2) return result;
   for (let start = 0; start < findings.length; start += DESIGN_CONFIRM_BATCH_MAX) {
     const group = findings.slice(start, start + DESIGN_CONFIRM_BATCH_MAX);
@@ -719,7 +729,14 @@ async function confirmInBatches(
     let failed: string | null = null;
     const batch = await confirmFindingsBatch(input, group, code, captures, noteModel, failure => { failed ??= failure; noteFailure(failure); }, avoid);
     if (!batch) {
-      notes.push(`A confirmação em lote de ${group[0]?.file ?? 'tela'} falhou com ${failed ?? 'EXECUTION_NATIVE_FAILED'}; os ${group.length} pontos foram confirmados um a um.`);
+      const code: string = failed ?? 'EXECUTION_NATIVE_FAILED';
+      // An infrastructure failure is not retried one point at a time: those calls would hit the same dead dependency.
+      if (isInfrastructureFailure(code)) {
+        notes.push(`A confirmação em lote de ${group[0]?.file ?? 'tela'} falhou com ${code}; os ${group.length} pontos ficaram sem confirmação.`);
+        for (const finding of group) result.set(finding, {failure: code});
+        continue;
+      }
+      notes.push(`A confirmação em lote de ${group[0]?.file ?? 'tela'} falhou com ${code}; os ${group.length} pontos foram confirmados um a um.`);
       continue;
     }
     group.forEach((finding, at) => {
@@ -755,7 +772,45 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
   modelCoverage: DesignExamCoverage;
   /** One receipt per examiner call that covered screens in a batch, tying each screen to the call that judged it. */
   batchReceipts: BatchCallReceipt[];
+  /** Code that stopped the exam (breaker, call ceiling, disk or a dependency down). The report is partial. */
+  stopped: string | null;
 }> {
+  const base = input;
+  const breaker = new ExamBreaker(undefined, base.maxModelCalls);
+  let dependencyNote: string | undefined;
+  const stopOn = (error: unknown): never => {
+    const code = error instanceof Refusal ? safeFailureCode(error.code) : 'EXECUTION_NATIVE_FAILED';
+    if (breaker.failure(code)) throw new ExamStop(breaker.stopped ?? code);
+    throw error;
+  };
+  // Every reservation and model call of this exam goes through the breaker: the call ceiling is checked before the
+  // reservation, and an infrastructure refusal of the reservation itself (disk, space) stops the exam instead of failing it.
+  input = {
+    ...base,
+    async reserve(role, avoidProvider, options) {
+      breaker.admit();
+      if (role === 'specialist' && options?.purpose !== 'visual' && base.preflight) {
+        try { await base.preflight(); } catch (error) { dependencyNote = examDependencyText(error); stopOn(error); }
+      }
+      try { return await base.reserve(role, avoidProvider, options); }
+      catch (error) {
+        if (error instanceof Refusal && (isImmediateStop(error.code) || isInfrastructureFailure(error.code))) stopOn(error);
+        throw error;
+      }
+    },
+    worker: {
+      async run(call) {
+        breaker.called();
+        let output: string;
+        try { output = await base.worker.run(call); } catch (error) { return stopOn(error); }
+        if (output.trim().length === 0) {
+          if (breaker.failure('EXECUTION_NATIVE_FAILED')) throw new ExamStop(breaker.stopped ?? 'EXECUTION_NATIVE_FAILED');
+        } else breaker.success();
+        return output;
+      },
+    },
+  };
+  let stopped: string | null = null;
   const findings: DesignExamFinding[] = [];
   const coverage: DesignCoverageRow[] = [];
   const confirmations: {
@@ -770,7 +825,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
   if (ids.length === 0) {
     notes.push('A lista de verificação veio vazia.');
     if (input.scoreVisual === true) notes.push('A crítica visual foi pedida, mas nenhuma tela entrou no exame.');
-    return {findings, coverage, confirmations, notes, visual, visualMissing: [], loginStale: false, modelCoverage: blankExamCoverage(), batchReceipts: []};
+    return {findings, coverage, confirmations, notes, visual, visualMissing: [], loginStale: false, modelCoverage: blankExamCoverage(), batchReceipts: [], stopped: null};
   }
   if (input.screens.length === 0) notes.push('Nenhuma tela para examinar.');
 
@@ -798,6 +853,14 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
   /** Screens whose code exam was answered inside a batch call: the seat and the item JSON. */
   const batched = new Map<(typeof input.screens)[number], {seat: DesignSeat; output: string}>();
   const batchTried = new Map<(typeof input.screens)[number], string>();
+  /** Screens of a batch that failed on infrastructure: they keep that failure instead of a call of their own. */
+  const batchFailed = new Map<(typeof input.screens)[number], {seat: DesignSeat; failure: string}>();
+  const progress = () => {
+    try {
+      input.onProgress?.({phase: 'exame', judged: coverage.length, total: htmlCount, modelCalls: breaker.calls,
+        lastFailureCode: breaker.lastFailureCode, failureStreak: breaker.streak});
+    } catch { /* progress is informational */ }
+  };
   try {
   const budget = input.batch && input.batch.files >= 2 ? {tokens: Math.min(input.batch.tokens, DESIGN_BATCH_TOKEN_CEILING), files: input.batch.files} : null;
   if (budget) {
@@ -828,6 +891,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
       }
       remember('examiner', seat.model);
       for (const screen of group) batchTried.set(screen, callId);
+      if (hit.failure && isInfrastructureFailure(hit.failure)) for (const screen of group) batchFailed.set(screen, {seat, failure: hit.failure});
       const items = hit.failure ? [] : batchItems(parseJson(hit.output));
       const delivered = new Set<(typeof input.screens)[number]>();
       for (const screen of group) {
@@ -845,9 +909,12 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
         accountId: seat.accountId, profileId: seat.profileId, grantId: seat.grantId, sessionId: null,
         files: group.map(screen => ({file: screen.file, sha256: sha256Text(screen.code), judged: delivered.has(screen)})),
       }));
-      if (delivered.size < group.length) {
+      if (hit.failure && isInfrastructureFailure(hit.failure)) {
+        notes.push(`O lote ${callId} falhou com ${hit.failure}; as ${group.length} telas ficaram sem julgamento, sem nova tentativa.`);
+      } else if (delivered.size < group.length) {
         notes.push(`O lote ${callId} deixou ${group.length - delivered.size} tela(s) sem julgamento; elas foram examinadas uma a uma.`);
       }
+      progress();
     }
   }
   for (const screen of input.screens) {
@@ -859,9 +926,13 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
     const own = screenItemIds(screen.file, ids, input.checklist);
     let seat: DesignSeat;
     let hit: ModelHit;
+    const failedInBatch = batchFailed.get(screen);
     if (pre) {
       seat = pre.seat;
       hit = {output: pre.output, failure: null};
+    } else if (failedInBatch) {
+      seat = failedInBatch.seat;
+      hit = {output: '', failure: failedInBatch.failure};
     } else {
       seat = await input.reserve('specialist');
       try {
@@ -919,7 +990,8 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
       if (!examinerProfileIds.includes(used.profileId)) examinerProfileIds.push(used.profileId);
       if (!examinerAccountIds.includes(used.accountId)) examinerAccountIds.push(used.accountId);
     };
-    const examinerVisual = input.scoreVisual === true
+    // No visual critique after an infrastructure failure of the code exam: it would hit the same dead dependency.
+    const examinerVisual = input.scoreVisual === true && !(hit.failure && isInfrastructureFailure(hit.failure))
       ? await askVisual(input, screen, 'specialist')
       : undefined;
     if (examinerVisual) {
@@ -1021,6 +1093,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
         }
         try {
           const inBatch = batchedReview.get(clamped);
+          if (inBatch && 'failure' in inBatch) throw new Refusal(inBatch.failure);
           const reviewed = inBatch ?? await confirmFinding(
             input,
             clamped,
@@ -1040,24 +1113,24 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
             verifier: {model: reviewed.seat.model, provider: reviewed.seat.provider},
           });
         } catch (error) {
-          if (finding.severity === 'alta' || rethrowReviewer(error)) throw error;
+          if (rethrowReviewer(error)) throw error;
           const code = error instanceof Refusal ? safeFailureCode(error.code) : 'EXECUTION_NATIVE_FAILED';
+          // A high point without its confirmation leaves no valid report; when the cause is infrastructure the exam stops
+          // with the partial report it has, instead of failing without one.
+          if (finding.severity === 'alta') throw isInfrastructureFailure(code) ? new ExamStop(code) : error;
           noteFailure('reviewer', code);
           notes.push(`O revisor falhou em ${screen.file} com ${code}.`);
         }
       }
     }
     if (examinerVisual) {
-      const reviewerVisual = await askVisual(input, screen, 'reviewer', reviewAvoid);
-      remember('reviewer', reviewerVisual.model);
-      if (reviewerVisual.failure) noteFailure('reviewer', reviewerVisual.failure);
-      if (reviewerVisual.scores) modelCoverage.reviewer.judged += 1;
-      if (!examinerVisual.scores || !reviewerVisual.scores) {
-        const missingRoles = !examinerVisual.scores && !reviewerVisual.scores
-          ? 'examinador e revisor'
-          : !examinerVisual.scores
-            ? 'examinador'
-            : 'revisor';
+      // The reviewer's critique is a second opinion on the examiner's scores: without them it is not asked.
+      const reviewerVisual = examinerVisual.scores ? await askVisual(input, screen, 'reviewer', reviewAvoid) : null;
+      if (reviewerVisual) remember('reviewer', reviewerVisual.model);
+      if (reviewerVisual?.failure) noteFailure('reviewer', reviewerVisual.failure);
+      if (reviewerVisual?.scores) modelCoverage.reviewer.judged += 1;
+      if (!examinerVisual.scores || !reviewerVisual?.scores) {
+        const missingRoles = !examinerVisual.scores ? 'examinador; a crítica do revisor não foi pedida' : 'revisor';
         notes.push(`A crítica visual de ${oneLine(screen.route)} (${screen.file}) não veio completa (${missingRoles}).`);
       } else {
         visualComplete.add(screen);
@@ -1077,7 +1150,9 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
         );
         for (const finding of visualFindings) {
           try {
-            const reviewed = batchedVisual.get(finding) ?? await confirmFinding(
+            const inBatch = batchedVisual.get(finding);
+            if (inBatch && 'failure' in inBatch) throw new Refusal(inBatch.failure);
+            const reviewed = inBatch ?? await confirmFinding(
               input,
               finding,
               screen.code,
@@ -1100,13 +1175,24 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
         }
       }
     }
+    progress();
   }
   } catch (error) {
+    if (error instanceof ExamStop) {
+      // Stop with a partial report: screens not reached stay out of the coverage, as with a stale login.
+      stopped = error.stopCode;
+      noteFailure('examiner', stopped);
+      noteFailure('reviewer', stopped);
+      if (dependencyNote) notes.push(dependencyNote);
+      notes.push(examStopText(stopped));
+      progress();
+    } else {
     if (!(error instanceof Refusal) || error.code !== 'EXAM_LOGIN_STALE') throw error;
     loginStale = true;
     modelCoverage.examiner.failure = 'EXAM_LOGIN_STALE';
     modelCoverage.reviewer.failure = 'EXAM_LOGIN_STALE';
     if (!notes.includes(EXAM_LOGIN_STALE_TEXT)) notes.push(EXAM_LOGIN_STALE_TEXT);
+    }
   }
 
   const visualMissing = input.scoreVisual === true
@@ -1115,5 +1201,5 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
         .map(screen => ({file: screen.file, route: screen.route}))
     : [];
 
-  return {findings, coverage, confirmations, notes, visual, visualMissing, loginStale, modelCoverage, batchReceipts};
+  return {findings, coverage, confirmations, notes, visual, visualMissing, loginStale, modelCoverage, batchReceipts, stopped};
 }
