@@ -3,11 +3,15 @@ import {randomUUID} from 'node:crypto';
 import {chmod,lstat,mkdir,readFile,readdir,readlink,realpath,rename,rm,writeFile} from 'node:fs/promises';
 import {basename,dirname,join,resolve,sep} from 'node:path';
 import {pathToFileURL} from 'node:url';
+import type pg from 'pg';
 import {Id,Refusal} from './contracts.ts';
 import {Installation,loadInstallation} from './installation.ts';
 import {Ledger} from './ledger.ts';
 import {mountedInside,protectedDigests,releaseProjectArtifacts,type CommandResult,type RetentionDeps} from './personal-artifact-retention.ts';
+import {examStatusRow,processStartedAt} from './personal-status-cli.ts';
 import {releaseIdleSharedWorktrees} from './simple-worktree.ts';
+import {readVerificationProgress} from './verify-command.ts';
+import {processAlive} from './verify-modules-status.ts';
 
 /**
  * Removal of one secondary project from a personal installation, by the product path.
@@ -20,6 +24,12 @@ import {releaseIdleSharedWorktrees} from './simple-worktree.ts';
  * containers, volumes and images labelled `com.agent-control.project=<id>`. The project repository belongs to the owner and is
  * never removed; nothing inside or above it is touched. A project already out of installation.json but still in the ledger is
  * found by its id. The installation's primary project is refused.
+ *
+ * Stale activity does not hold the removal: a native or QA job still `uncertain`/`running` whose context has no live manager
+ * lease, created more than {@link STALE_JOB_HOURS} h ago, with no running container of its own and no process inside its job
+ * directory, is closed in the archiving transaction (job `failed`, grant released with a `project-removal-stale` receipt, intent
+ * `failed` once nothing else uses it, one audit row each). A `.running` marker whose exam is not in progress by the liveness of
+ * `personal:status` (terminal, or its PID dead or reused) is dropped after the commit. Anything not proven stale still refuses.
  */
 
 export const PROJECT_LABEL='com.agent-control.project';
@@ -30,6 +40,9 @@ export type ProjectRemoveDeps=RetentionDeps&{
  processPaths?:()=>Promise<string[]>;
  /** Test hook: runs after the first activity check and before the archiving transaction judges the activity again. */
  beforeArchive?:()=>Promise<void>;
+ /** Liveness of the PID in an exam progress file, as in personal:status. Test hooks. */
+ alive?:(pid:number)=>boolean;
+ startedAt?:(pid:number)=>number|null;
 };
 export type ProjectRemoveResult={projectId:string;label:string;applied:boolean;lines:string[];backupPath?:string;reportPath?:string;restart:string};
 
@@ -136,6 +149,95 @@ const activeSql=`SELECT
  (SELECT count(*)::int FROM ac_capacity_grants WHERE project_id=$1 AND state<>'released') AS grants,
  (SELECT count(*)::int FROM ac_verify_runs WHERE project_id=$1 AND status='running') AS exams`;
 type Activity={jobs:number;qa:number;grants:number;exams:number;marker:boolean};
+
+/** Hours a job must exist before the absence of its process can close it: longer than any job timeout. */
+export const STALE_JOB_HOURS=24;
+const STALE_SOURCE='project-removal-stale';
+const staleCandidatesSql=`SELECT j.kind,j.id::text AS id,j.context_id::text AS context_id,j.intent_id::text AS intent_id,j.grant_id::text AS grant_id,
+  g.state AS grant_state,j.containers,j.created_at<clock_timestamp()-($2::int*interval '1 hour') AS old,
+  EXISTS(SELECT 1 FROM ac_managers m WHERE m.context_id=j.context_id AND m.lease_until>clock_timestamp()) AS lease
+ FROM (SELECT 'execution' AS kind,e.id,e.context_id,e.intent_id,e.grant_id,e.created_at,array_remove(ARRAY[e.worker_id,e.tools_id],NULL) AS containers
+   FROM ac_native_execution_jobs e WHERE e.state IN ('uncertain','running')
+  UNION ALL SELECT 'qa',q.id,q.context_id,q.intent_id,q.grant_id,q.created_at,array_remove(ARRAY[q.container_id],NULL)
+   FROM ac_native_qa_jobs q WHERE q.state IN ('uncertain','running')) j
+ JOIN ac_contexts x ON x.id=j.context_id JOIN ac_capacity_grants g ON g.id=j.grant_id
+ WHERE x.project_id=$1 ORDER BY j.created_at,j.id`;
+type JobVerdict={kind:'execution'|'qa';id:string;contextId:string;grantState:string;stale:boolean;reason:string};
+
+/** Each active job of the project, and whether it is provably without a live process (empty `reason`). */
+async function judgeActiveJobs(ledger:Ledger,projectId:string,hostRoot:string,docker:NonNullable<RetentionDeps['docker']>,processPaths:()=>Promise<string[]>):Promise<JobVerdict[]>{
+ const rows=(await ledger.pool.query<{kind:'execution'|'qa';id:string;context_id:string;grant_state:string;containers:string[];old:boolean;lease:boolean}>(
+  staleCandidatesSql,[projectId,STALE_JOB_HOURS])).rows;
+ if(!rows.length)return [];
+ // Running containers only: a stopped one runs no process. Docker or /proc unreadable proves nothing.
+ const listed=await docker(['container','ls','--no-trunc','--format','{{.ID}} {{.Names}}']);
+ const running=listed.code===0?listed.stdout.split('\n').map(line=>line.trim()).filter(Boolean).map(line=>{
+  const [id='',names='']=line.split(/\s+/);
+  return {id,names:names.split(',')};
+ }):undefined;
+ let open:string[]|undefined;
+ try{open=await processPaths();}catch{open=undefined;}
+ return rows.map(row=>{
+  const path=join(hostRoot,row.id);
+  const reason=row.lease?'o contexto tem gerente com licença válida'
+   :!row.old?`criado há menos de ${STALE_JOB_HOURS} h`
+   :!running?'o Docker não respondeu sobre os contêineres em execução'
+   :running.some(item=>row.containers.includes(item.id)||item.names.some(name=>name.includes(row.id)))?'há contêiner do job em execução'
+   :!open?'não foi possível ler os processos'
+   :open.some(item=>item===path||item.startsWith(path+sep))?'há processo usando a pasta do job'
+   :'';
+  return {kind:row.kind,id:row.id,contextId:row.context_id,grantState:row.grant_state,stale:!reason,reason};
+ });
+}
+
+type MarkerVerdict={present:boolean;stale:boolean;reason:string;body?:string};
+/** The `.running` marker and whether its exam is provably not in progress, by the same rule as personal:status. */
+async function judgeMarker(dataDirectory:string,projectId:string,path:string,deps:ProjectRemoveDeps,now:number):Promise<MarkerVerdict>{
+ const info=await lstat(path).catch(()=>undefined/* no marker */);
+ if(!info)return {present:false,stale:false,reason:''};
+ if(info.isSymbolicLink()||!info.isFile())return {present:true,stale:false,reason:'o marcador não é um arquivo comum'};
+ const body=await readFile(path,'utf8').catch(()=>undefined/* unreadable: cannot be judged */);
+ const examId=body?.trim()??'';
+ if(!Id.safeParse(examId).success)return {present:true,stale:false,reason:'o marcador não nomeia um exame'};
+ const rows=await readVerificationProgress(dataDirectory,projectId,{all:true}).catch(()=>undefined/* unreadable: cannot be judged */);
+ const row=rows?.find(item=>item.id===examId);
+ if(!row)return {present:true,stale:false,reason:`o exame ${examId} não tem arquivo de andamento legível`};
+ const state=examStatusRow({id:projectId,label:''},row,now,deps.alive??processAlive,deps.startedAt??processStartedAt).state;
+ if(state==='em-andamento')return {present:true,stale:false,reason:`o exame ${examId} está em andamento`};
+ return {present:true,stale:true,reason:`exame ${examId} ${state}, sem processo vivo`,body};
+}
+
+/** Inside the archiving transaction: locks the managers of the jobs' contexts, judges each job again and closes it. */
+async function closeStaleJobs(c:pg.PoolClient,ledger:Ledger,projectId:string,jobs:JobVerdict[]):Promise<string[]>{
+ if(!jobs.length)return [];
+ const contexts=[...new Set(jobs.map(job=>job.contextId))];
+ const leased=(await c.query<{context_id:string;live:boolean}>('SELECT context_id::text AS context_id,lease_until>clock_timestamp() AS live FROM ac_managers WHERE context_id=ANY($1::uuid[]) FOR UPDATE',[contexts]))
+  .rows.filter(row=>row.live).map(row=>row.context_id);
+ if(leased.length)throw new ActiveProject(`o contexto ${leased.join(', ')} ganhou gerente com licença válida.`);
+ const lines:string[]=[];
+ for(const job of jobs){
+  const table=job.kind==='execution'?'ac_native_execution_jobs':'ac_native_qa_jobs';
+  const row=(await c.query<{state:string;grant_id:string;intent_id:string;context_id:string}>(
+   `SELECT state,grant_id::text AS grant_id,intent_id::text AS intent_id,context_id::text AS context_id FROM ${table} WHERE id=$1 FOR UPDATE`,[job.id])).rows[0];
+  if(!row||(row.state!=='uncertain'&&row.state!=='running'))continue;
+  await c.query(`UPDATE ${table} SET state='failed' WHERE id=$1`,[job.id]);
+  const grant=(await c.query<{state:string}>('SELECT state FROM ac_capacity_grants WHERE id=$1 FOR UPDATE',[row.grant_id])).rows[0];
+  const released=Boolean(grant&&grant.state!=='released');
+  if(released)await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1",[row.grant_id,
+   {source:STALE_SOURCE,jobId:job.id,projectId,containersRunning:false,processInsideJobDirectory:false}]);
+  const open=(await c.query<{open:boolean}>(`SELECT EXISTS(SELECT 1 FROM ac_native_execution_jobs WHERE intent_id=$1 AND state IN ('uncertain','running'))
+   OR EXISTS(SELECT 1 FROM ac_native_qa_jobs WHERE intent_id=$1 AND state IN ('uncertain','running'))
+   OR EXISTS(SELECT 1 FROM ac_native_planning_jobs pj JOIN ac_semantic_planning_calls pc ON pc.id=pj.id WHERE pc.intent_id=$1 AND pj.state IN ('prepared','uncertain','running'))
+   OR EXISTS(SELECT 1 FROM ac_capacity_grants WHERE intent_id=$1 AND state<>'released')
+   OR EXISTS(SELECT 1 FROM ac_verify_runs WHERE intent_id=$1 AND status='running') AS open`,[row.intent_id])).rows[0]!.open;
+  const intentClosed=!open&&Boolean((await c.query("UPDATE ac_intents SET state='failed' WHERE id=$1 AND state NOT IN ('done','review','failed','canceled')",[row.intent_id])).rowCount);
+  if(intentClosed)await ledger.refreshPending(c,row.context_id);
+  await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'project.remove.stale_job_closed',$2)",[row.context_id,
+   {projectId,jobId:job.id,kind:job.kind,previousState:row.state,grantId:row.grant_id,grantReleased:released,intentId:row.intent_id,intentClosed,source:STALE_SOURCE}]);
+  lines.push(`job ${job.id}: encerrado como falho (sem processo vivo)${released?', vaga liberada':''}${intentClosed?', intenção fechada':''}.`);
+ }
+ return lines;
+}
 const activityText=(a:Activity)=>[a.jobs&&`${a.jobs} job(s) nativo(s) ativo(s)`,a.qa&&`${a.qa} job(s) de QA ativo(s)`,a.grants&&`${a.grants} vaga(s) ou reserva(s) não liberada(s)`,
  a.exams&&`${a.exams} exame(s) em andamento no banco`,a.marker&&'marcador de exame em andamento em verificacoes/<id>/andamento/.running'].filter(Boolean).join('; ');
 
@@ -167,21 +269,30 @@ export async function removePersonalProject(installationPath:string,token:string
      (SELECT count(*)::int FROM ac_account_access WHERE project_id=p.id) AS access
     FROM ac_projects p WHERE p.id=$1`,[projectId])).rows[0];
   const verifyDir=join(config.dataDirectory,'verificacoes',projectId);
-  const marker=await lstat(join(verifyDir,'andamento','.running')).then(()=>true,()=>false);
-  const activity:Activity={...(db?(await ledger.pool.query<Omit<Activity,'marker'>>(activeSql,[projectId])).rows[0]!:{jobs:0,qa:0,grants:0,exams:0}),marker};
-  const busy=activityText(activity);
+  const markerPath=join(verifyDir,'andamento','.running');
+  const markerVerdict=await judgeMarker(config.dataDirectory,projectId,markerPath,deps,(options.now??new Date()).getTime());
+  const counted:Activity={...(db?(await ledger.pool.query<Omit<Activity,'marker'>>(activeSql,[projectId])).rows[0]!:{jobs:0,qa:0,grants:0,exams:0}),marker:markerVerdict.present};
+  const boot=config.nativeBootstrap as {execution?:{hostRoot?:string}}|undefined;
+  const hostRoot=boot?.execution?.hostRoot??join(config.dataDirectory,'native','execution-host');
+  const verdicts=db&&(counted.jobs||counted.qa)?await judgeActiveJobs(ledger,projectId,hostRoot,docker,deps.processPaths??defaultProcessPaths):[];
+  const staleJobs=verdicts.filter(item=>item.stale);
+  // What still holds the removal once the provably stale jobs and marker are set aside.
+  const activity:Activity={jobs:counted.jobs-staleJobs.filter(item=>item.kind==='execution').length,qa:counted.qa-staleJobs.filter(item=>item.kind==='qa').length,
+   grants:Math.max(0,counted.grants-staleJobs.filter(item=>item.grantState!=='released').length),exams:counted.exams,marker:markerVerdict.present&&!markerVerdict.stale};
+  const why=[...verdicts.filter(item=>!item.stale).map(item=>`job ${item.id}: ${item.reason}`),...(activity.marker?[`marcador: ${markerVerdict.reason}`]:[])];
+  const busy=activityText(activity)+(activityText(activity)&&why.length?` (${why.join('; ')})`:'');
 
   say(`Projeto ${target.label} (${projectId})${target.inFile?'':', já fora do installation.json'}${db?.archived_at?`, arquivado no banco em ${db.archived_at.toISOString()}`:''}.`);
   if(target.repo)say(`Repositório ${target.repo}: nunca é apagado.`);
   if(busy)say(`Atividade em curso: ${busy}.`);
+  for(const job of staleJobs)say(`Atividade parada: job ${job.kind==='execution'?'nativo':'de QA'} ${job.id} sem processo vivo (sem licença de gerente, criado há mais de ${STALE_JOB_HOURS} h, sem contêiner em execução nem processo na pasta); ${options.apply?'é encerrado':'seria encerrado'} como falho${job.grantState!=='released'?', com a vaga liberada':''}, e a intenção fechada se nada mais a usa.`);
+  if(markerVerdict.stale)say(`Atividade parada: marcador ${markerPath} (${markerVerdict.reason}); ${options.apply?'é removido':'seria removido'}.`);
   say(target.inFile?`installation.json: o projeto ${options.apply?'sai':'sairia'} de projects[] (com backup).`:'installation.json: nada a mudar.');
   if(db)say(`Banco: projeto ${db.archived_at?'já arquivado':options.apply?'arquivado':'seria arquivado'}; ${db.contexts} contexto(s) ${options.apply?'arquivado(s)':'seriam arquivados'}; ${db.access} acesso(s) de conta ${options.apply?'revogado(s)':'seriam revogados'}; recibos e histórico ficam.`);
   else say('Banco: o projeto não tem linha em ac_projects.');
   if(!archived&&db)say('Banco: falta a migração 124 (ac_projects.archived_at); rode "npm run gateway -- initialize <instalação.json>" antes de aplicar.');
 
   // ---- What would be removed on disk and in Docker ----
-  const boot=config.nativeBootstrap as {execution?:{hostRoot?:string}}|undefined;
-  const hostRoot=boot?.execution?.hostRoot??join(config.dataDirectory,'native','execution-host');
   const jobs=db?(await ledger.pool.query<{id:string;state:string}>(
    `SELECT j.id::text AS id,j.state FROM ac_native_execution_jobs j JOIN ac_contexts x ON x.id=j.context_id WHERE x.project_id=$1
     UNION ALL SELECT j.id::text,j.state FROM ac_native_qa_jobs j JOIN ac_contexts x ON x.id=j.context_id WHERE x.project_id=$1`,[projectId])).rows:[];
@@ -189,7 +300,8 @@ export async function removePersonalProject(installationPath:string,token:string
   for(const job of jobs){
    const path=join(hostRoot,job.id);
    const info=await lstat(path).catch(()=>undefined/* no job directory on the host: nothing to remove */);
-   if(info)jobDirs.push({id:job.id,path,terminal:job.state==='completed'||job.state==='failed',bytes:0});
+   // A stale job is closed by the archiving transaction before any data is removed.
+   if(info)jobDirs.push({id:job.id,path,terminal:job.state==='completed'||job.state==='failed'||staleJobs.some(item=>item.id===job.id),bytes:0});
   }
   const extraDirs=[join(config.dataDirectory,'qa-cache',projectId),verifyDir];
   const plainDirs:string[]=[];
@@ -241,11 +353,13 @@ export async function removePersonalProject(installationPath:string,token:string
    next=JSON.stringify(raw,null,2)+'\n';
   }
   await deps.beforeArchive?.();
+  let closed:string[]=[];
   if(db){
    await ledger.tx(async c=>{
     // Same lock as project registration, then the activity is judged again inside the transaction.
     await c.query('SELECT pg_advisory_xact_lock(189234,37)');
     await c.query('SELECT 1 FROM ac_projects WHERE id=$1 FOR UPDATE',[projectId]);
+    closed=await closeStaleJobs(c,ledger,projectId,staleJobs);
     const again=(await c.query<Omit<Activity,'marker'>>(activeSql,[projectId])).rows[0]!;
     const late=activityText({...again,marker:false});
     if(late)throw new ActiveProject(late+'.');
@@ -253,7 +367,13 @@ export async function removePersonalProject(installationPath:string,token:string
     await c.query('UPDATE ac_contexts SET archived=true WHERE project_id=$1 AND NOT archived',[projectId]);
     await c.query('DELETE FROM ac_account_access WHERE project_id=$1',[projectId]);
    });
+   for(const line of closed)say(`Banco: ${line}`);
    say(`Banco: projeto arquivado, ${db.contexts} contexto(s) arquivado(s), ${db.access} acesso(s) de conta revogado(s).`);
+  }
+  if(markerVerdict.stale){
+   // Only the very marker judged stale: a new exam would have written its own id.
+   const current=await readFile(markerPath,'utf8').catch(()=>undefined/* already gone */);
+   if(current!==undefined&&current===markerVerdict.body&&!(await lstat(markerPath)).isSymbolicLink()){await rm(markerPath);say(`${markerPath}: marcador parado removido.`);}
   }
   let backupPath:string|undefined;
   if(original&&next){
