@@ -18,6 +18,7 @@
   "simple-isolation.test.ts",
   "retention-maturity.test.ts",
   "account-homes.test.ts",
+  "account-remove.test.ts",
   "account-state.test.ts",
   "administrative-operations.test.ts",
   "admission.test.ts",

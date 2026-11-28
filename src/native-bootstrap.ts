@@ -221,16 +221,21 @@ export async function prepareNativeBootstrap(config:Installation,client?:Bootstr
   // Outside personal activation the source is checked first, as before personal mode existed.
   if(boot.state!=='active'&&(manager.rows.length!==1||String(row?.instance_id)!==boot.instanceId||Number(row?.epoch)!==boot.epoch||String(row?.project_id)!==boot.projectId))
    throw new Refusal('NATIVE_BOOTSTRAP_SOURCE_UNAUTHORIZED',403);
-  const accounts=await client.query(`SELECT a.id,a.mode,a.enabled,a.provider,a.resource_identity
+  const found=await client.query(`SELECT a.id,a.mode,a.enabled,a.provider,a.resource_identity,
+    EXISTS(SELECT 1 FROM ac_account_access x WHERE x.account_id=a.id AND x.project_id=$2) AS access
    FROM ac_accounts a
-   JOIN ac_account_access x ON x.account_id=a.id AND x.project_id=$2
    WHERE a.id = ANY($1::uuid[])`,[boot.accounts.map(account=>account.accountId),boot.projectId]);
   const personal=Boolean((await client.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'")).rowCount);
-  const bound=boot.accounts.every(account=>accounts.rows.some(row=>{
+  // An account retired by account-remove (disabled, access revoked) and still listed in an active personal bootstrap is skipped,
+  // so startup does not fail on it. At least one bound account must remain.
+  const retired=(row:Record<string,unknown>)=>boot.state==='active'&&personal&&String(row.mode)!=='synthetic'&&row.enabled===false&&row.access===false;
+  const accounts={rows:found.rows.filter(row=>row.access!==false)};
+  const listed=boot.accounts.filter(account=>!found.rows.some(row=>String(row.id)===account.accountId&&retired(row)));
+  const bound=listed.length>0&&listed.every(account=>accounts.rows.some(row=>{
    const provider=String(row.provider);
    return String(row.id)===account.accountId&&(provider==='codex'||(boot.state==='active'&&personal&&(provider==='claude'||provider==='grok')))&&String(row.resource_identity)===provider+':'+account.subjectDigest;
   }));
-  if(accounts.rows.length!==boot.accounts.length||!bound)throw new Refusal('NATIVE_BOOTSTRAP_ACCOUNT_UNBOUND',403);
+  if(accounts.rows.length!==listed.length||!bound)throw new Refusal('NATIVE_BOOTSTRAP_ACCOUNT_UNBOUND',403);
   let resources:NativeResourceAttachment|undefined;
   if(boot.resources){
    const identity=await client.query('SELECT id FROM ac_installation_identity WHERE singleton=true');

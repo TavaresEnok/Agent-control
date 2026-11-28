@@ -28,7 +28,7 @@ Com as imagens dos workers já construídas (seção "Imagens dos workers") e um
 npm run personal:project -- /caminho/do/repositorio --db postgresql://usuario:senha@127.0.0.1:5432/banco --label meuprojeto --import-logins
 ```
 
-O comando cria `~/.agent-control/<label>/installation.json` (fora do repositório, modo `0600`), inicializa o ledger, registra as contas, ativa o runtime nativo e cria a conversa. `--import-logins` copia, sem mover, os logins que já existem no seu usuário (`~/.claude/.credentials.json`, `~/.grok/auth.json`, `~/.codex/auth.json`). Sem essa opção ele para e mostra os comandos `account-add` para um login novo por código; depois rode o mesmo comando de novo. Pode ser repetido sem duplicar nada.
+O comando cria `~/.agent-control/<label>/installation.json` (fora do repositório, modo `0600`), inicializa o ledger, registra as contas, ativa o runtime nativo e cria a conversa. `--import-logins` copia, sem mover, os logins que já existem no seu usuário (`~/.claude/.credentials.json`, `~/.codex/auth.json`). Sem essa opção ele para e mostra os comandos `account-add` para um login novo por código; depois rode o mesmo comando de novo. Pode ser repetido sem duplicar nada.
 
 Depois, deixe os serviços permanentes (systemd do usuário; voltam depois de um reboot se `loginctl enable-linger $USER` estiver ativo):
 
@@ -167,13 +167,13 @@ Referências em crases fora dessas formas ficam no contexto da linha e deixam a 
 
 ### Combos de equipe
 
-Cada projeto usa um combo. O combo diz, para cada papel, o provedor, o modelo, o esforço, a quantidade e a reserva. A reserva assume quando a conta titular está esgotada ou sem login. Três já vêm prontos.
+Cada projeto usa um combo. O combo diz, para cada papel, o provedor, o modelo, o esforço, a quantidade e a reserva. A reserva assume quando a conta titular está esgotada ou sem login. Três já vêm prontos, só com Claude e Codex.
 
-`complexo`: gerente Claude Opus 5.5 alto, reserva GPT 6.1 Sol alto; 3 programadores normais GPT 6.1 Sol alto, reserva Grok 4.7 alto; 1 programador básico Grok 4.7 alto, reserva GPT 6.1 Sol alto; revisor Claude Opus 5.5 alto, reserva Grok 4.7 alto; QA Grok 4.7 alto, reserva Claude Sonnet 5.5 médio.
+`complexo`: gerente Claude Opus 5.5 alto, reserva GPT 6.1 Sol alto; 3 programadores normais GPT 6.1 Sol alto, reserva Claude Sonnet 5.5 alto; 1 programador básico Claude Sonnet 5.5 alto, reserva GPT 6.1 Sol alto; revisor Claude Opus 5.5 alto, reserva Claude Sonnet 5.5 alto; QA Claude Sonnet 5.5 alto, reserva Claude Opus 5.5 médio.
 
-`intermediário`: gerente Claude Sonnet 5.5 alto, reserva GPT 6.1 Sol médio; programadores normais 2 × Grok 4.7 médio e 1 × GPT 6.1 Sol médio, um é a reserva do outro; revisor GPT 6.1 Sol alto, reserva Claude Sonnet 5.5 alto; QA Claude Sonnet 5.5 médio, reserva Grok 4.7 médio.
+`intermediário`: gerente Claude Sonnet 5.5 alto, reserva GPT 6.1 Sol médio; programadores normais 2 × Claude Sonnet 5.5 médio e 1 × GPT 6.1 Sol médio, um é a reserva do outro; revisor GPT 6.1 Sol alto, reserva Claude Sonnet 5.5 alto; QA Claude Sonnet 5.5 médio, reserva Claude Opus 5.5 médio.
 
-`economia`: gerente Claude Sonnet 5.5 médio, reserva Grok 4.7 médio; programadores normais 2 × Grok 4.7 médio e 1 × GPT 6.1 Terra médio, um é a reserva do outro; revisor GPT 6.1 Terra alto, reserva Claude Sonnet 5.5 baixo; QA só pelos testes do projeto, sem modelo.
+`economia`: gerente Claude Sonnet 5.5 médio, reserva Claude Opus 5.5 médio; programadores normais 2 × Claude Sonnet 5.5 médio e 1 × GPT 6.1 Terra médio, um é a reserva do outro; revisor GPT 6.1 Terra alto, reserva Claude Sonnet 5.5 baixo; QA só pelos testes do projeto, sem modelo.
 
 Todo combo pronto tem pelo menos 3 programadores e reserva no gerente, no revisor e nos programadores. Um combo do titular com menos de 3 programadores ou sem essas reservas é recusado. O arquivo fica em `<dataDirectory>/combos.json` com modo 600 e substitui o pronto de mesmo nome. Aplicar cria os perfis que faltam e publica a política de capacidade do projeto. A escolha usa só os ids dessa política. Um perfil só é desativado se nenhuma política vigente de nenhum projeto o usar: a revisão mais recente de cada projeto, ou a revisão atribuída a um contexto que não está arquivado. Se faltar a conta ativa do provedor, nada muda.
 
@@ -265,11 +265,11 @@ O histórico que estava no Happier foi copiado para essa tabela em 13/11/2026, c
 
 Só contas que você possui.
 
-A equipe de cada projeto é o combo aplicado. No combo `intermediário`, o gerente usa Claude Sonnet 5.5 alto com reserva GPT 6.1 Sol médio, os programadores normais são 2 × Grok 4.7 médio e 1 × GPT 6.1 Sol médio (um é a reserva do outro), o revisor usa GPT 6.1 Sol alto com reserva Claude Sonnet 5.5 alto, e o QA usa Claude Sonnet 5.5 médio com reserva Grok 4.7 médio. `complexo` e `economia` trocam modelos e esforço; em `economia` o QA fica no script do projeto. A equipe permanente do `AGENTS.md` não muda.
+A equipe de cada projeto é o combo aplicado. No combo `intermediário`, o gerente usa Claude Sonnet 5.5 alto com reserva GPT 6.1 Sol médio, os programadores normais são 2 × Claude Sonnet 5.5 médio e 1 × GPT 6.1 Sol médio (um é a reserva do outro), o revisor usa GPT 6.1 Sol alto com reserva Claude Sonnet 5.5 alto, e o QA usa Claude Sonnet 5.5 médio com reserva Claude Opus 5.5 médio. `complexo` e `economia` trocam modelos e esforço; em `economia` o QA fica no script do projeto. A equipe permanente do `AGENTS.md` não muda.
 
 ```bash
 npm run gateway -- account-add /caminho/instalacao.json claude "Claude"
-npm run gateway -- account-add /caminho/instalacao.json grok "Grok"
+npm run gateway -- account-add /caminho/instalacao.json codex "Codex"
 ```
 
 O comando mostra a URL e o código. Abra a URL, informe o código e conclua o login.
@@ -278,15 +278,23 @@ Na tela Equipe do painel, "Contas" mostra cada conta do projeto: "disponível" o
 
 ```bash
 npm run gateway -- account-add <instalacao> claude Claude --auth-file "$HOME/.claude/.credentials.json"
-npm run gateway -- account-add <instalacao> grok Grok --auth-file "$HOME/.grok/auth.json"
 npm run gateway -- account-add <instalacao> codex Codex --auth-file "$HOME/.codex/auth.json"
 ```
 
-O arquivo do Claude fica em `.credentials.json` da home da conta. O do Grok fica em `.grok/auth.json`. O painel também tem **Adicionar conta**. Esse botão executa o CLI no processo do gateway. A imagem `deploy/Dockerfile.personal` instala os CLIs; se você subir o gateway no host, o `account-add` acima já basta. Alternar contas quando a cota acaba pode violar os termos do provedor; a decisão é sua.
+O arquivo do Claude fica em `.credentials.json` da home da conta. O do Codex fica em `.codex/auth.json`. O painel também tem **Adicionar conta**. Esse botão executa o CLI no processo do gateway. A imagem `deploy/Dockerfile.personal` instala os CLIs; se você subir o gateway no host, o `account-add` acima já basta. Alternar contas quando a cota acaba pode violar os termos do provedor; a decisão é sua.
+
+Para retirar uma conta (por exemplo, a de um provedor que você deixou de assinar), use o comando do produto, nunca apague a home à mão:
+
+```bash
+npm run gateway -- account-remove <instalacao> <id-ou-nome-da-conta>         # prévia, nada muda
+npm run gateway -- account-remove <instalacao> <id-ou-nome-da-conta> --sim   # aplica
+```
+
+A prévia lista o que muda. Com `--sim`, numa transação, o comando recusa se a conta tiver trabalho em curso (vaga de capacidade não liberada, job nativo ou de QA em andamento, reserva ou renovação aberta), se a política vigente de um projeto ativo ainda usar perfis dela sem outra conta habilitada do mesmo provedor (aplique antes um combo sem esse provedor), se um contexto do gerente usar um perfil dela, ou se ela for a única em `allowedAccountIds` de um projeto ou em `nativeBootstrap.accounts`. Senão, desabilita a conta, revoga o acesso dela aos projetos e grava `account.retired` em `ac_audit`; recibos, perfis e histórico ficam. Depois, com backup `installation.json.before-account-remove-<data>`, tira a conta de `allowedAccountIds` e de `nativeBootstrap.accounts`, e remove a home `<accountHomesDirectory>/<id>` só se for o mesmo diretório que o banco registrou, sem seguir links. Repetir o comando não faz mal. No fim, reinicie o gateway. A partida, a saúde e o aviso de login ignoram conta desabilitada.
 
 ## Cadastrar o projeto e o primeiro pedido
 
-O projeto do arquivo de instalação já entra no ledger. Um projeto novo nasce com o combo `intermediário`, quando as contas Claude, Grok e Codex estão ativas. Sem uma delas, a política de capacidade não é publicada. Na conversa, publique o fluxo "Gerente planeja a solicitação" e uma política de revisão. Escreva o pedido, por exemplo "crie CONTRIBUTING.md e referencie no README". Antes de planejar, o gerente decide se a mensagem é pergunta (responde na conversa) ou pedido de mudança (devolve a proposta). Se uma tarefa falhar, o gerente recebe o pedido original e propõe um plano corrigido uma vez. Responda `aprovar` ou `descartar`. A aprovação automática, desligada por padrão, é `POST /api/v1/ac/personal/auto-approve` com `{"enabled":true}`.
+O projeto do arquivo de instalação já entra no ledger. Um projeto novo nasce com o combo `intermediário`, quando as contas Claude e Codex estão ativas. Sem uma delas, a política de capacidade não é publicada. Na conversa, publique o fluxo "Gerente planeja a solicitação" e uma política de revisão. Escreva o pedido, por exemplo "crie CONTRIBUTING.md e referencie no README". Antes de planejar, o gerente decide se a mensagem é pergunta (responde na conversa) ou pedido de mudança (devolve a proposta). Se uma tarefa falhar, o gerente recebe o pedido original e propõe um plano corrigido uma vez. Responda `aprovar` ou `descartar`. A aprovação automática, desligada por padrão, é `POST /api/v1/ac/personal/auto-approve` com `{"enabled":true}`.
 
 ## Verificar a segurança
 

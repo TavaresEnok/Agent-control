@@ -161,6 +161,34 @@ test('configured opt-in refuses bad keys, paths, sources and accounts before wri
  }finally{await rm(env.root,{recursive:true,force:true});}
 });
 
+test('an active personal bootstrap skips a listed account retired by account-remove, and nothing else',async()=>{
+ const env=await layout();
+ const retired=randomUUID();
+ const bound={id:env.accountId,mode:'subscription_cli',enabled:true,access:true,provider:'codex',resource_identity:'codex:'+hash('subject')};
+ const clientFor=(accounts:Record<string,unknown>[],personal=true)=>({
+  async query(sql:string){
+   if(/\b(UPDATE|INSERT|DELETE|ALTER)\b/i.test(sql))throw new Error('EFFECT');
+   if(sql.includes('ac_managers'))return {rows:[{instance_id:env.instanceId,epoch:3,project_id:env.projectId}],rowCount:1};
+   if(sql.includes('ac_accounts'))return {rows:accounts,rowCount:accounts.length};
+   if(sql.includes('ac_installation_activation'))return personal?{rows:[{}],rowCount:1}:{rows:[],rowCount:0};
+   throw new Error('UNEXPECTED_SQL');
+  },
+ });
+ try{
+  const listed=[{accountId:env.accountId,subjectDigest:hash('subject')},{accountId:retired,subjectDigest:hash('retired')}];
+  const gone={id:retired,mode:'subscription_cli',enabled:false,access:false,provider:'grok',resource_identity:'grok:'+hash('retired')};
+  const active=Installation.parse({...configured(env,{accounts:listed}),activation:'personal',nativeBootstrap:{...configured(env,{accounts:listed}).nativeBootstrap,state:'active'}});
+  const ready=await prepareNativeBootstrap(active,clientFor([bound,gone]));
+  assert.equal(ready.report.state,'active');
+  await ready.session?.shutdown();
+  // Still enabled, or still with project access, is not retired: the binding check refuses as before.
+  await assert.rejects(prepareNativeBootstrap(active,clientFor([bound,{...gone,enabled:true}])),/NATIVE_BOOTSTRAP_ACCOUNT_UNBOUND/);
+  await assert.rejects(prepareNativeBootstrap(active,clientFor([{...bound,enabled:false,access:false}])),/NATIVE_BOOTSTRAP_ACCOUNT_UNBOUND/);
+  // Outside an active personal bootstrap nothing is skipped.
+  await assert.rejects(prepareNativeBootstrap(configured(env,{accounts:listed}),clientFor([{...bound,enabled:false},gone],false)),/NATIVE_BOOTSTRAP_ACCOUNT_UNBOUND/);
+ }finally{await rm(env.root,{recursive:true,force:true});}
+});
+
 test('bench injection composes explicit substitutes, authorizes the source and never calls a model',async()=>{
  const env=await layout();
  const calls:string[]=[];

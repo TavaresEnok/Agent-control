@@ -66,6 +66,12 @@ async function main(){
   }finally{await ledger.close();}
   return;
  }
+ if(command==='account-remove'){
+  const {accountRemoveFailureText,runAccountRemoveCli}=await import('./account-remove.ts');
+  try{for(const line of await runAccountRemoveCli(path,extra))console.log(line);}
+  catch(error){console.error(accountRemoveFailureText(error));process.exitCode=1;}
+  return;
+ }
  if(command==='pair'){
   if(!path||extra.length)throw Error('INVALID_INSTALLATION_COMMAND');
   const config=await loadInstallation(path);
