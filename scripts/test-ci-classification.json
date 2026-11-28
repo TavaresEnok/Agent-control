@@ -1,6 +1,16 @@
 {
  "descricao": "Classificação explícita dos testes do CI (scripts/test-ci-selection.mjs). executar: roda no npm test. laboratorio: precisa de Docker, SSH ou banco do laboratório; roda com AC_CI_INCLUDE_HOST=1 e o ambiente certo, sempre com motivo. excluido: não roda no CI, sempre com motivo. requer: condição extra para um arquivo listado (env:NOME). Arquivo de teste novo sem classificação é erro.",
  "executar": [
+  "design-examine-breaker.test.ts",
+  "exam-breaker.test.ts",
+  "module-exam-breaker.test.ts",
+  "native-owner-labels.test.ts",
+  "personal-project-remove.test.ts",
+  "personal-space.test.ts",
+  "personal-status.test.ts",
+  "personal-tools-image.test.ts",
+  "simple-tools-image.test.ts",
+  "storage-budget-acceptance.test.ts",
   "agents-rules.test.ts",
   "simple-isolation.test.ts",
   "retention-maturity.test.ts",
