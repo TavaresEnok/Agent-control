@@ -13,6 +13,7 @@ import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {Capacity} from './capacity.ts';
 import {Id, Refusal, type Authority} from './contracts.ts';
 import {examLoginBusyNote, examLoginStaleNote} from './exam-login.ts';
+import {isImmediateStop, isInfrastructureFailure} from './exam-breaker.ts';
 import {installationExamPreflight} from './exam-preflight.ts';
 import {loadInstallation, readPrivateFile, type Installation} from './installation.ts';
 import {assertInstallationMigrations} from './installation-readiness.ts';
@@ -762,6 +763,14 @@ async function runJob(input: {
         state.durationMs = Date.now() - startedMs;
         const stale = examLoginStaleNote(error) ?? examLoginBusyNote(error);
         if (stale) state.note = stale;
+        // Module 1 already stops at its first infrastructure failure (no new slice starts, no file is retried alone):
+        // the code goes to the progress file, so `personal:status` says why.
+        const code = error instanceof Refusal ? error.code : null;
+        if (code && /^[A-Z][A-Z0-9_]{0,79}$/u.test(code)) {
+          state.lastFailureCode = code;
+          state.failureStreak = 1;
+          if (!stale && (isInfrastructureFailure(code) || isImmediateStop(code))) state.note = `Exame parado na primeira falha de infraestrutura (${code}), sem novas chamadas. Confira o runtime, o proxy de saída e o disco antes de rodar de novo.`;
+        }
         await writePrivateFile(progressPath, renderProgress(state));
         await removeExamOutput(ready.dataDirectory, ready.projectId, output);
       } catch { /* the original failure stays visible */ }

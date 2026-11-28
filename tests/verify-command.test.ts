@@ -773,3 +773,29 @@ test('o andamento só aceita contagem coerente de arquivos julgados', async () =
     await rm(dataDirectory, {recursive: true, force: true});
   }
 });
+
+test('falha de infraestrutura do módulo 1 grava o código e o aviso de parada no andamento', async () => {
+  const dataDirectory = await mkdtemp(join(tmpdir(), 'ac-verify-infra-'));
+  const databases = join(dataDirectory, 'verify-db', '20261117-030405');
+  const projectId = randomUUID();
+  let observed: Promise<void> | undefined;
+  try {
+    await mkdir(databases, {recursive: true, mode: 0o700});
+    await writeFile(join(databases, 'manifest.json'), '{}\n');
+    const seed = await commitDirectory(dataDirectory);
+    await beginPersonalVerification({
+      ...blockedInput(dataDirectory, databases, {projectId, commit: seed}),
+      runTools: async () => { throw new Refusal('EXECUTION_TIMEOUT', 503); },
+      observe: job => { observed = job; },
+    });
+    assert.ok(observed);
+    await assert.rejects(observed, (error: unknown) => error instanceof Refusal && error.code === 'EXECUTION_TIMEOUT');
+    const [progress] = await readVerificationProgress(dataDirectory, projectId);
+    assert.equal(progress?.status, 'failed');
+    assert.equal(progress?.lastFailureCode, 'EXECUTION_TIMEOUT');
+    assert.match(progress?.note ?? '', /primeira falha de infraestrutura \(EXECUTION_TIMEOUT\)/);
+  } finally {
+    if (observed) await observed.catch(() => undefined);
+    await rm(dataDirectory, {recursive: true, force: true});
+  }
+});
