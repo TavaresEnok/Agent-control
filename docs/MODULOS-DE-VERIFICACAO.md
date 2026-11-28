@@ -301,7 +301,7 @@ A versão aplicada em `735ec92a` passou pelo aceite do candidato `18a36cbc`. As 
 | 8. `personal:documentacao` | `cfb05729` | `a9e3aa63` | `e93e82d5-34d0-4a8f-b5f7-89793a19b20f` | 0 |
 | 9. `personal:conformidade` | `cf3f5010` | `b4e285f7` | `ecd10e28-effe-40f4-a86d-838ee6a51364` | 1 |
 
-O aceite incluiu revisão independente por modelo distinto (GPT-6.2 Sol high, somente leitura) e conferência das CLIs pelo gerente. O relatório registra os números de cobertura e as limitações do exame de cada módulo. [Relatório final](RELATORIO-FINAL.md)
+O aceite incluiu revisão independente por modelo distinto (GPT-6.2 Sol high, somente leitura) e conferência das CLIs pelo gerente. O relatório registra os números de cobertura e as limitações do exame de cada módulo. Relatório final (arquivo histórico)
 
 ## Provas da parte C em homologação
 

@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {existsSync, readFileSync} from 'node:fs';
-import {join} from 'node:path';
+import {existsSync, readdirSync, readFileSync} from 'node:fs';
+import {dirname, join} from 'node:path';
 
 // AGENTS.md é a regra viva do repositório: uma seção por assunto, sem equipes empilhadas,
 // e tudo o que ela cita precisa existir (comando, arquivo, pasta).
@@ -34,4 +34,16 @@ test('todo comando npm e todo caminho do repositório citados em AGENTS.md exist
   for (const [, name] of docsLine.matchAll(/`([a-z]+\/)`/g)) {
     if (name !== 'docs/') assert.ok(existsSync(join(root, 'docs', name!)), `pasta de docs inexistente: ${name}`);
   }
+});
+
+test('a documentação viva não aponta para arquivo que saiu do repositório', () => {
+  const files = ['README.md', 'AGENTS.md', ...readdirSync(join(root, 'docs'), {recursive: true}).map(String).filter(name => name.endsWith('.md')).map(name => join('docs', name))];
+  const dead: string[] = [];
+  for (const file of files) {
+    for (const [, target] of readFileSync(join(root, file), 'utf8').matchAll(/\]\(([^)#\s]+)(?:#[^)]*)?\)/g)) {
+      if (/^(https?:|mailto:)/.test(target!)) continue;
+      if (!existsSync(join(root, dirname(file), target!))) dead.push(`${file} -> ${target}`);
+    }
+  }
+  assert.deepEqual(dead, []);
 });
